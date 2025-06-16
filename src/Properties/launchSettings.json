@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "CxCompiler": {
+      "commandName": "Project",
+      "commandLineArgs": "\"..\\..\\..\\..\\..\\cxcore\\src\\cxcore.cxproj\""
+    }
+  }
+}
