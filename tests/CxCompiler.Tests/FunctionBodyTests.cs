@@ -22,10 +22,12 @@ public sealed class FunctionBodyTests
             Assert.Single(context.DeclarationScope.Declarations));
         var statement = Assert.IsType<ExpressionStatement>(Assert.Single(function.Body!));
         var invocation = Assert.IsType<InvocationExpression>(statement.Expression);
-        var target = Assert.IsType<IdentifierExpression>(invocation.Target);
+        var target = Assert.IsType<MemberAccessExpression>(invocation.Target);
+        var receiver = Assert.IsType<IdentifierExpression>(target.Target);
         var argument = Assert.IsType<LiteralExpression>(Assert.Single(invocation.Arguments));
 
-        Assert.Equal("Console.WriteLine", target.Identifier.ToString());
+        Assert.Equal("Console", receiver.Identifier.ToString());
+        Assert.Equal("WriteLine", target.MemberName);
         Assert.Equal("\"Hello world!\"", argument.SourceText);
     }
 }

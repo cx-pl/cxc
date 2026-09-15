@@ -12,24 +12,50 @@ namespace CxCompiler.Semantics;
 public sealed class SemanticBinder
 {
     private readonly List<FunctionSymbol> _symbols = [];
+    private readonly List<TypeSymbol> _types = [];
+    private readonly List<ConstructorSymbol> _constructors = [];
+    private readonly List<FieldSymbol> _fields = [];
+    private readonly List<PropertySymbol> _properties = [];
     private int _loopDepth;
     private int _breakableDepth;
+    private int _objectCreationIndex;
+    private int _propertyAssignmentIndex;
 
     public void Bind(CxProject project)
     {
         _symbols.Clear();
+        _types.Clear();
+        _constructors.Clear();
+        _fields.Clear();
+        _properties.Clear();
         AddCoreSymbols();
 
         foreach (var context in project.CompilationContexts)
         {
+            AddProjectTypes(project.Name, context.DeclarationScope.Declarations);
+        }
+
+        foreach (var context in project.CompilationContexts)
+        {
+            ResolveDeclarationTypes(
+                context.DeclarationScope.Declarations,
+                context.Namespace,
+                context.Imports);
             AddProjectSymbols(project.Name, context.DeclarationScope.Declarations);
         }
+
+        BindFieldInitializers();
 
         foreach (var context in project.CompilationContexts)
         {
             foreach (var function in EnumerateFunctions(context.DeclarationScope.Declarations))
             {
                 BindFunction(function, context.Imports);
+            }
+            foreach (var accessor in EnumeratePropertyAccessors(
+                context.DeclarationScope.Declarations))
+            {
+                BindPropertyAccessor(accessor, context.Imports);
             }
         }
     }
@@ -40,6 +66,27 @@ public sealed class SemanticBinder
         AddCoreFunction("Console", "ReadLine", [], BuiltInSystemTypes.String);
         AddCoreFunction("Console", "Write", [BuiltInSystemTypes.String], BuiltInSystemTypes.UInt);
         AddCoreFunction("Console", "WriteLine", [BuiltInSystemTypes.String], BuiltInSystemTypes.UInt);
+        AddCoreConstructor(BuiltInSystemTypes.Object, ClassType.Class, "Object", [], 1);
+        AddCoreConstructor(
+            BuiltInSystemTypes.String,
+            ClassType.Class,
+            "String",
+            [BuiltInSystemTypes.UInt, BuiltInSystemTypes.Char],
+            3);
+        AddCoreProperty(
+            BuiltInSystemTypes.String,
+            ClassType.Class,
+            "String",
+            "Length",
+            BuiltInSystemTypes.UInt,
+            [new PropertyAccessorSymbol("get", true, [])]);
+        AddCoreProperty(
+            BuiltInSystemTypes.String,
+            ClassType.Class,
+            "String",
+            "Item",
+            BuiltInSystemTypes.Char,
+            [new PropertyAccessorSymbol("get", true, [BuiltInSystemTypes.UInt])]);
     }
 
     private void AddCoreFunction(
@@ -55,6 +102,126 @@ public sealed class SemanticBinder
             returnType));
     }
 
+    private void AddCoreConstructor(
+        TypeBase constructedType,
+        ClassType classType,
+        string typeName,
+        IReadOnlyList<TypeBase> parameterTypes,
+        int overloadIndex)
+    {
+        _constructors.Add(new ConstructorSymbol(
+            constructedType,
+            classType,
+            new FunctionSymbol(
+                "cxcore",
+                new QualifiedIdentifier("System", typeName, "__constructor"),
+                parameterTypes,
+                BuiltInSystemTypes.Void,
+                overloadIndex)));
+    }
+
+    private void AddCoreProperty(
+        TypeBase containingType,
+        ClassType classType,
+        string typeName,
+        string propertyName,
+        TypeBase propertyType,
+        IReadOnlyList<PropertyAccessorSymbol> accessors)
+    {
+        _properties.Add(new PropertySymbol(
+            "cxcore",
+            new QualifiedIdentifier("System", typeName, propertyName),
+            containingType,
+            classType,
+            propertyType,
+            false,
+            accessors));
+    }
+
+    private void AddProjectTypes(
+        string moduleName,
+        IEnumerable<DeclarationBase> declarations)
+    {
+        foreach (var classDeclaration in declarations.OfType<ClassDeclaration>())
+        {
+            var type = new NamedType(classDeclaration.FullName.ToString(), []);
+            type.SetResolvedType(
+                classDeclaration.FullName,
+                moduleName,
+                classDeclaration.ClassType);
+            _types.Add(new TypeSymbol(moduleName, classDeclaration, type));
+            foreach (var field in classDeclaration.MemberDeclarations.Declarations.OfType<FieldDeclaration>())
+            {
+                _fields.Add(new FieldSymbol(
+                    moduleName,
+                    type,
+                    classDeclaration.ClassType,
+                    field));
+            }
+            foreach (var property in classDeclaration.MemberDeclarations.Declarations.OfType<PropertyDeclaration>())
+            {
+                _properties.Add(new PropertySymbol(
+                    moduleName,
+                    property.FullName,
+                    type,
+                    classDeclaration.ClassType,
+                    property.Type,
+                    property.IsStatic,
+                    property.PropertyAccessorDeclarations
+                        .Select(accessor => new PropertyAccessorSymbol(
+                            accessor.Name,
+                            accessor.Const,
+                            accessor.Parameters
+                                .Select(parameter => parameter.ParameterType)
+                                .ToArray()))
+                        .ToArray()));
+            }
+            AddProjectTypes(
+                moduleName,
+                classDeclaration.MemberDeclarations.Declarations);
+        }
+    }
+
+    private void ResolveDeclarationTypes(
+        IEnumerable<DeclarationBase> declarations,
+        QualifiedIdentifier currentNamespace,
+        IReadOnlyList<QualifiedIdentifier> imports)
+    {
+        foreach (var declaration in declarations)
+        {
+            switch (declaration)
+            {
+                case ClassDeclaration classDeclaration:
+                    foreach (var field in classDeclaration.MemberDeclarations.Declarations.OfType<FieldDeclaration>())
+                    {
+                        ResolveTypeReference(field.Type, currentNamespace, imports);
+                    }
+                    foreach (var property in classDeclaration.MemberDeclarations.Declarations.OfType<PropertyDeclaration>())
+                    {
+                        ResolveTypeReference(property.Type, currentNamespace, imports);
+                        foreach (var parameter in property.PropertyAccessorDeclarations
+                            .SelectMany(accessor => accessor.Parameters))
+                        {
+                            ResolveTypeReference(parameter.ParameterType, currentNamespace, imports);
+                        }
+                    }
+                    ResolveDeclarationTypes(
+                        classDeclaration.MemberDeclarations.Declarations,
+                        classDeclaration.Namespace,
+                        imports);
+                    break;
+
+                case FunctionDeclaration function:
+                    ResolveTypeReference(function.ReturnType, currentNamespace, imports);
+                    foreach (var parameter in function.Parameters)
+                    {
+                        ResolveTypeReference(parameter.ParameterType, currentNamespace, imports);
+                    }
+                    break;
+            }
+        }
+    }
+
     private void AddProjectSymbols(
         string moduleName,
         IEnumerable<DeclarationBase> declarations)
@@ -66,13 +233,41 @@ public sealed class SemanticBinder
             overloadIndex++;
             overloadIndexes[function.FullName] = overloadIndex;
 
-            _symbols.Add(new FunctionSymbol(
+            var symbol = new FunctionSymbol(
                 moduleName,
                 function.FullName,
                 function.Parameters.Select(parameter => parameter.ParameterType).ToArray(),
                 function.ReturnType,
                 overloadIndex,
-                function));
+                function);
+            _symbols.Add(symbol);
+
+            if (function is ConstructorDeclaration constructor)
+            {
+                var type = _types.Single(typeSymbol =>
+                    ReferenceEquals(typeSymbol.Declaration, constructor.ParentClassDeclaration));
+                _constructors.Add(new ConstructorSymbol(
+                    type.Type,
+                    constructor.ParentClassDeclaration!.ClassType,
+                    symbol));
+            }
+        }
+    }
+
+    private void BindFieldInitializers()
+    {
+        foreach (var field in _fields.Where(field => field.Declaration.Initializer is not null))
+        {
+            var initializer = (LiteralExpression)field.Declaration.Initializer!;
+            var initializerType = BindLiteral(initializer);
+            initializer.SetInferredType(initializerType);
+            if (!CanAssign(field.Declaration.Type, initializerType))
+            {
+                throw new CompilationErrorException(
+                    $"Cannot initialize field '{field.Declaration.FullName}' of type " +
+                    $"'{GetTypeName(field.Declaration.Type)}' with '{GetTypeName(initializerType)}'.");
+            }
+            ApplyContextualType(initializer, field.Declaration.Type);
         }
     }
 
@@ -87,6 +282,8 @@ public sealed class SemanticBinder
 
         _loopDepth = 0;
         _breakableDepth = 0;
+        _objectCreationIndex = 0;
+        _propertyAssignmentIndex = 0;
 
         var scope = new LocalScope();
         foreach (var parameter in function.Parameters)
@@ -106,6 +303,31 @@ public sealed class SemanticBinder
             throw new CompilationErrorException(
                 $"Function '{function.FullName}' must return a value of type '{GetTypeName(function.ReturnType)}'.");
         }
+    }
+
+    private void BindPropertyAccessor(
+        PropertyAccessorDeclaration accessor,
+        IReadOnlyList<QualifiedIdentifier> imports)
+    {
+        if (accessor.BodyFunction is null)
+        {
+            return;
+        }
+        if (accessor.Extern)
+        {
+            throw new CompilationErrorException(
+                $"Extern property accessor '{accessor.FullName}' cannot have a body.");
+        }
+
+        var propertyType = UnwrapConst(accessor.ParentPropertyDeclaration.Type);
+        if (propertyType is GenericType ||
+            propertyType is NamedType namedType && namedType.GenericParams.Length > 0)
+        {
+            throw new CompilationErrorException(
+                $"Generic property accessor bodies are not supported yet: '{accessor.FullName}'.");
+        }
+
+        BindFunction(accessor.BodyFunction, imports);
     }
 
     private void BindStatements(
@@ -393,6 +615,10 @@ public sealed class SemanticBinder
         IReadOnlyList<QualifiedIdentifier> imports,
         LocalScope scope)
     {
+        ResolveTypeReference(
+            statement.DeclaredType,
+            function.ParentClassDeclaration?.Namespace ?? function.Namespace,
+            imports);
         foreach (var declarator in statement.Declarators)
         {
             var initializerType = declarator.Initializer is null
@@ -475,7 +701,15 @@ public sealed class SemanticBinder
                 break;
 
             case IdentifierExpression identifier:
-                type = ResolveValue(identifier.Identifier, scope);
+                type = BindIdentifier(identifier, function, scope);
+                break;
+
+            case ThisExpression:
+                type = BindThis(function);
+                break;
+
+            case MemberAccessExpression memberAccess:
+                type = BindMemberAccess(memberAccess, function, imports, scope);
                 break;
 
             case InvocationExpression invocation:
@@ -510,6 +744,10 @@ public sealed class SemanticBinder
                 type = BindArrayAccess(arrayAccess, function, imports, scope);
                 break;
 
+            case ObjectCreationExpression objectCreation:
+                type = BindObjectCreation(objectCreation, function, imports, scope);
+                break;
+
             default:
                 throw new CompilationErrorException(
                     $"Cannot determine the type of expression '{expression.GetType().Name}'.");
@@ -517,6 +755,294 @@ public sealed class SemanticBinder
 
         expression.SetInferredType(type);
         return type;
+    }
+
+    private TypeBase BindIdentifier(
+        IdentifierExpression identifier,
+        FunctionDeclaration function,
+        LocalScope scope)
+    {
+        if (identifier.Identifier.Parts.Length == 1 &&
+            scope.TryLookup(identifier.Identifier.Parts[0], out var localType))
+        {
+            return localType;
+        }
+
+        if (identifier.Identifier.Parts.Length == 1 &&
+            function.ParentClassDeclaration is { } parentClass)
+        {
+            var field = _fields.SingleOrDefault(candidate =>
+                ReferenceEquals(candidate.Declaration.ParentClassDeclaration, parentClass) &&
+                candidate.Declaration.Name == identifier.Identifier.Parts[0]);
+            if (field is not null)
+            {
+                if (!field.Declaration.IsStatic && function.IsStatic)
+                {
+                    throw new CompilationErrorException(
+                        $"Instance field '{field.Declaration.Name}' cannot be used from a static function.");
+                }
+                identifier.BindField(field);
+                return field.Declaration.Type;
+            }
+
+
+            var property = _properties.SingleOrDefault(candidate =>
+                candidate.FullName == new QualifiedIdentifier(parentClass.FullName, identifier.Identifier.Parts[0]));
+            if (property is not null)
+            {
+                if (!property.IsStatic && function.IsStatic)
+                {
+                    throw new CompilationErrorException(
+                        $"Instance property '{identifier.Identifier.Parts[0]}' cannot be used from a static function.");
+                }
+                EnsurePropertyValueIsSupported(property);
+                var getter = SelectPropertyAccessor(
+                    property,
+                    "get",
+                    [],
+                    !property.IsStatic && function.Const);
+                identifier.BindProperty(property, getter);
+                return property.Type;
+            }
+        }
+
+        throw new CompilationErrorException($"Cannot resolve value '{identifier.Identifier}'.");
+    }
+
+    private TypeBase BindThis(FunctionDeclaration function)
+    {
+        if (function.IsStatic || function.ParentClassDeclaration is null)
+        {
+            throw new CompilationErrorException(
+                "The 'this' expression is only available in instance functions and constructors.");
+        }
+
+        var type = _types.Single(type =>
+            ReferenceEquals(type.Declaration, function.ParentClassDeclaration)).Type;
+        return function.Const ? new ConstType(type) : type;
+    }
+
+    private TypeBase BindMemberAccess(
+        MemberAccessExpression memberAccess,
+        FunctionDeclaration function,
+        IReadOnlyList<QualifiedIdentifier> imports,
+        LocalScope scope)
+    {
+        var currentNamespace = function.ParentClassDeclaration?.Namespace ?? function.Namespace;
+        var staticTarget = TryResolveTypeExpression(
+            memberAccess.Target,
+            currentNamespace,
+            imports,
+            scope);
+        if (staticTarget is not null)
+        {
+            var staticField = _fields.SingleOrDefault(candidate =>
+                IsType(candidate.ContainingType, staticTarget.Type) &&
+                candidate.Declaration.Name == memberAccess.MemberName &&
+                candidate.Declaration.IsStatic);
+            if (staticField is null)
+            {
+                var staticProperty = _properties.SingleOrDefault(candidate =>
+                    IsType(candidate.ContainingType, staticTarget.Type) &&
+                    candidate.FullName.Parts[^1] == memberAccess.MemberName &&
+                    candidate.IsStatic);
+                if (staticProperty is null)
+                {
+                    throw new CompilationErrorException(
+                        $"Static member '{staticTarget.Declaration.FullName}.{memberAccess.MemberName}' does not exist.");
+                }
+                EnsurePropertyValueIsSupported(staticProperty);
+                var getter = SelectPropertyAccessor(staticProperty, "get", [], false);
+                memberAccess.BindProperty(staticProperty, getter);
+                return staticProperty.Type;
+            }
+            memberAccess.BindField(staticField);
+            return staticField.Declaration.Type;
+        }
+
+        var targetType = BindExpression(memberAccess.Target, function, imports, scope);
+        var field = _fields.SingleOrDefault(candidate =>
+            IsType(candidate.ContainingType, targetType) &&
+            candidate.Declaration.Name == memberAccess.MemberName &&
+            !candidate.Declaration.IsStatic);
+        if (field is null)
+        {
+            var property = _properties.SingleOrDefault(candidate =>
+                IsType(candidate.ContainingType, targetType) &&
+                candidate.FullName.Parts[^1] == memberAccess.MemberName &&
+                !candidate.IsStatic);
+            if (property is null)
+            {
+                throw new CompilationErrorException(
+                    $"Instance member '{GetTypeName(targetType)}.{memberAccess.MemberName}' does not exist.");
+            }
+            EnsurePropertyValueIsSupported(property);
+            var getter = SelectPropertyAccessor(
+                property,
+                "get",
+                [],
+                UnwrapConst(targetType) != targetType);
+            memberAccess.BindProperty(property, getter);
+            return property.Type;
+        }
+
+        memberAccess.BindField(field);
+        return field.Declaration.Type;
+    }
+
+    private TypeSymbol? TryResolveTypeExpression(
+        ExpressionBase expression,
+        QualifiedIdentifier currentNamespace,
+        IReadOnlyList<QualifiedIdentifier> imports,
+        LocalScope scope)
+    {
+        if (!TryFlattenIdentifier(expression, out var sourceName) ||
+            sourceName.IsEmpty ||
+            scope.TryLookup(sourceName.Parts[0], out _))
+        {
+            return null;
+        }
+
+        var candidateNames = GetCandidateNames(sourceName, currentNamespace, imports);
+        var candidates = _types
+            .Where(candidate => candidateNames.Contains(candidate.Declaration.FullName))
+            .ToArray();
+        if (candidates.Length > 1)
+        {
+            throw new CompilationErrorException($"Type name '{sourceName}' is ambiguous.");
+        }
+        return candidates.SingleOrDefault();
+    }
+
+    private PropertyReference? ResolvePropertyReference(
+        ExpressionBase expression,
+        FunctionDeclaration function,
+        IReadOnlyList<QualifiedIdentifier> imports,
+        LocalScope scope)
+    {
+        if (expression is IdentifierExpression identifier &&
+            identifier.Identifier.Parts.Length == 1 &&
+            function.ParentClassDeclaration is { } parentClass)
+        {
+            if (scope.TryLookup(identifier.Identifier.Parts[0], out _))
+            {
+                return null;
+            }
+            var property = _properties.SingleOrDefault(candidate =>
+                candidate.FullName == new QualifiedIdentifier(
+                    parentClass.FullName,
+                    identifier.Identifier.Parts[0]));
+            if (property is null)
+            {
+                return null;
+            }
+            if (!property.IsStatic && function.IsStatic)
+            {
+                throw new CompilationErrorException(
+                    $"Instance property '{identifier.Identifier}' cannot be used from a static function.");
+            }
+            return new PropertyReference(
+                property,
+                null,
+                !property.IsStatic && function.Const);
+        }
+
+        if (expression is not MemberAccessExpression memberAccess)
+        {
+            return null;
+        }
+
+        var currentNamespace = function.ParentClassDeclaration?.Namespace ?? function.Namespace;
+        var staticTarget = TryResolveTypeExpression(
+            memberAccess.Target,
+            currentNamespace,
+            imports,
+            scope);
+        if (staticTarget is not null)
+        {
+            var property = _properties.SingleOrDefault(candidate =>
+                IsType(candidate.ContainingType, staticTarget.Type) &&
+                candidate.FullName.Parts[^1] == memberAccess.MemberName &&
+                candidate.IsStatic);
+            return property is null
+                ? null
+                : new PropertyReference(property, null, false);
+        }
+
+        var receiverType = BindExpression(memberAccess.Target, function, imports, scope);
+        var instanceProperty = _properties.SingleOrDefault(candidate =>
+            IsType(candidate.ContainingType, receiverType) &&
+            candidate.FullName.Parts[^1] == memberAccess.MemberName &&
+            !candidate.IsStatic);
+        return instanceProperty is null
+            ? null
+            : new PropertyReference(
+                instanceProperty,
+                memberAccess.Target,
+                receiverType is ConstType);
+    }
+
+    private static PropertyAccessorSymbol SelectPropertyAccessor(
+        PropertySymbol property,
+        string accessorName,
+        IReadOnlyList<TypeBase> argumentTypes,
+        bool receiverIsConst)
+    {
+        if (receiverIsConst && accessorName == "set")
+        {
+            throw new CompilationErrorException(
+                $"Property '{property.FullName}' cannot be assigned through a const receiver.");
+        }
+
+        var candidates = property.Accessors
+            .Where(accessor => accessor.Name == accessorName &&
+                ParametersMatch(accessor.ParameterTypes, argumentTypes))
+            .ToArray();
+        if (accessorName == "get")
+        {
+            candidates = receiverIsConst
+                ? candidates.Where(accessor => accessor.Const).ToArray()
+                : candidates.OrderBy(accessor => accessor.Const).ToArray();
+        }
+        if (candidates.Length == 0)
+        {
+            var operation = accessorName == "get" ? "readable" : "writable";
+            throw new CompilationErrorException(
+                $"Property '{property.FullName}' is not {operation} with " +
+                $"({string.Join(", ", argumentTypes.Select(GetTypeName))}).");
+        }
+
+        return candidates[0];
+    }
+
+    private static void EnsurePropertyValueIsSupported(PropertySymbol property)
+    {
+        var type = UnwrapConst(property.Type);
+        if (type is GenericType ||
+            type is NamedType namedType && namedType.GenericParams.Length > 0)
+        {
+            throw new CompilationErrorException(
+                $"Generic property '{property.FullName}' cannot be used in expressions yet.");
+        }
+    }
+
+    private static bool TryFlattenIdentifier(
+        ExpressionBase expression,
+        out QualifiedIdentifier identifier)
+    {
+        switch (expression)
+        {
+            case IdentifierExpression source:
+                identifier = source.Identifier;
+                return true;
+            case MemberAccessExpression memberAccess when
+                TryFlattenIdentifier(memberAccess.Target, out var target):
+                identifier = new QualifiedIdentifier(target, memberAccess.MemberName);
+                return true;
+            default:
+                identifier = QualifiedIdentifier.Empty;
+                return false;
+        }
     }
 
     private TypeBase BindInvocation(
@@ -566,6 +1092,134 @@ public sealed class SemanticBinder
             ApplyContextualType(pair.First, pair.Second);
         }
         return target.ReturnType;
+    }
+
+    private TypeBase BindObjectCreation(
+        ObjectCreationExpression creation,
+        FunctionDeclaration function,
+        IReadOnlyList<QualifiedIdentifier> imports,
+        LocalScope scope)
+    {
+        var currentNamespace = function.ParentClassDeclaration?.Namespace ?? function.Namespace;
+        ResolveTypeReference(creation.RequestedType, currentNamespace, imports);
+
+        var argumentTypes = creation.Arguments
+            .Select(argument => BindExpression(argument, function, imports, scope))
+            .ToArray();
+        var declaredType = _types.SingleOrDefault(candidate =>
+            IsType(candidate.Type, creation.RequestedType));
+        if (declaredType?.Declaration is { ClassType: ClassType.Interface })
+        {
+            throw new CompilationErrorException(
+                $"Interface '{GetTypeName(creation.RequestedType)}' cannot be constructed.");
+        }
+        if (declaredType?.Declaration is { IsStatic: true })
+        {
+            throw new CompilationErrorException(
+                $"Static type '{GetTypeName(creation.RequestedType)}' cannot be constructed.");
+        }
+        if (declaredType?.Declaration is { IsAbstract: true })
+        {
+            throw new CompilationErrorException(
+                $"Abstract type '{GetTypeName(creation.RequestedType)}' cannot be constructed.");
+        }
+
+        var typeCandidates = _constructors
+            .Where(candidate => IsType(candidate.ConstructedType, creation.RequestedType))
+            .ToArray();
+        if (typeCandidates.Length == 0)
+        {
+            throw new CompilationErrorException(
+                $"Type '{GetTypeName(creation.RequestedType)}' has no available constructor.");
+        }
+
+        var classType = typeCandidates[0].ClassType;
+        var declaration = typeCandidates
+            .Select(candidate => candidate.Constructor.Declaration?.ParentClassDeclaration)
+            .FirstOrDefault(candidate => candidate is not null);
+        if (classType == ClassType.Interface)
+        {
+            throw new CompilationErrorException(
+                $"Interface '{GetTypeName(creation.RequestedType)}' cannot be constructed.");
+        }
+        if (declaration is { IsStatic: true })
+        {
+            throw new CompilationErrorException(
+                $"Static type '{GetTypeName(creation.RequestedType)}' cannot be constructed.");
+        }
+        if (declaration is { IsAbstract: true })
+        {
+            throw new CompilationErrorException(
+                $"Abstract type '{GetTypeName(creation.RequestedType)}' cannot be constructed.");
+        }
+
+        var matchingConstructors = typeCandidates
+            .Where(candidate => ParametersMatch(
+                candidate.Constructor.ParameterTypes,
+                argumentTypes))
+            .ToArray();
+        if (matchingConstructors.Length == 0)
+        {
+            throw new CompilationErrorException(
+                $"No constructor for '{GetTypeName(creation.RequestedType)}' accepts " +
+                $"({string.Join(", ", argumentTypes.Select(GetTypeName))}).");
+        }
+        if (matchingConstructors.Length > 1)
+        {
+            throw new CompilationErrorException(
+                $"Constructor call for '{GetTypeName(creation.RequestedType)}' is ambiguous.");
+        }
+
+        var constructor = matchingConstructors[0];
+        foreach (var pair in creation.Arguments.Zip(constructor.Constructor.ParameterTypes))
+        {
+            ApplyContextualType(pair.First, pair.Second);
+        }
+        creation.BindConstructor(
+            constructor.Constructor,
+            constructor.ClassType,
+            $"__cx_new_{_objectCreationIndex++}");
+        return constructor.ConstructedType;
+    }
+
+    private void ResolveTypeReference(
+        TypeBase type,
+        QualifiedIdentifier currentNamespace,
+        IReadOnlyList<QualifiedIdentifier> imports)
+    {
+        switch (type)
+        {
+            case ConstType constType:
+                ResolveTypeReference(constType.UnderlyingType, currentNamespace, imports);
+                return;
+            case ArrayType arrayType:
+                ResolveTypeReference(arrayType.ElementType, currentNamespace, imports);
+                return;
+            case NullableType nullableType:
+                ResolveTypeReference(nullableType.UnderlyingType, currentNamespace, imports);
+                return;
+            case NamedType namedType when namedType.ResolvedTypeFullName.ToString() == "void":
+                var sourceName = new QualifiedIdentifier(
+                    namedType.Name.Split('.', StringSplitOptions.RemoveEmptyEntries));
+                var candidateNames = GetCandidateNames(sourceName, currentNamespace, imports);
+                var candidates = _types
+                    .Where(candidate => candidateNames.Contains(candidate.Declaration.FullName))
+                    .ToArray();
+                if (candidates.Length > 1)
+                {
+                    throw new CompilationErrorException(
+                        $"Type name '{namedType.Name}' is ambiguous.");
+                }
+                if (candidates.Length == 1)
+                {
+                    var candidate = candidates[0];
+                    namedType.SetResolvedType(
+                        candidate.Declaration.FullName,
+                        candidate.ModuleName,
+                        candidate.Declaration.ClassType);
+                }
+                return;
+        }
     }
 
     private TypeBase BindBinary(
@@ -669,10 +1323,16 @@ public sealed class SemanticBinder
     {
         var operandType = BindExpression(unary.Operand, function, imports, scope);
         if (unary.Operator is "++" or "--" &&
-            unary.Operand is not IdentifierExpression and not ArrayAccessExpression)
+            unary.Operand is not IdentifierExpression and
+            not ArrayAccessExpression and
+            not MemberAccessExpression)
         {
             throw new CompilationErrorException(
                 $"Operator '{unary.Operator}' requires an assignable value.");
+        }
+        if (unary.Operator is "++" or "--")
+        {
+            ValidateWritableField(unary.Operand);
         }
 
         return unary.Operator switch
@@ -692,13 +1352,26 @@ public sealed class SemanticBinder
         IReadOnlyList<QualifiedIdentifier> imports,
         LocalScope scope)
     {
-        if (assignment.Target is not IdentifierExpression and not ArrayAccessExpression)
+        var propertyAssignmentType = TryBindPropertyAssignment(
+            assignment,
+            function,
+            imports,
+            scope);
+        if (propertyAssignmentType is not null)
+        {
+            return propertyAssignmentType;
+        }
+
+        if (assignment.Target is not IdentifierExpression and
+            not ArrayAccessExpression and
+            not MemberAccessExpression)
         {
             throw new CompilationErrorException(
                 $"Expression '{assignment.Target.GetType().Name}' cannot be assigned to.");
         }
 
         var targetType = BindExpression(assignment.Target, function, imports, scope);
+        ValidateWritableField(assignment.Target);
         var valueType = BindExpression(assignment.Value, function, imports, scope);
 
         if (assignment.Operator == "=")
@@ -726,12 +1399,91 @@ public sealed class SemanticBinder
         return targetType;
     }
 
+    private TypeBase? TryBindPropertyAssignment(
+        AssignmentExpression assignment,
+        FunctionDeclaration function,
+        IReadOnlyList<QualifiedIdentifier> imports,
+        LocalScope scope)
+    {
+        var propertyExpression = assignment.Target is ArrayAccessExpression arrayAccess
+            ? arrayAccess.Target
+            : assignment.Target;
+        var propertyReference = ResolvePropertyReference(
+            propertyExpression,
+            function,
+            imports,
+            scope);
+        if (propertyReference is null)
+        {
+            return null;
+        }
+
+        var indexExpressions = assignment.Target is ArrayAccessExpression indexed
+            ? indexed.Indices
+            : [];
+        if (assignment.Target is ArrayAccessExpression &&
+            !propertyReference.Property.Accessors.Any(accessor =>
+                accessor.ParameterTypes.Count > 0))
+        {
+            return null;
+        }
+        if (assignment.Operator != "=")
+        {
+            throw new CompilationErrorException(
+                "Compound assignment to properties is not supported yet.");
+        }
+
+        EnsurePropertyValueIsSupported(propertyReference.Property);
+        var argumentTypes = indexExpressions
+            .Select(index => BindExpression(index, function, imports, scope))
+            .ToArray();
+        var setter = SelectPropertyAccessor(
+            propertyReference.Property,
+            "set",
+            argumentTypes,
+            propertyReference.ReceiverIsConst);
+        var valueType = BindExpression(assignment.Value, function, imports, scope);
+        if (!CanAssign(propertyReference.Property.Type, valueType))
+        {
+            throw new CompilationErrorException(
+                $"Cannot assign '{GetTypeName(valueType)}' to property " +
+                $"'{propertyReference.Property.FullName}' of type " +
+                $"'{GetTypeName(propertyReference.Property.Type)}'.");
+        }
+
+        ApplyContextualType(assignment.Value, propertyReference.Property.Type);
+        assignment.BindPropertySetter(
+            propertyReference.Property,
+            setter,
+            $"__cx_property_value_{_propertyAssignmentIndex++}");
+        return propertyReference.Property.Type;
+    }
+
+    private static void ValidateWritableField(ExpressionBase expression)
+    {
+        var field = expression switch
+        {
+            IdentifierExpression identifier => identifier.TargetField,
+            MemberAccessExpression memberAccess => memberAccess.TargetField,
+            _ => null,
+        };
+        if (field?.Declaration.Type is ConstType)
+        {
+            throw new CompilationErrorException(
+                $"Const field '{field.Declaration.FullName}' cannot be assigned to.");
+        }
+    }
+
     private TypeBase BindArrayCreation(
         ArrayCreationExpression expression,
         FunctionDeclaration function,
         IReadOnlyList<QualifiedIdentifier> imports,
         LocalScope scope)
     {
+        ResolveTypeReference(
+            expression.ElementType,
+            function.ParentClassDeclaration?.Namespace ?? function.Namespace,
+            imports);
         if (expression.ElementType is VoidType or AutoType or ArrayType)
         {
             throw new CompilationErrorException(
@@ -762,6 +1514,28 @@ public sealed class SemanticBinder
         IReadOnlyList<QualifiedIdentifier> imports,
         LocalScope scope)
     {
+        var propertyReference = ResolvePropertyReference(
+            expression.Target,
+            function,
+            imports,
+            scope);
+        if (propertyReference is not null &&
+            propertyReference.Property.Accessors.Any(accessor =>
+                accessor.Name == "get" && accessor.ParameterTypes.Count > 0))
+        {
+            EnsurePropertyValueIsSupported(propertyReference.Property);
+            var argumentTypes = expression.Indices
+                .Select(index => BindExpression(index, function, imports, scope))
+                .ToArray();
+            var getter = SelectPropertyAccessor(
+                propertyReference.Property,
+                "get",
+                argumentTypes,
+                propertyReference.ReceiverIsConst);
+            expression.BindProperty(propertyReference.Property, getter);
+            return propertyReference.Property.Type;
+        }
+
         var targetType = BindExpression(expression.Target, function, imports, scope);
         if (targetType is not ArrayType arrayType)
         {
@@ -1020,6 +1794,29 @@ public sealed class SemanticBinder
         }
     }
 
+    private static IEnumerable<PropertyAccessorDeclaration> EnumeratePropertyAccessors(
+        IEnumerable<DeclarationBase> declarations)
+    {
+        foreach (var declaration in declarations)
+        {
+            if (declaration is PropertyDeclaration property)
+            {
+                foreach (var accessor in property.PropertyAccessorDeclarations)
+                {
+                    yield return accessor;
+                }
+            }
+            else if (declaration is ClassDeclaration classDeclaration)
+            {
+                foreach (var accessor in EnumeratePropertyAccessors(
+                    classDeclaration.MemberDeclarations.Declarations))
+                {
+                    yield return accessor;
+                }
+            }
+        }
+    }
+
     private sealed class LocalScope
     {
         private readonly LocalScope? _parent;
@@ -1051,4 +1848,19 @@ public sealed class SemanticBinder
             return false;
         }
     }
+
+    private sealed record TypeSymbol(
+        string ModuleName,
+        ClassDeclaration Declaration,
+        TypeBase Type);
+
+    private sealed record ConstructorSymbol(
+        TypeBase ConstructedType,
+        ClassType ClassType,
+        FunctionSymbol Constructor);
+
+    private sealed record PropertyReference(
+        PropertySymbol Property,
+        ExpressionBase? Receiver,
+        bool ReceiverIsConst);
 }

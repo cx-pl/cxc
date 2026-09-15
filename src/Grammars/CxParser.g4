@@ -114,7 +114,7 @@ fieldInitializers
 	;
 
 fieldInitializer
-	: Identifier (Equal literal)?
+	: Identifier (Assign literal)?
 	;
 
 propertyDeclaration
@@ -451,7 +451,8 @@ primaryExpression
 
 primaryExpressionStart
 	: literal
-	| qualifiedIdentifier
+	| Identifier
+	| This
 	| arrayCreationExpression
 	| New typeName functionInvocation
 	;

@@ -11,8 +11,6 @@ namespace CxCompiler.OutputGenerators;
 
 public static partial class CCodeOutputGenerator
 {
-    private static SHA256 _sha256 = SHA256.Create();
-
     public static void GenerateOutput(CxProject project, string filePath)
     {
         if (project == null)
@@ -36,7 +34,9 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine($"#ifndef _{headerGuardName}_H_");
         writer.WriteLine($"#define _{headerGuardName}_H_");
         writer.WriteLine();
-        writer.WriteLine($"#include <cx.h>");
+        writer.WriteLine(project.Name == "cxcore"
+            ? "#include <cx.h>"
+            : "#include <cxcore.h>");
         writer.WriteLine();
 
         var declarations = GetDeclarations(project);
@@ -127,6 +127,7 @@ public static partial class CCodeOutputGenerator
 
                     var fieldMemberDeclarations = classDeclaration.MemberDeclarations.Declarations
                         .OfType<FieldDeclaration>()
+                        .Where(field => !field.IsStatic)
                         .ToArray();
                     if (!fieldMemberDeclarations.Any() &&
                         classDeclaration.ClassType == ClassType.Struct)
@@ -148,13 +149,23 @@ public static partial class CCodeOutputGenerator
                     writer.DecreaseIndent();
                     writer.WriteLine("};");
 
-                    var classMemberDeclarations = classDeclaration.MemberDeclarations.Declarations
-                        .OfType<ClassDeclaration>()
-                        .ToArray();
-                    if (classMemberDeclarations.Length != 0)
-                    {
-                        WriteTypesDeclarations(writer, classMemberDeclarations, moduleName);
-                    }
+                }
+
+                foreach (var staticField in classDeclaration.MemberDeclarations.Declarations
+                    .OfType<FieldDeclaration>()
+                    .Where(field => field.IsStatic))
+                {
+                    writer.WriteLine(
+                        $"extern {staticField.Type.ToCIdentifier(false)} " +
+                        $"{GetStaticFieldIdentifier(staticField, moduleName)};");
+                }
+
+                var classMemberDeclarations = classDeclaration.MemberDeclarations.Declarations
+                    .OfType<ClassDeclaration>()
+                    .ToArray();
+                if (classMemberDeclarations.Length != 0)
+                {
+                    WriteTypesDeclarations(writer, classMemberDeclarations, moduleName);
                 }
             }
         }
@@ -381,6 +392,13 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine();
 
         writer.WriteLine("//");
+        writer.WriteLine("// Static fields");
+        writer.WriteLine("//");
+        writer.WriteLine();
+        WriteStaticFields(writer, declarations, project.Name);
+        writer.WriteLine();
+
+        writer.WriteLine("//");
         writer.WriteLine("// TypeInfos");
         writer.WriteLine("//");
         WriteTypeInfos(writer, declarations, project.Name);
@@ -426,15 +444,76 @@ public static partial class CCodeOutputGenerator
             writer.WriteLine($"CX_STRING_DEF({namespaceIdentifier.ToCIdentifier()}, \"{@namespace}\");");
         }
 
-        foreach (var literal in EnumerateFunctions(declarations)
+        var functionLiterals = EnumerateFunctions(declarations)
             .Where(function => function.Body is not null)
             .SelectMany(function => function.Body!)
-            .SelectMany(EnumerateStringLiterals)
+            .SelectMany(EnumerateStringLiterals);
+        var fieldLiterals = EnumerateFields(declarations)
+            .Where(field => field.Initializer is LiteralExpression { IsString: true })
+            .Select(field => (LiteralExpression)field.Initializer!);
+        foreach (var literal in functionLiterals
+            .Concat(fieldLiterals)
             .DistinctBy(literal => literal.SourceText))
         {
             writer.WriteLine(
                 $"CX_STRING_DEF({GetStringIdentifier(literal, moduleName).ToCIdentifier()}, {literal.SourceText});");
         }
+    }
+
+    private static void WriteStaticFields(
+        IndentingWriter writer,
+        IEnumerable<DeclarationBase> declarations,
+        string moduleName)
+    {
+        foreach (var field in EnumerateFields(declarations).Where(field => field.IsStatic))
+        {
+            var initializer = field.Initializer is null
+                ? string.Empty
+                : $" = {ToCFieldInitializer(field.Initializer, moduleName)}";
+            writer.WriteLine(
+                $"{field.Type.ToCIdentifier(false)} {GetStaticFieldIdentifier(field, moduleName)}{initializer};");
+        }
+    }
+
+    private static IEnumerable<FieldDeclaration> EnumerateFields(
+        IEnumerable<DeclarationBase> declarations)
+    {
+        foreach (var declaration in declarations)
+        {
+            if (declaration is FieldDeclaration field)
+            {
+                yield return field;
+            }
+            else if (declaration is ClassDeclaration classDeclaration)
+            {
+                foreach (var nested in EnumerateFields(classDeclaration.MemberDeclarations.Declarations))
+                {
+                    yield return nested;
+                }
+            }
+        }
+    }
+
+    private static string GetStaticFieldIdentifier(
+        FieldDeclaration field,
+        string moduleName)
+    {
+        return new QualifiedIdentifier(moduleName, field.FullName).ToCIdentifier();
+    }
+
+    private static string ToCFieldInitializer(ExpressionBase expression, string moduleName)
+    {
+        return expression switch
+        {
+            LiteralExpression { IsString: true } literal =>
+                $"&{GetStringIdentifier(literal, moduleName).ToCIdentifier()}",
+            LiteralExpression { SourceText: "true" } => "CX_TRUE",
+            LiteralExpression { SourceText: "false" } => "CX_FALSE",
+            LiteralExpression { SourceText: "null" } literal => ToCNullLiteral(literal),
+            LiteralExpression literal => literal.SourceText,
+            _ => throw new InternalCompilerException(
+                $"Field initializer '{expression.GetType().Name}' is not supported."),
+        };
     }
 
     private static QualifiedIdentifier GetStringIdentifier(
@@ -499,8 +578,10 @@ public static partial class CCodeOutputGenerator
             }
             else
             {
-                var baseType = classDeclaration.BaseTypes.FirstOrDefault() ?? BuiltInSystemTypes.Object.FullName; // TODO: Fetch class base type and ignore interfaces
-                var baseTypeFullName = new QualifiedIdentifier(moduleName, baseType);
+                var declaredBaseType = classDeclaration.BaseTypes.FirstOrDefault(); // TODO: Resolve explicit base types and ignore interfaces
+                var baseTypeFullName = declaredBaseType is null
+                    ? new QualifiedIdentifier("cxcore", BuiltInSystemTypes.Object.FullName)
+                    : new QualifiedIdentifier(moduleName, declaredBaseType);
                 var baseTypeTypeInfoName = new QualifiedIdentifier(baseTypeFullName, "__typeinfo");
                 writer.WriteLine($"CX_CLASS_TYPEINFO_DEF({classDeclaration.ToCIdentifier(moduleName, false)}, {nameIdentifier.ToCIdentifier()}, {namespaceIdentifier.ToCIdentifier()}, {baseTypeTypeInfoName.ToCIdentifier()}, 0x{GetTypeNameHash(classDeclaration.FullName, moduleName):X}, {flagsString});");
             }
@@ -765,7 +846,7 @@ public static partial class CCodeOutputGenerator
         var fullName = new QualifiedIdentifier(moduleName, typeName);
         var fullNameString = fullName.ToString();
         byte[] bytes = Encoding.Unicode.GetBytes(fullNameString);
-        byte[] hash = _sha256.ComputeHash(bytes);
+        byte[] hash = SHA256.HashData(bytes);
         return
             BitConverter.ToUInt64(hash, 0) ^
             BitConverter.ToUInt64(hash, 8) ^

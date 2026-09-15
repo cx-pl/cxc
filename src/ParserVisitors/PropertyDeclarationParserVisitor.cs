@@ -60,6 +60,11 @@ public class PropertyDeclarationParserVisitor : CxParserBaseVisitor<PropertyDecl
         {
             foreach (var parameterContext in propertyParams.propertyParam())
             {
+                if (name == "set" &&
+                    parameterContext.Identifier().GetText() == "value")
+                {
+                    continue;
+                }
                 var parameterType = parameterContext.typeName() is { } typeName
                     ? new TypeNameContextVisitor().Visit(typeName)
                     : _fieldType;
@@ -71,6 +76,14 @@ public class PropertyDeclarationParserVisitor : CxParserBaseVisitor<PropertyDecl
         }
 
         _propertyDeclaration.AddAccessor(propertyAccessorDeclaration);
+
+        if (context.propertyAccessorBody() is { } body && body.Semicolon() is null)
+        {
+            var statements = body.LeftBrace() is not null
+                ? StatementParserVisitor.ParseStatements(body.statements())
+                : [new StatementParserVisitor().Visit(body.statement())];
+            propertyAccessorDeclaration.SetBody(statements);
+        }
 
         return base.VisitPropertyAccessorDeclaration(context);
     }

@@ -29,6 +29,13 @@ public class ConstructorDeclarationParserVisitor : CxParserBaseVisitor<Construct
 
         base.VisitChildren(context);
 
+        var functionBody = context.functionBody();
+        if (functionBody.LeftBrace() is not null)
+        {
+            _constructorDeclaration.SetBody(
+                StatementParserVisitor.ParseStatements(functionBody.statements()));
+        }
+
         return _constructorDeclaration;
     }
 

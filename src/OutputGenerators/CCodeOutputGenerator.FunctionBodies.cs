@@ -25,6 +25,12 @@ public static partial class CCodeOutputGenerator
                 continue;
             }
 
+            if (declaration is PropertyDeclaration propertyDeclaration)
+            {
+                WritePropertyAccessorDefinitions(writer, propertyDeclaration, moduleName);
+                continue;
+            }
+
             if (declaration is not FunctionDeclaration { Body: not null } functionDeclaration)
             {
                 continue;
@@ -47,9 +53,62 @@ public static partial class CCodeOutputGenerator
             writer.WriteLine(") {");
             writer.IncreaseIndent();
 
+            if (functionDeclaration is ConstructorDeclaration &&
+                functionDeclaration.ParentClassDeclaration!.ClassType == ClassType.Class)
+            {
+                writer.WriteLine(
+                    $"CX_INIT_VTABLE(__this, {functionDeclaration.ParentClassDeclaration.ToCIdentifier(moduleName, false)});");
+            }
+            if (functionDeclaration is ConstructorDeclaration)
+            {
+                foreach (var field in functionDeclaration.ParentClassDeclaration!.MemberDeclarations.Declarations
+                    .OfType<FieldDeclaration>()
+                    .Where(field => !field.IsStatic && field.Initializer is not null))
+                {
+                    writer.WriteLine(
+                        $"__this->{field.Name} = {ToCFieldInitializer(field.Initializer!, moduleName)};");
+                }
+            }
+
             foreach (var statement in functionDeclaration.Body)
             {
                 WriteStatement(writer, statement, functionDeclaration, moduleName);
+            }
+
+            writer.DecreaseIndent();
+            writer.WriteLine("}");
+            writer.WriteLine();
+        }
+    }
+
+    private static void WritePropertyAccessorDefinitions(
+        IndentingWriter writer,
+        PropertyDeclaration property,
+        string moduleName)
+    {
+        foreach (var accessor in property.PropertyAccessorDeclarations
+            .Where(accessor => accessor.BodyFunction is not null))
+        {
+            var function = accessor.BodyFunction!;
+            writer.Write($"{accessor.ToCIdentifier(moduleName)}(");
+
+            var parameters = new List<string>();
+            if (!property.IsStatic)
+            {
+                var receiverConst = accessor.Const ? "const " : string.Empty;
+                parameters.Add(
+                    $"{receiverConst}{property.ParentClassDeclaration.ToCIdentifier(moduleName)}* __this");
+            }
+            parameters.AddRange(function.Parameters.Select(
+                parameter => $"{parameter.ParameterType.ToCIdentifier(false)} {parameter.Name}"));
+
+            writer.Write(string.Join(", ", parameters));
+            writer.WriteLine(") {");
+            writer.IncreaseIndent();
+
+            foreach (var statement in function.Body!)
+            {
+                WriteStatement(writer, statement, function, moduleName);
             }
 
             writer.DecreaseIndent();
@@ -64,6 +123,20 @@ public static partial class CCodeOutputGenerator
         FunctionDeclaration functionDeclaration,
         string moduleName)
     {
+        foreach (var creation in EnumerateDirectObjectCreations(statement))
+        {
+            var temporaryName = creation.TemporaryName ?? throw new InternalCompilerException(
+                "Object creation expression is not bound.");
+            writer.WriteLine($"{creation.RequestedType.ToCIdentifier(false)} {temporaryName};");
+        }
+        foreach (var assignment in EnumerateDirectPropertyAssignments(statement))
+        {
+            var temporaryName = assignment.TemporaryName ?? throw new InternalCompilerException(
+                "Property assignment expression is not bound.");
+            writer.WriteLine(
+                $"{assignment.TargetProperty!.Type.ToCIdentifier(false)} {temporaryName};");
+        }
+
         switch (statement)
         {
             case ExpressionStatement expressionStatement:
@@ -338,7 +411,19 @@ public static partial class CCodeOutputGenerator
             InvocationExpression invocation =>
                 $"{ToCIdentifier(invocation.TargetSymbol ?? throw new InternalCompilerException("Invocation target is not bound."))}" +
                 $"({string.Join(", ", invocation.Arguments.Select(argument => ToCExpression(argument, functionDeclaration, moduleName)))})",
-            IdentifierExpression identifier => identifier.Identifier.ToCIdentifier(),
+            IdentifierExpression { PropertyGetter: not null } identifier =>
+                ToCPropertyCall(
+                    identifier.TargetProperty!,
+                    identifier.PropertyGetter,
+                    null,
+                    [],
+                    null,
+                    functionDeclaration,
+                    moduleName),
+            IdentifierExpression identifier => identifier.TargetField is null
+                ? identifier.Identifier.ToCIdentifier()
+                : ToCFieldAccess(identifier.TargetField, null, functionDeclaration, moduleName),
+            ThisExpression => "__this",
             BinaryExpression binary =>
                 ToCBinaryExpression(binary, functionDeclaration, moduleName),
             NullCoalescingExpression coalescing =>
@@ -351,19 +436,183 @@ public static partial class CCodeOutputGenerator
                 $"({ToCExpression(unary.Operand, functionDeclaration, moduleName)}{unary.Operator})",
             UnaryExpression unary =>
                 $"({unary.Operator}{ToCExpression(unary.Operand, functionDeclaration, moduleName)})",
+            AssignmentExpression { PropertySetter: not null } assignment =>
+                ToCPropertyAssignment(assignment, functionDeclaration, moduleName),
             AssignmentExpression assignment =>
                 $"{ToCExpression(assignment.Target, functionDeclaration, moduleName)} {assignment.Operator} " +
                 ToCExpression(assignment.Value, functionDeclaration, moduleName),
             ArrayCreationExpression arrayCreation =>
                 $"cx_array_new((cx_uint)({ToCExpression(arrayCreation.Length, functionDeclaration, moduleName)}), " +
                 $"(cx_uint)sizeof({arrayCreation.ElementType.ToCIdentifier(false)}))",
+            ObjectCreationExpression objectCreation =>
+                ToCObjectCreationExpression(objectCreation, functionDeclaration, moduleName),
+            ArrayAccessExpression { PropertyGetter: not null } arrayAccess =>
+                ToCIndexedPropertyGetter(arrayAccess, functionDeclaration, moduleName),
             ArrayAccessExpression arrayAccess =>
                 ToCArrayAccess(arrayAccess, functionDeclaration, moduleName),
+            MemberAccessExpression { PropertyGetter: not null } memberAccess =>
+                ToCPropertyCall(
+                    memberAccess.TargetProperty!,
+                    memberAccess.PropertyGetter,
+                    memberAccess.TargetProperty!.IsStatic ? null : memberAccess.Target,
+                    [],
+                    null,
+                    functionDeclaration,
+                    moduleName),
+            MemberAccessExpression { TargetField: not null } memberAccess =>
+                ToCFieldAccess(
+                    memberAccess.TargetField,
+                    memberAccess.Target,
+                    functionDeclaration,
+                    moduleName),
             MemberAccessExpression memberAccess =>
                 FlattenIdentifier(memberAccess).ToCIdentifier(),
             _ => throw new InternalCompilerException(
                 $"Expression '{expression.GetType().Name}' is not yet supported by the C generator."),
         };
+    }
+
+    private static string ToCIndexedPropertyGetter(
+        ArrayAccessExpression expression,
+        FunctionDeclaration functionDeclaration,
+        string moduleName)
+    {
+        var receiver = expression.Target switch
+        {
+            MemberAccessExpression memberAccess when !expression.TargetProperty!.IsStatic =>
+                memberAccess.Target,
+            _ => null,
+        };
+        return ToCPropertyCall(
+            expression.TargetProperty!,
+            expression.PropertyGetter!,
+            receiver,
+            expression.Indices,
+            null,
+            functionDeclaration,
+            moduleName);
+    }
+
+    private static string ToCPropertyAssignment(
+        AssignmentExpression expression,
+        FunctionDeclaration functionDeclaration,
+        string moduleName)
+    {
+        var temporaryName = expression.TemporaryName ?? throw new InternalCompilerException(
+            "Property assignment temporary is not bound.");
+        var indexExpressions = expression.Target is ArrayAccessExpression indexed
+            ? indexed.Indices
+            : [];
+        var propertyExpression = expression.Target is ArrayAccessExpression arrayAccess
+            ? arrayAccess.Target
+            : expression.Target;
+        var receiver = propertyExpression switch
+        {
+            MemberAccessExpression memberAccess when !expression.TargetProperty!.IsStatic =>
+                memberAccess.Target,
+            _ => null,
+        };
+        var value = $"{temporaryName} = " +
+            ToCExpression(expression.Value, functionDeclaration, moduleName);
+        var setterCall = ToCPropertyCall(
+            expression.TargetProperty!,
+            expression.PropertySetter!,
+            receiver,
+            indexExpressions,
+            value,
+            functionDeclaration,
+            moduleName);
+        return $"({setterCall}, {temporaryName})";
+    }
+
+    private static string ToCPropertyCall(
+        PropertySymbol property,
+        PropertyAccessorSymbol accessor,
+        ExpressionBase? receiver,
+        IReadOnlyList<ExpressionBase> indexArguments,
+        string? value,
+        FunctionDeclaration functionDeclaration,
+        string moduleName)
+    {
+        var arguments = new List<string>();
+        if (!property.IsStatic)
+        {
+            if (receiver is null)
+            {
+                arguments.Add("__this");
+            }
+            else
+            {
+                var receiverExpression = ToCExpression(receiver, functionDeclaration, moduleName);
+                arguments.Add(property.ContainingClassType == ClassType.Class
+                    ? receiverExpression
+                    : $"&({receiverExpression})");
+            }
+        }
+        arguments.AddRange(indexArguments.Select(argument =>
+            ToCExpression(argument, functionDeclaration, moduleName)));
+        if (value is not null)
+        {
+            arguments.Add(value);
+        }
+
+        var accessorName = $"__{(accessor.Const ? "const_" : string.Empty)}{accessor.Name}";
+        var fullName = new QualifiedIdentifier(
+            property.ModuleName,
+            property.FullName,
+            accessorName);
+        return $"{fullName.ToCIdentifier()}({string.Join(", ", arguments)})";
+    }
+
+    private static string ToCFieldAccess(
+        FieldSymbol field,
+        ExpressionBase? receiver,
+        FunctionDeclaration functionDeclaration,
+        string moduleName)
+    {
+        if (field.Declaration.IsStatic)
+        {
+            return GetStaticFieldIdentifier(field.Declaration, field.ModuleName);
+        }
+        if (receiver is null)
+        {
+            return $"__this->{field.Declaration.Name}";
+        }
+
+        var receiverExpression = ToCExpression(receiver, functionDeclaration, moduleName);
+        var accessOperator = field.ContainingClassType == ClassType.Class ? "->" : ".";
+        return $"({receiverExpression}){accessOperator}{field.Declaration.Name}";
+    }
+
+    private static string ToCObjectCreationExpression(
+        ObjectCreationExpression expression,
+        FunctionDeclaration functionDeclaration,
+        string moduleName)
+    {
+        var constructor = expression.Constructor ?? throw new InternalCompilerException(
+            "Object creation constructor is not bound.");
+        var temporaryName = expression.TemporaryName ?? throw new InternalCompilerException(
+            "Object creation temporary is not bound.");
+        var arguments = expression.Arguments
+            .Select(argument => ToCExpression(argument, functionDeclaration, moduleName))
+            .ToArray();
+
+        string receiver;
+        if (expression.ClassType == ClassType.Class)
+        {
+            var cType = expression.RequestedType.ToCIdentifier(false);
+            var storageType = cType.TrimEnd().TrimEnd('*').TrimEnd();
+            receiver = $"{temporaryName} = ({cType})cx_object_new(" +
+                $"(cx_uint)sizeof({storageType}))";
+        }
+        else
+        {
+            receiver = $"&{temporaryName}";
+        }
+
+        var constructorArguments = new[] { receiver }.Concat(arguments);
+        return $"({ToCIdentifier(constructor)}({string.Join(", ", constructorArguments)}), " +
+            $"{temporaryName})";
     }
 
     private static string ToCNullLiteral(LiteralExpression literal)
@@ -519,6 +768,16 @@ public static partial class CCodeOutputGenerator
                 }
                 break;
 
+            case ObjectCreationExpression creation:
+                foreach (var argument in creation.Arguments)
+                {
+                    foreach (var literal in EnumerateStringLiterals(argument))
+                    {
+                        yield return literal;
+                    }
+                }
+                break;
+
             case BinaryExpression binary:
                 foreach (var literal in EnumerateStringLiterals(binary.Left))
                 {
@@ -595,6 +854,106 @@ public static partial class CCodeOutputGenerator
                 }
                 break;
         }
+    }
+
+    private static IEnumerable<ObjectCreationExpression> EnumerateObjectCreations(
+        ExpressionBase expression)
+    {
+        if (expression is ObjectCreationExpression creation)
+        {
+            yield return creation;
+            foreach (var argument in creation.Arguments)
+            {
+                foreach (var nested in EnumerateObjectCreations(argument))
+                {
+                    yield return nested;
+                }
+            }
+            yield break;
+        }
+
+        foreach (var child in GetExpressionChildren(expression))
+        {
+            foreach (var nested in EnumerateObjectCreations(child))
+            {
+                yield return nested;
+            }
+        }
+    }
+
+    private static IEnumerable<ObjectCreationExpression> EnumerateDirectObjectCreations(
+        StatementBase statement)
+    {
+        return GetDirectExpressions(statement).SelectMany(EnumerateObjectCreations);
+    }
+
+    private static IEnumerable<AssignmentExpression> EnumeratePropertyAssignments(
+        ExpressionBase expression)
+    {
+        if (expression is AssignmentExpression { PropertySetter: not null } assignment)
+        {
+            yield return assignment;
+        }
+        foreach (var child in GetExpressionChildren(expression))
+        {
+            foreach (var nested in EnumeratePropertyAssignments(child))
+            {
+                yield return nested;
+            }
+        }
+    }
+
+    private static IEnumerable<AssignmentExpression> EnumerateDirectPropertyAssignments(
+        StatementBase statement)
+    {
+        return GetDirectExpressions(statement).SelectMany(EnumeratePropertyAssignments);
+    }
+
+    private static IEnumerable<ExpressionBase> GetExpressionChildren(ExpressionBase expression)
+    {
+        return expression switch
+        {
+            MemberAccessExpression memberAccess => [memberAccess.Target],
+            InvocationExpression invocation => [invocation.Target, .. invocation.Arguments],
+            BinaryExpression binary => [binary.Left, binary.Right],
+            ConditionalExpression conditional =>
+                [conditional.Condition, conditional.WhenTrue, conditional.WhenFalse],
+            NullCoalescingExpression coalescing => [coalescing.Left, coalescing.Right],
+            UnaryExpression unary => [unary.Operand],
+            AssignmentExpression assignment => [assignment.Target, assignment.Value],
+            ArrayCreationExpression arrayCreation => [arrayCreation.Length],
+            ArrayAccessExpression arrayAccess => [arrayAccess.Target, .. arrayAccess.Indices],
+            ObjectCreationExpression creation => creation.Arguments,
+            _ => [],
+        };
+    }
+
+    private static IEnumerable<ExpressionBase> GetDirectExpressions(StatementBase statement)
+    {
+        return statement switch
+        {
+            ExpressionStatement expressionStatement => [expressionStatement.Expression],
+            ReturnStatement { Expression: not null } returnStatement => [returnStatement.Expression],
+            LocalVariableDeclarationStatement declaration => declaration.Declarators
+                .Where(declarator => declarator.Initializer is not null)
+                .Select(declarator => declarator.Initializer!),
+            IfStatement conditional => [conditional.Condition],
+            SwitchStatement switchStatement => [switchStatement.Expression, .. switchStatement.Sections
+                .SelectMany(section => section.Labels)
+                .SelectMany(label => new[] { label.Value, label.Filter })
+                .Where(expression => expression is not null)
+                .Select(expression => expression!)],
+            WhileStatement whileStatement => [whileStatement.Condition],
+            DoWhileStatement doWhileStatement => [doWhileStatement.Condition],
+            ForStatement forStatement => [.. forStatement.InitializerExpressions,
+                .. forStatement.Condition is null ? [] : new[] { forStatement.Condition },
+                .. forStatement.Iterators,
+                .. forStatement.DeclarationInitializer?.Declarators
+                    .Where(declarator => declarator.Initializer is not null)
+                    .Select(declarator => declarator.Initializer!) ?? []],
+            ForeachStatement foreachStatement => [foreachStatement.Collection],
+            _ => [],
+        };
     }
 
     private static IEnumerable<LiteralExpression> EnumerateStringLiterals(StatementBase statement)

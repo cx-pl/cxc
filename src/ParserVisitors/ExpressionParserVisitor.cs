@@ -3,6 +3,7 @@ using Antlr4.Runtime.Misc;
 using Antlr4.Runtime.Tree;
 using CxCompiler.Grammar;
 using CxCompiler.Model;
+using CxCompiler.Model.Common;
 using CxCompiler.Model.Expressions;
 using CxCompiler.Model.Types;
 
@@ -100,9 +101,14 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
             return Visit(literal);
         }
 
-        if (context.qualifiedIdentifier() is { } identifier)
+        if (context.Identifier() is { } identifier)
         {
-            return new IdentifierExpression(new QualifiedIdentifierContextVisitor().Visit(identifier));
+            return new IdentifierExpression(new QualifiedIdentifier(identifier.GetText()));
+        }
+
+        if (context.This() is not null)
+        {
+            return new ThisExpression();
         }
 
         if (context.arrayCreationExpression() is { } arrayCreation)
@@ -119,6 +125,13 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
             return new ArrayCreationExpression(
                 elementType,
                 Visit(arrayCreation.expression()));
+        }
+
+        if (context.New() is not null && context.typeName() is { } typeName)
+        {
+            return new ObjectCreationExpression(
+                new TypeNameContextVisitor().Visit(typeName),
+                GetArguments(context.functionInvocation()));
         }
 
         throw new InternalCompilerException($"Expression '{context.GetText()}' is not yet supported.");
