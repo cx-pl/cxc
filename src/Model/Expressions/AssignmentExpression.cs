@@ -10,6 +10,9 @@ public sealed class AssignmentExpression : ExpressionBase
     public PropertySymbol? TargetProperty { get; private set; }
     public PropertyAccessorSymbol? PropertySetter { get; private set; }
     public string? TemporaryName { get; private set; }
+    public int ReceiverBaseDepth { get; private set; }
+    public int? InterfaceDispatchSlotIndex { get; private set; }
+    public string? InterfaceReceiverTemporaryName { get; private set; }
 
     public AssignmentExpression(
         ExpressionBase target,
@@ -24,10 +27,16 @@ public sealed class AssignmentExpression : ExpressionBase
     public void BindPropertySetter(
         PropertySymbol property,
         PropertyAccessorSymbol setter,
-        string temporaryName)
+        string temporaryName,
+        int receiverBaseDepth = 0,
+        int? interfaceDispatchSlotIndex = null,
+        string? interfaceReceiverTemporaryName = null)
     {
         TargetProperty = property;
         PropertySetter = setter;
         TemporaryName = temporaryName;
+        ReceiverBaseDepth = receiverBaseDepth;
+        InterfaceDispatchSlotIndex = interfaceDispatchSlotIndex;
+        InterfaceReceiverTemporaryName = interfaceReceiverTemporaryName;
     }
 }

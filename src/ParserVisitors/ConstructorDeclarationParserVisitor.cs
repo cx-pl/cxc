@@ -29,6 +29,15 @@ public class ConstructorDeclarationParserVisitor : CxParserBaseVisitor<Construct
 
         base.VisitChildren(context);
 
+        if (context.constructorOrBaseInvocation() is { } initializer)
+        {
+            _constructorDeclaration.SetInitializer(new ConstructorInitializer(
+                initializer.Base() is not null
+                    ? ConstructorInitializerKind.Base
+                    : ConstructorInitializerKind.This,
+                ExpressionParserVisitor.ParseArguments(initializer.functionInvocation())));
+        }
+
         var functionBody = context.functionBody();
         if (functionBody.LeftBrace() is not null)
         {

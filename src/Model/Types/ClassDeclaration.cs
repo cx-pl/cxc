@@ -14,8 +14,26 @@ public class ClassDeclaration : DeclarationBase
     public bool IsStatic { get; }
     public string[] GenericTypeNames { get; }
 
-    private readonly List<QualifiedIdentifier> _baseTypes = [];
-    public IReadOnlyList<QualifiedIdentifier> BaseTypes => _baseTypes.AsReadOnly();
+    private readonly List<TypeBase> _baseTypes = [];
+    public IReadOnlyList<TypeBase> BaseTypes => _baseTypes.AsReadOnly();
+    public TypeBase? BaseClassType { get; private set; }
+    public ClassDeclaration? BaseClassDeclaration { get; private set; }
+
+    private readonly List<ClassDeclaration> _baseInterfaces = [];
+    public IReadOnlyList<ClassDeclaration> BaseInterfaces => _baseInterfaces;
+
+    private readonly List<VirtualMethodSlot> _virtualMethodSlots = [];
+    public IReadOnlyList<VirtualMethodSlot> VirtualMethodSlots => _virtualMethodSlots;
+
+    private readonly List<InterfaceDispatchSlot> _interfaceDispatchSlots = [];
+    public IReadOnlyList<InterfaceDispatchSlot> InterfaceDispatchSlots => _interfaceDispatchSlots;
+
+    private readonly List<ClassDeclaration> _interfaceUpcastTargets = [];
+    public IReadOnlyList<ClassDeclaration> InterfaceUpcastTargets => _interfaceUpcastTargets;
+
+    private readonly List<InterfaceDispatchTable> _interfaceDispatchTables = [];
+    public IReadOnlyList<InterfaceDispatchTable> InterfaceDispatchTables =>
+        _interfaceDispatchTables;
 
     public DeclarationScope MemberDeclarations { get; }
 
@@ -91,8 +109,43 @@ public class ClassDeclaration : DeclarationBase
         }
     }
 
-    public void AddBaseType(QualifiedIdentifier baseType)
+    public void AddBaseType(TypeBase baseType)
     {
         _baseTypes.Add(baseType);
+    }
+
+    public void SetBaseClass(TypeBase baseType, ClassDeclaration? declaration)
+    {
+        BaseClassType = baseType;
+        BaseClassDeclaration = declaration;
+    }
+
+    public void AddBaseInterface(ClassDeclaration declaration)
+    {
+        _baseInterfaces.Add(declaration);
+    }
+
+    public void SetVirtualMethodSlots(IEnumerable<VirtualMethodSlot> slots)
+    {
+        _virtualMethodSlots.Clear();
+        _virtualMethodSlots.AddRange(slots);
+    }
+
+    public void SetInterfaceDispatchSlots(IEnumerable<InterfaceDispatchSlot> slots)
+    {
+        _interfaceDispatchSlots.Clear();
+        _interfaceDispatchSlots.AddRange(slots);
+    }
+
+    public void SetInterfaceUpcastTargets(IEnumerable<ClassDeclaration> interfaces)
+    {
+        _interfaceUpcastTargets.Clear();
+        _interfaceUpcastTargets.AddRange(interfaces);
+    }
+
+    public void SetInterfaceDispatchTables(IEnumerable<InterfaceDispatchTable> tables)
+    {
+        _interfaceDispatchTables.Clear();
+        _interfaceDispatchTables.AddRange(tables);
     }
 }

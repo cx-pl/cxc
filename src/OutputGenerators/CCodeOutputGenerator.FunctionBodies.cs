@@ -3,6 +3,7 @@ using CxCompiler.Model.Common;
 using CxCompiler.Model.Expressions;
 using CxCompiler.Model.Statements;
 using CxCompiler.Model.Types;
+using CxCompiler.Model.Types.BuiltInTypes;
 using CxCompiler.Semantics;
 
 namespace CxCompiler.OutputGenerators;
@@ -53,20 +54,46 @@ public static partial class CCodeOutputGenerator
             writer.WriteLine(") {");
             writer.IncreaseIndent();
 
-            if (functionDeclaration is ConstructorDeclaration &&
-                functionDeclaration.ParentClassDeclaration!.ClassType == ClassType.Class)
+            if (functionDeclaration is ConstructorDeclaration constructor)
             {
-                writer.WriteLine(
-                    $"CX_INIT_VTABLE(__this, {functionDeclaration.ParentClassDeclaration.ToCIdentifier(moduleName, false)});");
-            }
-            if (functionDeclaration is ConstructorDeclaration)
-            {
-                foreach (var field in functionDeclaration.ParentClassDeclaration!.MemberDeclarations.Declarations
-                    .OfType<FieldDeclaration>()
-                    .Where(field => !field.IsStatic && field.Initializer is not null))
+                if (constructor.Initializer is { } initializer)
                 {
+                    foreach (var creation in initializer.Arguments.SelectMany(
+                        EnumerateObjectCreations))
+                    {
+                        writer.WriteLine(
+                            $"{creation.RequestedType.ToCIdentifier(false)} {creation.TemporaryName};");
+                    }
+                    var target = initializer.Target ?? throw new InternalCompilerException(
+                        "Constructor initializer is not bound.");
+                    var receiver = initializer.Kind == ConstructorInitializerKind.Base
+                        ? "&__this->__base"
+                        : "__this";
+                    var initializerArguments = new[] { receiver }.Concat(
+                        initializer.Arguments.Zip(target.ParameterTypes).Select(pair =>
+                            ToCExpressionAsType(
+                                pair.First,
+                                pair.Second,
+                                functionDeclaration,
+                                moduleName)));
                     writer.WriteLine(
-                        $"__this->{field.Name} = {ToCFieldInitializer(field.Initializer!, moduleName)};");
+                        $"{ToCIdentifier(target)}({string.Join(", ", initializerArguments)});");
+                }
+
+                if (constructor.Initializer?.Kind != ConstructorInitializerKind.This)
+                {
+                    if (constructor.ParentClassDeclaration!.ClassType == ClassType.Class)
+                    {
+                        writer.WriteLine(
+                            $"CX_INIT_VTABLE(__this, {constructor.ParentClassDeclaration.ToCIdentifier(moduleName, false)});");
+                    }
+                    foreach (var field in constructor.ParentClassDeclaration!.MemberDeclarations.Declarations
+                        .OfType<FieldDeclaration>()
+                        .Where(field => !field.IsStatic && field.Initializer is not null))
+                    {
+                        writer.WriteLine(
+                            $"__this->{field.Name} = {ToCFieldInitializer(field.Initializer!, moduleName)};");
+                    }
                 }
             }
 
@@ -136,6 +163,28 @@ public static partial class CCodeOutputGenerator
             writer.WriteLine(
                 $"{assignment.TargetProperty!.Type.ToCIdentifier(false)} {temporaryName};");
         }
+        foreach (var invocation in EnumerateDirectInterfaceInvocations(statement))
+        {
+            var temporaryName = invocation.ReceiverTemporaryName!;
+            var receiverType = invocation.Receiver?.InferredType ??
+                throw new InternalCompilerException("Interface invocation receiver is not bound.");
+            var temporaryType = receiverType is ConstType constType
+                ? constType.UnderlyingType
+                : receiverType;
+            writer.WriteLine($"{temporaryType.ToCIdentifier(false)} {temporaryName};");
+        }
+        foreach (var propertyExpression in EnumerateDirectInterfacePropertyReceivers(statement))
+        {
+            var receiver = GetPropertyReceiver(propertyExpression) ??
+                throw new InternalCompilerException("Interface property receiver is not bound.");
+            var receiverType = receiver.InferredType ??
+                throw new InternalCompilerException("Interface property receiver type is not bound.");
+            var temporaryType = receiverType is ConstType constType
+                ? constType.UnderlyingType
+                : receiverType;
+            writer.WriteLine(
+                $"{temporaryType.ToCIdentifier(false)} {GetInterfacePropertyTemporaryName(propertyExpression)};");
+        }
 
         switch (statement)
         {
@@ -147,7 +196,7 @@ public static partial class CCodeOutputGenerator
             case ReturnStatement returnStatement:
                 var expression = returnStatement.Expression is null
                     ? string.Empty
-                    : $" {ToCExpression(returnStatement.Expression, functionDeclaration, moduleName)}";
+                    : $" {ToCExpressionAsType(returnStatement.Expression, functionDeclaration.ReturnType, functionDeclaration, moduleName)}";
                 writer.WriteLine($"return{expression};");
                 break;
 
@@ -158,7 +207,7 @@ public static partial class CCodeOutputGenerator
                         $"Local '{declarator.Name}' is not bound.");
                     var initializer = declarator.Initializer is null
                         ? string.Empty
-                        : $" = {ToCExpression(declarator.Initializer, functionDeclaration, moduleName)}";
+                        : $" = {ToCExpressionAsType(declarator.Initializer, type, functionDeclaration, moduleName)}";
                     writer.WriteLine($"{type.ToCIdentifier(false)} {declarator.Name}{initializer};");
                 }
                 break;
@@ -386,7 +435,7 @@ public static partial class CCodeOutputGenerator
 
             var initializer = declarator.Initializer is null
                 ? string.Empty
-                : $" = {ToCExpression(declarator.Initializer, functionDeclaration, moduleName)}";
+                : $" = {ToCExpressionAsType(declarator.Initializer, declaratorType, functionDeclaration, moduleName)}";
             return $"{declarator.Name}{initializer}";
         });
         return $"{type.ToCIdentifier(false)} {string.Join(", ", declarators)}";
@@ -409,8 +458,7 @@ public static partial class CCodeOutputGenerator
                 _ => literal.SourceText,
             },
             InvocationExpression invocation =>
-                $"{ToCIdentifier(invocation.TargetSymbol ?? throw new InternalCompilerException("Invocation target is not bound."))}" +
-                $"({string.Join(", ", invocation.Arguments.Select(argument => ToCExpression(argument, functionDeclaration, moduleName)))})",
+                ToCInvocation(invocation, functionDeclaration, moduleName),
             IdentifierExpression { PropertyGetter: not null } identifier =>
                 ToCPropertyCall(
                     identifier.TargetProperty!,
@@ -418,11 +466,19 @@ public static partial class CCodeOutputGenerator
                     null,
                     [],
                     null,
+                    identifier.ReceiverBaseDepth,
+                    null,
+                    null,
                     functionDeclaration,
                     moduleName),
             IdentifierExpression identifier => identifier.TargetField is null
                 ? identifier.Identifier.ToCIdentifier()
-                : ToCFieldAccess(identifier.TargetField, null, functionDeclaration, moduleName),
+                : ToCFieldAccess(
+                    identifier.TargetField,
+                    null,
+                    identifier.ReceiverBaseDepth,
+                    functionDeclaration,
+                    moduleName),
             ThisExpression => "__this",
             BinaryExpression binary =>
                 ToCBinaryExpression(binary, functionDeclaration, moduleName),
@@ -430,8 +486,8 @@ public static partial class CCodeOutputGenerator
                 ToCNullCoalescingExpression(coalescing, functionDeclaration, moduleName),
             ConditionalExpression conditional =>
                 $"({ToCExpression(conditional.Condition, functionDeclaration, moduleName)} ? " +
-                $"{ToCExpression(conditional.WhenTrue, functionDeclaration, moduleName)} : " +
-                $"{ToCExpression(conditional.WhenFalse, functionDeclaration, moduleName)})",
+                $"{ToCExpressionAsType(conditional.WhenTrue, conditional.InferredType!, functionDeclaration, moduleName)} : " +
+                $"{ToCExpressionAsType(conditional.WhenFalse, conditional.InferredType!, functionDeclaration, moduleName)})",
             UnaryExpression unary when unary.Postfix =>
                 $"({ToCExpression(unary.Operand, functionDeclaration, moduleName)}{unary.Operator})",
             UnaryExpression unary =>
@@ -440,7 +496,9 @@ public static partial class CCodeOutputGenerator
                 ToCPropertyAssignment(assignment, functionDeclaration, moduleName),
             AssignmentExpression assignment =>
                 $"{ToCExpression(assignment.Target, functionDeclaration, moduleName)} {assignment.Operator} " +
-                ToCExpression(assignment.Value, functionDeclaration, moduleName),
+                (assignment.Operator == "=" && assignment.Target.InferredType is { } targetType
+                    ? ToCExpressionAsType(assignment.Value, targetType, functionDeclaration, moduleName)
+                    : ToCExpression(assignment.Value, functionDeclaration, moduleName)),
             ArrayCreationExpression arrayCreation =>
                 $"cx_array_new((cx_uint)({ToCExpression(arrayCreation.Length, functionDeclaration, moduleName)}), " +
                 $"(cx_uint)sizeof({arrayCreation.ElementType.ToCIdentifier(false)}))",
@@ -461,12 +519,16 @@ public static partial class CCodeOutputGenerator
                     memberAccess.TargetProperty!.IsStatic ? null : memberAccess.Target,
                     [],
                     null,
+                    memberAccess.ReceiverBaseDepth,
+                    memberAccess.InterfaceDispatchSlotIndex,
+                    memberAccess.InterfaceReceiverTemporaryName,
                     functionDeclaration,
                     moduleName),
             MemberAccessExpression { TargetField: not null } memberAccess =>
                 ToCFieldAccess(
                     memberAccess.TargetField,
                     memberAccess.Target,
+                    memberAccess.ReceiverBaseDepth,
                     functionDeclaration,
                     moduleName),
             MemberAccessExpression memberAccess =>
@@ -493,8 +555,88 @@ public static partial class CCodeOutputGenerator
             receiver,
             expression.Indices,
             null,
+            expression.ReceiverBaseDepth,
+            expression.InterfaceDispatchSlotIndex,
+            expression.InterfaceReceiverTemporaryName,
             functionDeclaration,
             moduleName);
+    }
+
+    private static string ToCInvocation(
+        InvocationExpression invocation,
+        FunctionDeclaration functionDeclaration,
+        string moduleName)
+    {
+        var target = invocation.TargetSymbol ?? throw new InternalCompilerException(
+            "Invocation target is not bound.");
+        if (invocation.DispatchSlotIndex is { } interfaceSlotIndex)
+        {
+            var interfaceReceiver = invocation.Receiver ?? throw new InternalCompilerException(
+                "Interface invocation has no receiver.");
+            var receiver = ToCExpression(
+                interfaceReceiver,
+                functionDeclaration,
+                moduleName);
+            var receiverTemporary = invocation.ReceiverTemporaryName ??
+                throw new InternalCompilerException(
+                    "Interface invocation receiver temporary is not bound.");
+            var convertedArguments = invocation.Arguments.Zip(target.ParameterTypes).Select(pair =>
+                ToCExpressionAsType(pair.First, pair.Second, functionDeclaration, moduleName));
+            var interfaceParameterTypes = new[] { "cx_ptr" }.Concat(
+                target.ParameterTypes.Select(type => type.ToCIdentifier(false)));
+            var interfaceFunctionPointer =
+                $"({target.ReturnType.ToCReturnType(false)} (*)({string.Join(", ", interfaceParameterTypes)}))";
+            var interfaceArguments = new[] { $"({receiverTemporary}).instance" }
+                .Concat(convertedArguments);
+            var call = $"({interfaceFunctionPointer}((union cx_vtable_entry*)" +
+                $"({receiverTemporary}).vtable)[{interfaceSlotIndex}].function)" +
+                $"({string.Join(", ", interfaceArguments)})";
+            return $"({receiverTemporary} = {receiver}, {call})";
+        }
+
+        var arguments = new List<string>();
+        if (target.Declaration is { IsStatic: false })
+        {
+            if (invocation.Receiver is null)
+            {
+                arguments.Add(ToCBaseReceiver(
+                    "__this",
+                    true,
+                    invocation.ReceiverBaseDepth));
+            }
+            else
+            {
+                var receiver = ToCExpression(
+                    invocation.Receiver,
+                    functionDeclaration,
+                    moduleName);
+                arguments.Add(ToCBaseReceiver(
+                    receiver,
+                    IsCReferenceType(invocation.Receiver.InferredType!),
+                    invocation.ReceiverBaseDepth));
+            }
+        }
+        arguments.AddRange(invocation.Arguments.Zip(target.ParameterTypes).Select(pair =>
+            ToCExpressionAsType(pair.First, pair.Second, functionDeclaration, moduleName)));
+        if (target.Declaration?.VirtualSlotIndex is not { } slotIndex)
+        {
+            return $"{ToCIdentifier(target)}({string.Join(", ", arguments)})";
+        }
+
+        var dispatchReceiver = arguments[0];
+        var contract = target.Declaration.VirtualContract ?? target.Declaration;
+        var receiverConst = contract.Const ? "const " : string.Empty;
+        var parameterTypes = new List<string>
+        {
+            $"{receiverConst}{contract.ParentClassDeclaration!.ToCIdentifier(moduleName)}*",
+        };
+        parameterTypes.AddRange(contract.Parameters.Select(parameter =>
+            parameter.ParameterType.ToCIdentifier(false)));
+        var returnType = contract.ReturnType.ToCReturnType(false);
+        var functionPointer =
+            $"({returnType} (*)({string.Join(", ", parameterTypes)}))";
+        return $"({functionPointer}((union cx_vtable_entry*)CX_GET_VTABLE({dispatchReceiver}))[{slotIndex}].function)" +
+            $"({string.Join(", ", arguments)})";
     }
 
     private static string ToCPropertyAssignment(
@@ -517,13 +659,20 @@ public static partial class CCodeOutputGenerator
             _ => null,
         };
         var value = $"{temporaryName} = " +
-            ToCExpression(expression.Value, functionDeclaration, moduleName);
+            ToCExpressionAsType(
+                expression.Value,
+                expression.TargetProperty!.Type,
+                functionDeclaration,
+                moduleName);
         var setterCall = ToCPropertyCall(
             expression.TargetProperty!,
             expression.PropertySetter!,
             receiver,
             indexExpressions,
             value,
+            expression.ReceiverBaseDepth,
+            expression.InterfaceDispatchSlotIndex,
+            expression.InterfaceReceiverTemporaryName,
             functionDeclaration,
             moduleName);
         return $"({setterCall}, {temporaryName})";
@@ -535,22 +684,54 @@ public static partial class CCodeOutputGenerator
         ExpressionBase? receiver,
         IReadOnlyList<ExpressionBase> indexArguments,
         string? value,
+        int receiverBaseDepth,
+        int? interfaceDispatchSlotIndex,
+        string? interfaceReceiverTemporaryName,
         FunctionDeclaration functionDeclaration,
         string moduleName)
     {
+        if (interfaceDispatchSlotIndex is { } slotIndex)
+        {
+            if (receiver is null || interfaceReceiverTemporaryName is null)
+            {
+                throw new InternalCompilerException("Interface property dispatch is not bound.");
+            }
+            var receiverExpression = ToCExpression(receiver, functionDeclaration, moduleName);
+            var convertedIndices = indexArguments.Zip(accessor.ParameterTypes).Select(pair =>
+                ToCExpressionAsType(pair.First, pair.Second, functionDeclaration, moduleName));
+            var parameterTypes = new[] { "cx_ptr" }
+                .Concat(accessor.ParameterTypes.Select(type => type.ToCIdentifier(false)))
+                .Concat(value is null ? [] : [property.Type.ToCIdentifier(false)]);
+            var returnType = value is null
+                ? property.Type.ToCReturnType(false)
+                : BuiltInSystemTypes.Void.ToCReturnType(false);
+            var functionPointer =
+                $"({returnType} (*)({string.Join(", ", parameterTypes)}))";
+            var interfaceArguments = new[] { $"({interfaceReceiverTemporaryName}).instance" }
+                .Concat(convertedIndices)
+                .Concat(value is null ? [] : [value]);
+            var call = $"({functionPointer}((union cx_vtable_entry*)" +
+                $"({interfaceReceiverTemporaryName}).vtable)[{slotIndex}].function)" +
+                $"({string.Join(", ", interfaceArguments)})";
+            return $"({interfaceReceiverTemporaryName} = {receiverExpression}, {call})";
+        }
+
         var arguments = new List<string>();
         if (!property.IsStatic)
         {
             if (receiver is null)
             {
-                arguments.Add("__this");
+                arguments.Add(ToCBaseReceiver("__this", true, receiverBaseDepth));
             }
             else
             {
                 var receiverExpression = ToCExpression(receiver, functionDeclaration, moduleName);
-                arguments.Add(property.ContainingClassType == ClassType.Class
-                    ? receiverExpression
-                    : $"&({receiverExpression})");
+                var receiverIsPointer = receiver.InferredType is not null &&
+                    IsCReferenceType(receiver.InferredType);
+                arguments.Add(ToCBaseReceiver(
+                    receiverExpression,
+                    receiverIsPointer,
+                    receiverBaseDepth));
             }
         }
         arguments.AddRange(indexArguments.Select(argument =>
@@ -571,6 +752,7 @@ public static partial class CCodeOutputGenerator
     private static string ToCFieldAccess(
         FieldSymbol field,
         ExpressionBase? receiver,
+        int receiverBaseDepth,
         FunctionDeclaration functionDeclaration,
         string moduleName)
     {
@@ -580,12 +762,93 @@ public static partial class CCodeOutputGenerator
         }
         if (receiver is null)
         {
-            return $"__this->{field.Declaration.Name}";
+            if (receiverBaseDepth == 0)
+            {
+                return $"__this->{field.Declaration.Name}";
+            }
+            return $"{ToCBaseValue("__this", true, receiverBaseDepth)}.{field.Declaration.Name}";
         }
 
         var receiverExpression = ToCExpression(receiver, functionDeclaration, moduleName);
+        if (receiverBaseDepth > 0)
+        {
+            return $"{ToCBaseValue(receiverExpression, true, receiverBaseDepth)}.{field.Declaration.Name}";
+        }
         var accessOperator = field.ContainingClassType == ClassType.Class ? "->" : ".";
         return $"({receiverExpression}){accessOperator}{field.Declaration.Name}";
+    }
+
+    private static string ToCBaseReceiver(
+        string receiver,
+        bool receiverIsPointer,
+        int baseDepth)
+    {
+        return baseDepth == 0
+            ? receiverIsPointer ? receiver : $"&({receiver})"
+            : $"&({ToCBaseValue(receiver, receiverIsPointer, baseDepth)})";
+    }
+
+    private static string ToCBaseValue(
+        string receiver,
+        bool receiverIsPointer,
+        int baseDepth)
+    {
+        var value = receiverIsPointer ? $"({receiver})->__base" : $"({receiver}).__base";
+        for (var depth = 1; depth < baseDepth; depth++)
+        {
+            value += ".__base";
+        }
+        return value;
+    }
+
+    private static bool IsCReferenceType(TypeBase type)
+    {
+        type = type is ConstType constType ? constType.UnderlyingType : type;
+        return type is ReferenceTypeBase or ArrayType ||
+            type is NamedType { ClassType: ClassType.Class };
+    }
+
+    private static string ToCExpressionAsType(
+        ExpressionBase expression,
+        TypeBase targetType,
+        FunctionDeclaration functionDeclaration,
+        string moduleName)
+    {
+        var value = ToCExpression(expression, functionDeclaration, moduleName);
+        if (expression.InferredType is not { } sourceType)
+        {
+            return value;
+        }
+
+        var unwrappedTarget = targetType is ConstType targetConst
+            ? targetConst.UnderlyingType
+            : targetType;
+        var unwrappedSource = sourceType is ConstType sourceConst
+            ? sourceConst.UnderlyingType
+            : sourceType;
+        if (unwrappedTarget is NamedType { ClassType: ClassType.Interface } targetInterface &&
+            unwrappedSource is NamedType { ClassType: ClassType.Class } sourceClass)
+        {
+            var vtable = GetInterfaceVTableIdentifier(
+                sourceClass.ResolvedTypeFullName,
+                targetInterface.ResolvedTypeFullName).ToCIdentifier();
+            return $"({targetType.ToCIdentifier(false)}){{ {vtable}, (cx_ptr)({value}) }}";
+        }
+        if (unwrappedTarget is NamedType { ClassType: ClassType.Interface } &&
+            unwrappedSource is NamedType { ClassType: ClassType.Interface } &&
+            expression.InterfaceUpcastSlotIndex is { } upcastSlotIndex)
+        {
+            return $"cx_iface_upcast({value}, {upcastSlotIndex})";
+        }
+
+        if (!IsCReferenceType(targetType) ||
+            !IsCReferenceType(sourceType) ||
+            targetType.ToCIdentifier(false) == sourceType.ToCIdentifier(false))
+        {
+            return value;
+        }
+
+        return $"({targetType.ToCIdentifier(false)})({value})";
     }
 
     private static string ToCObjectCreationExpression(
@@ -598,7 +861,12 @@ public static partial class CCodeOutputGenerator
         var temporaryName = expression.TemporaryName ?? throw new InternalCompilerException(
             "Object creation temporary is not bound.");
         var arguments = expression.Arguments
-            .Select(argument => ToCExpression(argument, functionDeclaration, moduleName))
+            .Zip(constructor.ParameterTypes)
+            .Select(pair => ToCExpressionAsType(
+                pair.First,
+                pair.Second,
+                functionDeclaration,
+                moduleName))
             .ToArray();
 
         string receiver;
@@ -624,6 +892,10 @@ public static partial class CCodeOutputGenerator
         var inferredType = literal.InferredType is ConstType constType
             ? constType.UnderlyingType
             : literal.InferredType;
+        if (inferredType is NamedType { ClassType: ClassType.Interface } interfaceType)
+        {
+            return $"({interfaceType.ToCIdentifier(false)}){{ CX_NULL, CX_NULL }}";
+        }
         return inferredType is NullableType nullableType
             ? $"({nullableType.ToCIdentifier(false)}){{ CX_NULL }}"
             : "CX_NULL";
@@ -636,6 +908,25 @@ public static partial class CCodeOutputGenerator
     {
         if (expression.Operator is "==" or "!=")
         {
+            if (expression.Left is LiteralExpression { SourceText: "null" } &&
+                IsInterfaceExpression(expression.Right))
+            {
+                return $"(({ToCExpression(expression.Right, functionDeclaration, moduleName)}).instance " +
+                    $"{expression.Operator} CX_NULL)";
+            }
+            if (expression.Right is LiteralExpression { SourceText: "null" } &&
+                IsInterfaceExpression(expression.Left))
+            {
+                return $"(({ToCExpression(expression.Left, functionDeclaration, moduleName)}).instance " +
+                    $"{expression.Operator} CX_NULL)";
+            }
+            if (IsInterfaceExpression(expression.Left) &&
+                IsInterfaceExpression(expression.Right))
+            {
+                return $"(({ToCExpression(expression.Left, functionDeclaration, moduleName)}).instance " +
+                    $"{expression.Operator} " +
+                    $"({ToCExpression(expression.Right, functionDeclaration, moduleName)}).instance)";
+            }
             if (expression.Left is LiteralExpression { SourceText: "null" } &&
                 IsNullableExpression(expression.Right))
             {
@@ -664,8 +955,18 @@ public static partial class CCodeOutputGenerator
             return ToCExpression(expression.Right, functionDeclaration, moduleName);
         }
 
-        var left = ToCExpression(expression.Left, functionDeclaration, moduleName);
-        var right = ToCExpression(expression.Right, functionDeclaration, moduleName);
+        var resultType = expression.InferredType ?? throw new InternalCompilerException(
+            "Null-coalescing expression is not bound.");
+        var left = ToCExpressionAsType(
+            expression.Left,
+            resultType,
+            functionDeclaration,
+            moduleName);
+        var right = ToCExpressionAsType(
+            expression.Right,
+            resultType,
+            functionDeclaration,
+            moduleName);
         var leftType = expression.Left.InferredType is ConstType constType
             ? constType.UnderlyingType
             : expression.Left.InferredType;
@@ -673,6 +974,10 @@ public static partial class CCodeOutputGenerator
         {
             var valueType = nullableType.UnderlyingType.ToCIdentifier(false);
             return $"(({left})._obj != CX_NULL ? *({valueType}*)({left})._obj : {right})";
+        }
+        if (leftType is NamedType { ClassType: ClassType.Interface })
+        {
+            return $"(({left}).instance != CX_NULL ? ({left}) : {right})";
         }
 
         return $"(({left}) != CX_NULL ? ({left}) : {right})";
@@ -684,6 +989,14 @@ public static partial class CCodeOutputGenerator
             ? constType.UnderlyingType
             : expression.InferredType;
         return type is NullableType;
+    }
+
+    private static bool IsInterfaceExpression(ExpressionBase expression)
+    {
+        var type = expression.InferredType is ConstType constType
+            ? constType.UnderlyingType
+            : expression.InferredType;
+        return type is NamedType { ClassType: ClassType.Interface };
     }
 
     private static string ToCArrayAccess(
@@ -911,6 +1224,75 @@ public static partial class CCodeOutputGenerator
         StatementBase statement)
     {
         return GetDirectExpressions(statement).SelectMany(EnumeratePropertyAssignments);
+    }
+
+    private static IEnumerable<InvocationExpression> EnumerateInterfaceInvocations(
+        ExpressionBase expression)
+    {
+        if (expression is InvocationExpression { ReceiverTemporaryName: not null } invocation)
+        {
+            yield return invocation;
+        }
+        foreach (var child in GetExpressionChildren(expression))
+        {
+            foreach (var nested in EnumerateInterfaceInvocations(child))
+            {
+                yield return nested;
+            }
+        }
+    }
+
+    private static IEnumerable<InvocationExpression> EnumerateDirectInterfaceInvocations(
+        StatementBase statement)
+    {
+        return GetDirectExpressions(statement).SelectMany(EnumerateInterfaceInvocations);
+    }
+
+    private static IEnumerable<ExpressionBase> EnumerateInterfacePropertyReceivers(
+        ExpressionBase expression)
+    {
+        if (GetInterfacePropertyTemporaryName(expression) is not null)
+        {
+            yield return expression;
+        }
+        foreach (var child in GetExpressionChildren(expression))
+        {
+            foreach (var nested in EnumerateInterfacePropertyReceivers(child))
+            {
+                yield return nested;
+            }
+        }
+    }
+
+    private static IEnumerable<ExpressionBase> EnumerateDirectInterfacePropertyReceivers(
+        StatementBase statement)
+    {
+        return GetDirectExpressions(statement).SelectMany(EnumerateInterfacePropertyReceivers);
+    }
+
+    private static string? GetInterfacePropertyTemporaryName(ExpressionBase expression)
+    {
+        return expression switch
+        {
+            MemberAccessExpression memberAccess => memberAccess.InterfaceReceiverTemporaryName,
+            ArrayAccessExpression arrayAccess => arrayAccess.InterfaceReceiverTemporaryName,
+            AssignmentExpression assignment => assignment.InterfaceReceiverTemporaryName,
+            _ => null,
+        };
+    }
+
+    private static ExpressionBase? GetPropertyReceiver(ExpressionBase expression)
+    {
+        ExpressionBase propertyExpression = expression switch
+        {
+            AssignmentExpression { Target: ArrayAccessExpression indexed } => indexed.Target,
+            AssignmentExpression assignment => assignment.Target,
+            ArrayAccessExpression indexed => indexed.Target,
+            _ => expression,
+        };
+        return propertyExpression is MemberAccessExpression memberAccess
+            ? memberAccess.Target
+            : null;
     }
 
     private static IEnumerable<ExpressionBase> GetExpressionChildren(ExpressionBase expression)

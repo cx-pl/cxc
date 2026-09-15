@@ -21,6 +21,9 @@ public class FunctionDeclaration : DeclarationBase
 
     public IReadOnlyList<StatementBase>? Body { get; private set; }
 
+    public int? VirtualSlotIndex { get; private set; }
+    public FunctionDeclaration? VirtualContract { get; private set; }
+
     public FunctionDeclaration(
         string name, QualifiedIdentifier @namespace, TypeBase returnType, 
         MemberModifier[] memberModifiers, ClassDeclaration? parentClassDeclaration,
@@ -41,5 +44,11 @@ public class FunctionDeclaration : DeclarationBase
     public void SetBody(IReadOnlyList<StatementBase> body)
     {
         Body = body;
+    }
+
+    public void BindVirtualSlot(int slotIndex, FunctionDeclaration contract)
+    {
+        VirtualSlotIndex = slotIndex;
+        VirtualContract = contract;
     }
 }

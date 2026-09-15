@@ -138,8 +138,8 @@ public static partial class CCodeOutputGenerator
                     }
                     else if (classDeclaration.ClassType == ClassType.Class)
                     {
-                        // TODO: Get class base type from classDeclaration.BaseTypes
-                        writer.WriteLine("struct CX_ID_3(cxcore, System, Object) __base;");
+                        var baseType = classDeclaration.BaseClassType ?? BuiltInSystemTypes.Object;
+                        writer.WriteLine($"{ToCStorageType(baseType)} __base;");
                     }
 
                     var fieldMemberDeclarations = classDeclaration.MemberDeclarations.Declarations
@@ -210,10 +210,11 @@ public static partial class CCodeOutputGenerator
                     break;
 
                 case FunctionDeclaration functionDeclaration:
+                    if (functionDeclaration.ParentClassDeclaration?.ClassType == ClassType.Interface)
+                    {
+                        break;
+                    }
                     exportable =
-                        (
-                            functionDeclaration.ParentClassDeclaration?.ClassType == ClassType.Interface
-                        ) ||
                         (
                             functionDeclaration.ParentClassDeclaration == null &&
                             functionDeclaration.MemberModifiers.Contains(MemberModifier.Public)
@@ -288,6 +289,10 @@ public static partial class CCodeOutputGenerator
                     break;
 
                 case PropertyDeclaration propertyDeclaration:
+                    if (propertyDeclaration.ParentClassDeclaration.ClassType == ClassType.Interface)
+                    {
+                        break;
+                    }
                     foreach (var propertyAccessorDeclaration in propertyDeclaration.PropertyAccessorDeclarations)
                     {
                         // TODO: Allow accessor declarations have member modifiers
@@ -413,6 +418,13 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine("//");
         writer.WriteLine();
         WriteStaticFields(writer, declarations, project.Name);
+        writer.WriteLine();
+
+        writer.WriteLine("//");
+        writer.WriteLine("// Interface dispatch thunks");
+        writer.WriteLine("//");
+        writer.WriteLine();
+        WriteInterfaceDispatchThunks(writer, declarations, project.Name);
         writer.WriteLine();
 
         writer.WriteLine("//");
@@ -561,6 +573,14 @@ public static partial class CCodeOutputGenerator
                     {
                         WriteVTableDefinition(writer, classDeclaration, moduleName);
                         WriteTypeInfoDefinition(writer, classDeclaration, moduleName);
+                        foreach (var table in classDeclaration.InterfaceDispatchTables)
+                        {
+                            WriteInterfaceVTableDefinition(
+                                writer,
+                                classDeclaration,
+                                table,
+                                moduleName);
+                        }
                     }
                     break;
             }
@@ -595,10 +615,11 @@ public static partial class CCodeOutputGenerator
             }
             else
             {
-                var declaredBaseType = classDeclaration.BaseTypes.FirstOrDefault(); // TODO: Resolve explicit base types and ignore interfaces
-                var baseTypeFullName = declaredBaseType is null
-                    ? new QualifiedIdentifier("cxcore", BuiltInSystemTypes.Object.FullName)
-                    : new QualifiedIdentifier(moduleName, declaredBaseType);
+                var baseTypeFullName = classDeclaration.BaseClassType switch
+                {
+                    NamedType namedType => namedType.ResolvedTypeFullName,
+                    _ => new QualifiedIdentifier("cxcore", BuiltInSystemTypes.Object.FullName),
+                };
                 var baseTypeTypeInfoName = new QualifiedIdentifier(baseTypeFullName, "__typeinfo");
                 writer.WriteLine($"CX_CLASS_TYPEINFO_DEF({classDeclaration.ToCIdentifier(moduleName, false)}, {nameIdentifier.ToCIdentifier()}, {namespaceIdentifier.ToCIdentifier()}, {baseTypeTypeInfoName.ToCIdentifier()}, 0x{GetTypeNameHash(classDeclaration.FullName, moduleName):X}, {flagsString});");
             }
@@ -661,9 +682,199 @@ public static partial class CCodeOutputGenerator
     {
         writer.WriteLine($"CX_BEGIN_VTABLE_DEF({classDeclaration.ToCIdentifier(moduleName, false)})");
 
-        // TODO
+        foreach (var slot in classDeclaration.VirtualMethodSlots.OrderBy(slot => slot.Index))
+        {
+            if (slot.Implementation is null)
+            {
+                writer.WriteLine("{ .function = (cx_vtable_function)0 },");
+            }
+            else
+            {
+                writer.WriteLine($"CX_VTABLE_ENTRY({ToCFunctionName(slot.Implementation, moduleName)})");
+            }
+        }
 
         writer.WriteLine("CX_END_VTABLE_DEF;");
+    }
+
+    private static void WriteInterfaceVTableDefinition(
+        IndentingWriter writer,
+        ClassDeclaration classDeclaration,
+        InterfaceDispatchTable table,
+        string moduleName)
+    {
+        var vtableName = GetInterfaceVTableIdentifier(
+            classDeclaration,
+            table.Interface,
+            moduleName).ToCIdentifier();
+        writer.WriteLine(
+            $"CX_BEGIN_INTERFACE_VTABLE_DEF({vtableName}, " +
+            $"{table.Interface.ToCIdentifier(moduleName, false)})");
+        foreach (var slot in table.Slots.OrderBy(slot => slot.Index))
+        {
+            writer.WriteLine(slot.Implementation is null
+                ? "{ .function = (cx_vtable_function)0 },"
+                : $"CX_VTABLE_ENTRY({GetInterfaceThunkIdentifier(classDeclaration, table.Interface, slot.Index, moduleName).ToCIdentifier()})");
+        }
+        foreach (var targetInterface in table.Interface.InterfaceUpcastTargets)
+        {
+            var targetVTable = GetInterfaceVTableIdentifier(
+                classDeclaration,
+                targetInterface,
+                moduleName).ToCIdentifier();
+            writer.WriteLine($"{{ .data = {targetVTable} }},");
+        }
+        writer.WriteLine("CX_END_VTABLE_DEF;");
+    }
+
+    private static void WriteInterfaceDispatchThunks(
+        IndentingWriter writer,
+        IEnumerable<DeclarationBase> declarations,
+        string moduleName)
+    {
+        foreach (var classDeclaration in EnumerateClasses(declarations)
+            .Where(type => type.ClassType == ClassType.Class))
+        {
+            foreach (var table in classDeclaration.InterfaceDispatchTables)
+            {
+                var vtableName = GetInterfaceVTableIdentifier(
+                    classDeclaration,
+                    table.Interface,
+                    moduleName).ToCIdentifier();
+                writer.WriteLine($"extern union cx_vtable_entry {vtableName}[];");
+            }
+        }
+        writer.WriteLine();
+
+        foreach (var classDeclaration in EnumerateClasses(declarations)
+            .Where(type => type.ClassType == ClassType.Class))
+        {
+            foreach (var table in classDeclaration.InterfaceDispatchTables)
+            {
+                foreach (var slot in table.Slots.Where(slot => slot.Implementation is not null))
+                {
+                    WriteInterfaceDispatchThunk(
+                        writer,
+                        classDeclaration,
+                        table.Interface,
+                        slot,
+                        moduleName);
+                }
+            }
+        }
+    }
+
+    private static void WriteInterfaceDispatchThunk(
+        IndentingWriter writer,
+        ClassDeclaration classDeclaration,
+        ClassDeclaration interfaceDeclaration,
+        InterfaceDispatchSlot slot,
+        string moduleName)
+    {
+        var thunkName = GetInterfaceThunkIdentifier(
+            classDeclaration,
+            interfaceDeclaration,
+            slot.Index,
+            moduleName).ToCIdentifier();
+        var parameters = new[] { "cx_ptr __root" }.Concat(slot.Parameters.Select(
+            parameter => $"{parameter.ParameterType.ToCIdentifier(false)} {parameter.Name}"));
+        writer.WriteLine(
+            $"static {slot.ReturnType.ToCReturnType(false)} {thunkName}(" +
+            $"{string.Join(", ", parameters)}) {{");
+        writer.IncreaseIndent();
+
+        var argumentNames = slot.Parameters.Select(parameter => parameter.Name).ToArray();
+        string call;
+        if (slot.ImplementationFunction is { } implementation &&
+            implementation.VirtualSlotIndex is { } virtualSlotIndex)
+        {
+            var virtualContract = implementation.VirtualContract ?? implementation;
+            var receiverConst = virtualContract.Const ? "const " : string.Empty;
+            var receiverType =
+                $"{receiverConst}{virtualContract.ParentClassDeclaration!.ToCIdentifier(moduleName)}*";
+            var parameterTypes = new[] { receiverType }.Concat(
+                virtualContract.Parameters.Select(parameter =>
+                    parameter.ParameterType.ToCIdentifier(false)));
+            var functionPointer =
+                $"({virtualContract.ReturnType.ToCReturnType(false)} (*)({string.Join(", ", parameterTypes)}))";
+            var receiver = $"({receiverType})__root";
+            call = $"({functionPointer}((union cx_vtable_entry*)CX_GET_VTABLE({receiver}))[{virtualSlotIndex}].function)" +
+                $"({string.Join(", ", new[] { receiver }.Concat(argumentNames))})";
+        }
+        else if (slot.ImplementationFunction is { } directImplementation)
+        {
+            var receiverConst = directImplementation.Const ? "const " : string.Empty;
+            var receiver =
+                $"({receiverConst}{directImplementation.ParentClassDeclaration!.ToCIdentifier(moduleName)}*)__root";
+            call = $"{ToCFunctionName(directImplementation, moduleName)}(" +
+                $"{string.Join(", ", new[] { receiver }.Concat(argumentNames))})";
+        }
+        else
+        {
+            var accessor = slot.ImplementationAccessor!;
+            var property = accessor.ParentPropertyDeclaration;
+            var receiverConst = accessor.Const ? "const " : string.Empty;
+            var receiver =
+                $"({receiverConst}{property.ParentClassDeclaration.ToCIdentifier(moduleName)}*)__root";
+            call = $"{ToCPropertyAccessorName(accessor, moduleName)}(" +
+                $"{string.Join(", ", new[] { receiver }.Concat(argumentNames))})";
+        }
+
+        writer.WriteLine(slot.ReturnType is VoidType ? $"{call};" : $"return {call};");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+        writer.WriteLine();
+    }
+
+    private static QualifiedIdentifier GetInterfaceVTableIdentifier(
+        ClassDeclaration classDeclaration,
+        ClassDeclaration interfaceDeclaration,
+        string moduleName)
+    {
+        return GetInterfaceVTableIdentifier(
+            new QualifiedIdentifier(moduleName, classDeclaration.FullName),
+            new QualifiedIdentifier(moduleName, interfaceDeclaration.FullName));
+    }
+
+    private static QualifiedIdentifier GetInterfaceVTableIdentifier(
+        QualifiedIdentifier className,
+        QualifiedIdentifier interfaceName)
+    {
+        var interfaceParts = className.Parts.FirstOrDefault() == interfaceName.Parts.FirstOrDefault()
+            ? interfaceName.Parts.Skip(1).ToArray()
+            : interfaceName.Parts;
+        return new QualifiedIdentifier(
+            className,
+            new QualifiedIdentifier("__iface"),
+            new QualifiedIdentifier(interfaceParts),
+            new QualifiedIdentifier("__vtable"));
+    }
+
+    private static QualifiedIdentifier GetInterfaceThunkIdentifier(
+        ClassDeclaration classDeclaration,
+        ClassDeclaration interfaceDeclaration,
+        int slotIndex,
+        string moduleName)
+    {
+        var vtableName = GetInterfaceVTableIdentifier(
+            classDeclaration,
+            interfaceDeclaration,
+            moduleName);
+        return new QualifiedIdentifier(vtableName, $"slot_{slotIndex}");
+    }
+
+    private static IEnumerable<ClassDeclaration> EnumerateClasses(
+        IEnumerable<DeclarationBase> declarations)
+    {
+        foreach (var classDeclaration in declarations.OfType<ClassDeclaration>())
+        {
+            yield return classDeclaration;
+            foreach (var nested in EnumerateClasses(
+                classDeclaration.MemberDeclarations.Declarations))
+            {
+                yield return nested;
+            }
+        }
     }
 
     private static List<DeclarationBase> GetDeclarations(CxProject project)
@@ -706,6 +917,12 @@ public static partial class CCodeOutputGenerator
         {
             if (x is ClassDeclaration xClassDeclaration && y is ClassDeclaration yClassDeclaration)
             {
+                var depthComparison = GetInheritanceDepth(xClassDeclaration)
+                    .CompareTo(GetInheritanceDepth(yClassDeclaration));
+                if (depthComparison != 0)
+                {
+                    return depthComparison;
+                }
                 if (project.Name == "cxcore") // TODO: Remove this hack for cxcore
                 {
                     if (cxcoreTypeOrder.ContainsKey(x.Name) && !cxcoreTypeOrder.ContainsKey(y.Name))
@@ -722,13 +939,13 @@ public static partial class CCodeOutputGenerator
                     }
                 }
 
-                if (xClassDeclaration.BaseTypes.Any(t => t == yClassDeclaration.FullName))
-                {
-                    return -1;
-                }
-                else if (yClassDeclaration.BaseTypes.Any(t => t == xClassDeclaration.FullName))
+                if (ReferenceEquals(xClassDeclaration.BaseClassDeclaration, yClassDeclaration))
                 {
                     return 1;
+                }
+                else if (ReferenceEquals(yClassDeclaration.BaseClassDeclaration, xClassDeclaration))
+                {
+                    return -1;
                 }
                 else
                 {
@@ -750,6 +967,17 @@ public static partial class CCodeOutputGenerator
             FunctionDeclaration => 2,
             _ => 3,
         };
+
+        static int GetInheritanceDepth(ClassDeclaration declaration)
+        {
+            var depth = 0;
+            while (declaration.BaseClassDeclaration is { } baseClass)
+            {
+                depth++;
+                declaration = baseClass;
+            }
+            return depth;
+        }
     }
 
     private static int GetNameOverrideIndex(FunctionDeclaration functionDeclaration, IReadOnlyCollection<DeclarationBase> declarations)
@@ -777,6 +1005,18 @@ public static partial class CCodeOutputGenerator
         return new QualifiedIdentifier(moduleName, member.FullName).ToCIdentifier();
     }
 
+    private static string ToCStorageType(TypeBase type)
+    {
+        type = type is ConstType constType ? constType.UnderlyingType : type;
+        return type switch
+        {
+            ObjectType => "struct CX_ID_3(cxcore, System, Object)",
+            NamedType { ClassType: ClassType.Class } namedType =>
+                $"struct {namedType.ResolvedTypeFullName.ToCIdentifier()}",
+            _ => type.ToCIdentifier(false).TrimEnd('*', ' '),
+        };
+    }
+
     private static string ToCIdentifier(this FunctionDeclaration functionDeclaration, string moduleName, int nameOverrideIndex)
     {
         var name = nameOverrideIndex > 1
@@ -786,16 +1026,37 @@ public static partial class CCodeOutputGenerator
         return $"{functionDeclaration.ReturnType.ToCReturnType(false /* TODO */)} {fullName.ToCIdentifier()}";
     }
 
+    private static string ToCFunctionName(
+        FunctionDeclaration functionDeclaration,
+        string moduleName)
+    {
+        var declarations = functionDeclaration.ParentClassDeclaration is null
+            ? Array.Empty<DeclarationBase>()
+            : functionDeclaration.ParentClassDeclaration.MemberDeclarations.Declarations.ToArray();
+        var nameOverrideIndex = GetNameOverrideIndex(functionDeclaration, declarations);
+        var name = nameOverrideIndex > 1
+            ? new QualifiedIdentifier(functionDeclaration.FullName, $"_{nameOverrideIndex}")
+            : functionDeclaration.FullName;
+        return new QualifiedIdentifier(moduleName, name).ToCIdentifier();
+    }
+
     private static string ToCIdentifier(this PropertyAccessorDeclaration propertyAccessorDeclaration, string moduleName)
     {
-        var accessorName = $"__{(propertyAccessorDeclaration.Const ? "const_" : "")}{propertyAccessorDeclaration.Name}";
-        var name = new QualifiedIdentifier(propertyAccessorDeclaration.ParentPropertyDeclaration.FullName, accessorName);
-        var fullName = new QualifiedIdentifier(moduleName, name);
-
         var returnType = propertyAccessorDeclaration.Name == "set"
             ? BuiltInSystemTypes.Void
             : propertyAccessorDeclaration.ParentPropertyDeclaration.Type;
-        return $"{returnType.ToCReturnType(false)} {fullName.ToCIdentifier()}";
+        return $"{returnType.ToCReturnType(false)} {ToCPropertyAccessorName(propertyAccessorDeclaration, moduleName)}";
+    }
+
+    private static string ToCPropertyAccessorName(
+        PropertyAccessorDeclaration propertyAccessorDeclaration,
+        string moduleName)
+    {
+        var accessorName = $"__{(propertyAccessorDeclaration.Const ? "const_" : "")}{propertyAccessorDeclaration.Name}";
+        var name = new QualifiedIdentifier(
+            propertyAccessorDeclaration.ParentPropertyDeclaration.FullName,
+            accessorName);
+        return new QualifiedIdentifier(moduleName, name).ToCIdentifier();
     }
 
     private static string ToCIdentifier(this TypeBase typeBase, bool @const)
@@ -833,6 +1094,7 @@ public static partial class CCodeOutputGenerator
 
             NamedType namedType when namedType.ClassType == ClassType.Struct => $"{constString} struct {namedType.ResolvedTypeFullName.ToCIdentifier()}",
             NamedType namedType when namedType.ClassType == ClassType.Class => $"{constString} struct {namedType.ResolvedTypeFullName.ToCIdentifier()}*",
+            NamedType { ClassType: ClassType.Interface } => $"{constString} struct cx_iface_ref",
             NamedType namedType when namedType.ClassType == ClassType.Enum => $"{constString} {namedType.ResolvedTypeFullName.ToCIdentifier()}",
 
             _ => "_unknowntype_" // TODO: throw below exception for unsupported types

@@ -11,6 +11,9 @@ public sealed class MemberAccessExpression : ExpressionBase
     public PropertySymbol? TargetProperty { get; private set; }
     public PropertyAccessorSymbol? PropertyGetter { get; private set; }
     public EnumMemberSymbol? TargetEnumMember { get; private set; }
+    public int ReceiverBaseDepth { get; private set; }
+    public int? InterfaceDispatchSlotIndex { get; private set; }
+    public string? InterfaceReceiverTemporaryName { get; private set; }
 
     public MemberAccessExpression(ExpressionBase target, string memberName)
     {
@@ -18,15 +21,24 @@ public sealed class MemberAccessExpression : ExpressionBase
         MemberName = memberName;
     }
 
-    public void BindField(FieldSymbol field)
+    public void BindField(FieldSymbol field, int receiverBaseDepth = 0)
     {
         TargetField = field;
+        ReceiverBaseDepth = receiverBaseDepth;
     }
 
-    public void BindProperty(PropertySymbol property, PropertyAccessorSymbol getter)
+    public void BindProperty(
+        PropertySymbol property,
+        PropertyAccessorSymbol getter,
+        int receiverBaseDepth = 0,
+        int? interfaceDispatchSlotIndex = null,
+        string? interfaceReceiverTemporaryName = null)
     {
         TargetProperty = property;
         PropertyGetter = getter;
+        ReceiverBaseDepth = receiverBaseDepth;
+        InterfaceDispatchSlotIndex = interfaceDispatchSlotIndex;
+        InterfaceReceiverTemporaryName = interfaceReceiverTemporaryName;
     }
 
     public void BindEnumMember(EnumMemberSymbol member)

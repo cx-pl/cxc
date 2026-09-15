@@ -36,8 +36,9 @@ public class ClassDeclarationParserVisitor : CxParserBaseVisitor<DeclarationBase
                 customTypeName,
                 context.name.Text,
                 genericParams,
-                // TODO: Get Base types
                 DeclarationScope);
+
+            AddBaseTypes(context.@base?.classBaseList());
 
             base.VisitClassDeclaration(context);
         }
@@ -49,6 +50,18 @@ public class ClassDeclarationParserVisitor : CxParserBaseVisitor<DeclarationBase
         }
 
         return _classDeclaration;
+    }
+
+    private void AddBaseTypes(CxParser.ClassBaseListContext? context)
+    {
+        if (context is null)
+        {
+            return;
+        }
+
+        AddBaseTypes(context.list);
+        _classDeclaration!.AddBaseType(
+            new TypeNameContextVisitor().Visit(context.name));
     }
 
     public override DeclarationBase VisitFieldsDeclaration([NotNull] CxParser.FieldsDeclarationContext context)

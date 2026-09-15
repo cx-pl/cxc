@@ -11,6 +11,12 @@ namespace CxCompiler.ParserVisitors;
 
 public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase>
 {
+    public static IReadOnlyList<ExpressionBase> ParseArguments(
+        CxParser.FunctionInvocationContext context)
+    {
+        return new ExpressionParserVisitor().GetArguments(context);
+    }
+
     public override ExpressionBase VisitAssignmentExpression([NotNull] CxParser.AssignmentExpressionContext context)
     {
         return new AssignmentExpression(

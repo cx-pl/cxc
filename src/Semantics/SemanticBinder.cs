@@ -21,6 +21,7 @@ public sealed class SemanticBinder
     private int _breakableDepth;
     private int _objectCreationIndex;
     private int _propertyAssignmentIndex;
+    private int _interfaceReceiverIndex;
 
     public void Bind(CxProject project)
     {
@@ -39,12 +40,23 @@ public sealed class SemanticBinder
 
         foreach (var context in project.CompilationContexts)
         {
+            ResolveBaseTypes(
+                project.Name,
+                context.DeclarationScope.Declarations,
+                context.Imports);
+        }
+        ValidateInheritanceCycles();
+
+        foreach (var context in project.CompilationContexts)
+        {
             ResolveDeclarationTypes(
                 context.DeclarationScope.Declarations,
                 context.Namespace,
                 context.Imports);
             AddProjectSymbols(project.Name, context.DeclarationScope.Declarations);
         }
+
+        BindVirtualMethods();
 
         BindFieldInitializers();
         BindEnumMembers();
@@ -61,6 +73,7 @@ public sealed class SemanticBinder
                 BindPropertyAccessor(accessor, context.Imports);
             }
         }
+        ValidateConstructorInitializerCycles();
     }
 
     private void AddCoreSymbols()
@@ -235,6 +248,143 @@ public sealed class SemanticBinder
         }
     }
 
+    private void ResolveBaseTypes(
+        string moduleName,
+        IEnumerable<DeclarationBase> declarations,
+        IReadOnlyList<QualifiedIdentifier> imports)
+    {
+        foreach (var classDeclaration in declarations.OfType<ClassDeclaration>())
+        {
+            if (classDeclaration.IsStatic && classDeclaration.BaseTypes.Count > 0)
+            {
+                throw new CompilationErrorException(
+                    $"Static type '{classDeclaration.FullName}' cannot declare base types.");
+            }
+
+            foreach (var baseType in classDeclaration.BaseTypes)
+            {
+                ResolveTypeReference(baseType, classDeclaration.Namespace, imports);
+                if (baseType is ObjectType)
+                {
+                    SetBaseClass(classDeclaration, baseType, null);
+                    continue;
+                }
+                if (UnwrapConst(baseType) is not NamedType namedType ||
+                    namedType.ResolvedTypeFullName.ToString() == "void")
+                {
+                    throw new CompilationErrorException(
+                        $"Cannot resolve base type '{GetTypeName(baseType)}' for " +
+                        $"'{classDeclaration.FullName}'.");
+                }
+
+                var baseSymbol = _types.SingleOrDefault(candidate =>
+                    IsType(candidate.Type, namedType))
+                    ?? throw new CompilationErrorException(
+                        $"Base type '{GetTypeName(baseType)}' is not a class or interface.");
+                switch (baseSymbol.Declaration.ClassType)
+                {
+                    case ClassType.Interface:
+                        if (classDeclaration.BaseInterfaces.Contains(baseSymbol.Declaration))
+                        {
+                            throw new CompilationErrorException(
+                                $"Type '{classDeclaration.FullName}' lists interface " +
+                                $"'{baseSymbol.Declaration.FullName}' more than once.");
+                        }
+                        classDeclaration.AddBaseInterface(baseSymbol.Declaration);
+                        break;
+
+                    case ClassType.Class:
+                        SetBaseClass(classDeclaration, baseType, baseSymbol.Declaration);
+                        break;
+
+                    default:
+                        throw new CompilationErrorException(
+                            $"Type '{classDeclaration.FullName}' cannot derive from " +
+                            $"'{baseSymbol.Declaration.FullName}'.");
+                }
+            }
+
+            if (classDeclaration.ClassType == ClassType.Class &&
+                !classDeclaration.IsStatic &&
+                classDeclaration.BaseClassType is null &&
+                !(moduleName == "cxcore" &&
+                  classDeclaration.FullName == BuiltInSystemTypes.Object.FullName))
+            {
+                classDeclaration.SetBaseClass(BuiltInSystemTypes.Object, null);
+            }
+
+            ResolveBaseTypes(
+                moduleName,
+                classDeclaration.MemberDeclarations.Declarations,
+                imports);
+        }
+
+        static void SetBaseClass(
+            ClassDeclaration declaration,
+            TypeBase baseType,
+            ClassDeclaration? baseDeclaration)
+        {
+            if (declaration.ClassType != ClassType.Class)
+            {
+                throw new CompilationErrorException(
+                    $"{declaration.ClassType} '{declaration.FullName}' cannot have a base class.");
+            }
+            if (declaration.BaseClassType is not null)
+            {
+                throw new CompilationErrorException(
+                    $"Type '{declaration.FullName}' cannot have more than one base class.");
+            }
+            if (baseDeclaration?.IsFinal == true)
+            {
+                throw new CompilationErrorException(
+                    $"Type '{declaration.FullName}' cannot derive from final type " +
+                    $"'{baseDeclaration.FullName}'.");
+            }
+            if (baseDeclaration?.IsStatic == true)
+            {
+                throw new CompilationErrorException(
+                    $"Type '{declaration.FullName}' cannot derive from static type " +
+                    $"'{baseDeclaration.FullName}'.");
+            }
+            declaration.SetBaseClass(baseType, baseDeclaration);
+        }
+    }
+
+    private void ValidateInheritanceCycles()
+    {
+        var visiting = new HashSet<ClassDeclaration>();
+        var visited = new HashSet<ClassDeclaration>();
+        foreach (var type in _types)
+        {
+            Visit(type.Declaration);
+        }
+
+        void Visit(ClassDeclaration declaration)
+        {
+            if (visited.Contains(declaration))
+            {
+                return;
+            }
+            if (!visiting.Add(declaration))
+            {
+                throw new CompilationErrorException(
+                    $"Inheritance cycle detected at type '{declaration.FullName}'.");
+            }
+
+            if (declaration.BaseClassDeclaration is not null)
+            {
+                Visit(declaration.BaseClassDeclaration);
+            }
+            foreach (var baseInterface in declaration.BaseInterfaces)
+            {
+                Visit(baseInterface);
+            }
+
+            visiting.Remove(declaration);
+            visited.Add(declaration);
+        }
+    }
+
     private void AddProjectSymbols(
         string moduleName,
         IEnumerable<DeclarationBase> declarations)
@@ -265,6 +415,440 @@ public sealed class SemanticBinder
                     symbol));
             }
         }
+    }
+
+    private void BindVirtualMethods()
+    {
+        foreach (var interfaceDeclaration in _types
+            .Select(type => type.Declaration)
+            .Where(type => type.ClassType == ClassType.Interface)
+            .OrderBy(GetInterfaceDepth))
+        {
+            var dispatchSlots = new List<InterfaceDispatchSlot>();
+            foreach (var baseInterface in interfaceDeclaration.BaseInterfaces)
+            {
+                foreach (var inheritedSlot in baseInterface.InterfaceDispatchSlots)
+                {
+                    var existing = dispatchSlots.SingleOrDefault(slot =>
+                        InterfaceSlotSignaturesMatch(slot, inheritedSlot));
+                    if (existing is not null)
+                    {
+                        if (!IsType(existing.ReturnType, inheritedSlot.ReturnType))
+                        {
+                            throw new CompilationErrorException(
+                                $"Interface '{interfaceDeclaration.FullName}' inherits incompatible " +
+                                $"return types for member '{inheritedSlot.Contract.Name}'.");
+                        }
+                        continue;
+                    }
+                    dispatchSlots.Add(new InterfaceDispatchSlot(
+                        dispatchSlots.Count + 1,
+                        inheritedSlot.Kind,
+                        inheritedSlot.Contract,
+                        null));
+                }
+            }
+
+            foreach (var member in interfaceDeclaration.MemberDeclarations.Declarations)
+            {
+                if (member is FunctionDeclaration function && function is not ConstructorDeclaration)
+                {
+                    if (function.IsStatic)
+                    {
+                        throw new CompilationErrorException(
+                            $"Interface function '{function.FullName}' cannot be static.");
+                    }
+                    if (function.Body is not null)
+                    {
+                        throw new CompilationErrorException(
+                            $"Interface function '{function.FullName}' cannot have a body.");
+                    }
+                    var candidate = new InterfaceDispatchSlot(
+                        dispatchSlots.Count + 1,
+                        InterfaceDispatchSlotKind.Method,
+                        function,
+                        null);
+                    if (dispatchSlots.Any(slot => InterfaceSlotSignaturesMatch(slot, candidate)))
+                    {
+                        throw new CompilationErrorException(
+                            $"Interface '{interfaceDeclaration.FullName}' contains duplicate function " +
+                            $"'{function.Name}'.");
+                    }
+                    dispatchSlots.Add(candidate);
+                    continue;
+                }
+
+                if (member is not PropertyDeclaration property)
+                {
+                    continue;
+                }
+                if (property.IsStatic)
+                {
+                    throw new CompilationErrorException(
+                        $"Interface property '{property.FullName}' cannot be static.");
+                }
+                foreach (var accessor in property.PropertyAccessorDeclarations)
+                {
+                    if (accessor.Body is not null)
+                    {
+                        throw new CompilationErrorException(
+                            $"Interface property accessor '{accessor.FullName}' cannot have a body.");
+                    }
+                    var kind = accessor.Name == "get"
+                        ? InterfaceDispatchSlotKind.PropertyGetter
+                        : InterfaceDispatchSlotKind.PropertySetter;
+                    var candidate = new InterfaceDispatchSlot(
+                        dispatchSlots.Count + 1,
+                        kind,
+                        accessor,
+                        null);
+                    if (dispatchSlots.Any(slot => InterfaceSlotSignaturesMatch(slot, candidate)))
+                    {
+                        throw new CompilationErrorException(
+                            $"Interface '{interfaceDeclaration.FullName}' contains duplicate property accessor " +
+                            $"'{property.Name}.{accessor.Name}'.");
+                    }
+                    dispatchSlots.Add(candidate);
+                }
+            }
+
+            interfaceDeclaration.SetInterfaceDispatchSlots(dispatchSlots);
+            interfaceDeclaration.SetInterfaceUpcastTargets(GetImplementedInterfaces(interfaceDeclaration)
+                .OrderBy(@interface => @interface.FullName.ToString(), StringComparer.Ordinal));
+            var methodSlots = dispatchSlots
+                .Where(slot => slot.Kind == InterfaceDispatchSlotKind.Method)
+                .Select(slot => new VirtualMethodSlot(
+                    slot.Index,
+                    slot.ContractFunction!,
+                    null))
+                .ToArray();
+            foreach (var slot in methodSlots)
+            {
+                slot.Contract.BindVirtualSlot(slot.Index, slot.Contract);
+            }
+            interfaceDeclaration.SetVirtualMethodSlots(methodSlots);
+        }
+
+        foreach (var type in _types
+            .Select(type => type.Declaration)
+            .OrderBy(GetInheritanceDepth))
+        {
+            if (type.ClassType != ClassType.Class || type.IsStatic)
+            {
+                continue;
+            }
+
+            var slots = type.BaseClassDeclaration?.VirtualMethodSlots
+                .Select(slot => new VirtualMethodSlot(
+                    slot.Index,
+                    slot.Contract,
+                    slot.Implementation))
+                .ToList() ?? [];
+
+            foreach (var function in type.MemberDeclarations.Declarations
+                .OfType<FunctionDeclaration>()
+                .Where(function => function is not ConstructorDeclaration))
+            {
+                var isAbstract = function.MemberModifiers.Contains(MemberModifier.Abstract);
+                var isVirtual = function.MemberModifiers.Contains(MemberModifier.Virtual);
+                var isOverride = function.MemberModifiers.Contains(MemberModifier.Override);
+                var isFinal = function.MemberModifiers.Contains(MemberModifier.Final);
+
+                if (!(isAbstract || isVirtual || isOverride || isFinal))
+                {
+                    var abstractSlot = slots.SingleOrDefault(slot =>
+                        slot.Implementation is null && FunctionSignaturesMatch(slot.Contract, function));
+                    if (abstractSlot is not null)
+                    {
+                        ValidateOverride(type, abstractSlot, function);
+                        ReplaceSlot(slots, abstractSlot, function);
+                    }
+                    continue;
+                }
+
+                if (function.IsStatic)
+                {
+                    throw new CompilationErrorException(
+                        $"Static function '{function.FullName}' cannot be virtual, abstract, override, or final.");
+                }
+                if (isAbstract && function.Body is not null)
+                {
+                    throw new CompilationErrorException(
+                        $"Abstract function '{function.FullName}' cannot have a body.");
+                }
+                if (isAbstract && !type.IsAbstract)
+                {
+                    throw new CompilationErrorException(
+                        $"Abstract function '{function.FullName}' must be declared in an abstract class.");
+                }
+                if (!isAbstract &&
+                    function.Body is null &&
+                    !function.MemberModifiers.Contains(MemberModifier.Extern))
+                {
+                    throw new CompilationErrorException(
+                        $"Virtual function '{function.FullName}' must have a body.");
+                }
+
+                if (isOverride)
+                {
+                    var inheritedSlot = slots.SingleOrDefault(slot =>
+                        FunctionSignaturesMatch(slot.Contract, function));
+                    if (inheritedSlot is null)
+                    {
+                        throw new CompilationErrorException(
+                            $"Function '{function.FullName}' has no matching virtual function to override.");
+                    }
+                    ValidateOverride(type, inheritedSlot, function);
+                    function.BindVirtualSlot(inheritedSlot.Index, inheritedSlot.Contract);
+                    ReplaceSlot(slots, inheritedSlot, isAbstract ? null : function);
+                    continue;
+                }
+
+                if (isFinal)
+                {
+                    throw new CompilationErrorException(
+                        $"Function '{function.FullName}' can only be final when it overrides a virtual function.");
+                }
+
+                var slotIndex = slots.Count + 1;
+                function.BindVirtualSlot(slotIndex, function);
+                slots.Add(new VirtualMethodSlot(
+                    slotIndex,
+                    function,
+                    isAbstract ? null : function));
+            }
+
+            type.SetVirtualMethodSlots(slots);
+            if (!type.IsAbstract && slots.Any(slot => slot.Implementation is null))
+            {
+                var missing = slots.First(slot => slot.Implementation is null).Contract;
+                throw new CompilationErrorException(
+                    $"Non-abstract class '{type.FullName}' does not implement abstract function " +
+                    $"'{missing.FullName}'.");
+            }
+
+            type.SetInterfaceDispatchTables(GetImplementedInterfaces(type)
+                .OrderBy(@interface => @interface.FullName.ToString(), StringComparer.Ordinal)
+                .Select(@interface => BindInterfaceDispatchTable(type, @interface))
+                .ToArray());
+        }
+
+        static int GetInheritanceDepth(ClassDeclaration declaration)
+        {
+            var depth = 0;
+            while (declaration.BaseClassDeclaration is { } baseClass)
+            {
+                depth++;
+                declaration = baseClass;
+            }
+            return depth;
+        }
+
+        static int GetInterfaceDepth(ClassDeclaration declaration)
+        {
+            return declaration.BaseInterfaces.Count == 0
+                ? 0
+                : declaration.BaseInterfaces.Max(GetInterfaceDepth) + 1;
+        }
+
+        static void ValidateOverride(
+            ClassDeclaration type,
+            VirtualMethodSlot slot,
+            FunctionDeclaration implementation)
+        {
+            if (slot.Implementation?.MemberModifiers.Contains(MemberModifier.Final) == true)
+            {
+                throw new CompilationErrorException(
+                    $"Function '{implementation.FullName}' cannot override final function " +
+                    $"'{slot.Implementation.FullName}'.");
+            }
+            if (!IsType(slot.Contract.ReturnType, implementation.ReturnType))
+            {
+                throw new CompilationErrorException(
+                    $"Function '{implementation.FullName}' must return " +
+                    $"'{GetTypeName(slot.Contract.ReturnType)}' to override " +
+                    $"'{slot.Contract.FullName}'.");
+            }
+            if (implementation.MemberModifiers.Contains(MemberModifier.Abstract) && !type.IsAbstract)
+            {
+                throw new CompilationErrorException(
+                    $"Abstract override '{implementation.FullName}' must be declared in an abstract class.");
+            }
+        }
+
+        static void ReplaceSlot(
+            List<VirtualMethodSlot> slots,
+            VirtualMethodSlot inheritedSlot,
+            FunctionDeclaration? implementation)
+        {
+            var slot = new VirtualMethodSlot(
+                inheritedSlot.Index,
+                inheritedSlot.Contract,
+                implementation);
+            slots[slots.IndexOf(inheritedSlot)] = slot;
+            if (implementation is not null)
+            {
+                implementation.BindVirtualSlot(slot.Index, slot.Contract);
+            }
+        }
+    }
+
+    private InterfaceDispatchTable BindInterfaceDispatchTable(
+        ClassDeclaration type,
+        ClassDeclaration interfaceDeclaration)
+    {
+        var slots = new List<InterfaceDispatchSlot>();
+        foreach (var contractSlot in interfaceDeclaration.InterfaceDispatchSlots)
+        {
+            if (contractSlot.Kind == InterfaceDispatchSlotKind.Method)
+            {
+                var contract = contractSlot.ContractFunction!;
+                var implementation = FindInterfaceImplementation(type, contract);
+                if (implementation is not null &&
+                    !IsType(contract.ReturnType, implementation.ReturnType))
+                {
+                    throw new CompilationErrorException(
+                        $"Function '{implementation.FullName}' must return " +
+                        $"'{GetTypeName(contract.ReturnType)}' to implement " +
+                        $"'{contract.FullName}'.");
+                }
+                if (implementation is not null &&
+                    !implementation.MemberModifiers.Contains(MemberModifier.Public))
+                {
+                    throw new CompilationErrorException(
+                        $"Function '{implementation.FullName}' must be public to implement " +
+                        $"interface function '{contract.FullName}'.");
+                }
+
+                var concreteImplementation = implementation is not null &&
+                    (implementation.Body is not null ||
+                     implementation.MemberModifiers.Contains(MemberModifier.Extern))
+                        ? implementation
+                        : null;
+                if (concreteImplementation is null && !type.IsAbstract)
+                {
+                    throw new CompilationErrorException(
+                        $"Non-abstract class '{type.FullName}' does not implement interface function " +
+                        $"'{contract.FullName}'.");
+                }
+                slots.Add(contractSlot with { Implementation = concreteImplementation });
+                continue;
+            }
+
+            var contractAccessor = contractSlot.ContractAccessor!;
+            var contractProperty = contractAccessor.ParentPropertyDeclaration;
+            var implementationProperty = FindInterfacePropertyImplementation(type, contractProperty);
+            if (implementationProperty is not null &&
+                !IsType(contractProperty.Type, implementationProperty.Type))
+            {
+                throw new CompilationErrorException(
+                    $"Property '{implementationProperty.FullName}' must have type " +
+                    $"'{GetTypeName(contractProperty.Type)}' to implement " +
+                    $"'{contractProperty.FullName}'.");
+            }
+            if (implementationProperty is not null &&
+                !implementationProperty.MemberModifiers.Contains(MemberModifier.Public))
+            {
+                throw new CompilationErrorException(
+                    $"Property '{implementationProperty.FullName}' must be public to implement " +
+                    $"interface property '{contractProperty.FullName}'.");
+            }
+            var implementationAccessor = implementationProperty?.PropertyAccessorDeclarations
+                .SingleOrDefault(accessor => PropertyAccessorSignaturesMatch(contractAccessor, accessor));
+            var concreteAccessor = implementationAccessor is not null &&
+                (implementationAccessor.BodyFunction is not null || implementationAccessor.Extern)
+                    ? implementationAccessor
+                    : null;
+            if (concreteAccessor is null && !type.IsAbstract)
+            {
+                throw new CompilationErrorException(
+                    $"Non-abstract class '{type.FullName}' does not implement interface property accessor " +
+                    $"'{contractProperty.FullName}.{contractAccessor.Name}'.");
+            }
+            slots.Add(contractSlot with { Implementation = concreteAccessor });
+        }
+        return new InterfaceDispatchTable(interfaceDeclaration, slots);
+    }
+
+    private static bool InterfaceSlotSignaturesMatch(
+        InterfaceDispatchSlot left,
+        InterfaceDispatchSlot right)
+    {
+        if (left.Kind != right.Kind)
+        {
+            return false;
+        }
+        if (left.ContractFunction is { } leftFunction &&
+            right.ContractFunction is { } rightFunction)
+        {
+            return FunctionSignaturesMatch(leftFunction, rightFunction);
+        }
+
+        var leftAccessor = left.ContractAccessor!;
+        var rightAccessor = right.ContractAccessor!;
+        return leftAccessor.ParentPropertyDeclaration.Name ==
+                rightAccessor.ParentPropertyDeclaration.Name &&
+            PropertyAccessorSignaturesMatch(leftAccessor, rightAccessor);
+    }
+
+    private static bool PropertyAccessorSignaturesMatch(
+        PropertyAccessorDeclaration contract,
+        PropertyAccessorDeclaration implementation)
+    {
+        return contract.Name == implementation.Name &&
+            contract.Const == implementation.Const &&
+            contract.Parameters.Count == implementation.Parameters.Count &&
+            contract.Parameters.Zip(implementation.Parameters).All(pair =>
+                IsType(pair.First.ParameterType, pair.Second.ParameterType));
+    }
+
+    private static PropertyDeclaration? FindInterfacePropertyImplementation(
+        ClassDeclaration type,
+        PropertyDeclaration contract)
+    {
+        for (var current = type; current is not null; current = current.BaseClassDeclaration)
+        {
+            var implementation = current.MemberDeclarations.Declarations
+                .OfType<PropertyDeclaration>()
+                .Where(property => !property.IsStatic && property.Name == contract.Name)
+                .SingleOrDefault();
+            if (implementation is not null)
+            {
+                return implementation;
+            }
+        }
+        return null;
+    }
+
+    private FunctionDeclaration? FindInterfaceImplementation(
+        ClassDeclaration type,
+        FunctionDeclaration contract)
+    {
+        for (var current = type; current is not null; current = current.BaseClassDeclaration)
+        {
+            var implementation = current.MemberDeclarations.Declarations
+                .OfType<FunctionDeclaration>()
+                .Where(function => function is not ConstructorDeclaration &&
+                    !function.IsStatic &&
+                    FunctionSignaturesMatch(contract, function))
+                .SingleOrDefault();
+            if (implementation is not null)
+            {
+                return implementation;
+            }
+        }
+        return null;
+    }
+
+    private static bool FunctionSignaturesMatch(
+        FunctionDeclaration contract,
+        FunctionDeclaration implementation)
+    {
+        return contract.Name == implementation.Name &&
+            contract.Const == implementation.Const &&
+            contract.Parameters.Count == implementation.Parameters.Count &&
+            contract.Parameters.Zip(implementation.Parameters).All(pair =>
+                IsType(pair.First.ParameterType, pair.Second.ParameterType));
     }
 
     private void BindFieldInitializers()
@@ -315,6 +899,7 @@ public sealed class SemanticBinder
         _breakableDepth = 0;
         _objectCreationIndex = 0;
         _propertyAssignmentIndex = 0;
+        _interfaceReceiverIndex = 0;
 
         var scope = new LocalScope();
         foreach (var parameter in function.Parameters)
@@ -326,6 +911,11 @@ public sealed class SemanticBinder
             }
         }
 
+        if (function is ConstructorDeclaration constructor)
+        {
+            BindConstructorInitializer(constructor, imports, scope);
+        }
+
         BindStatements(function.Body, function, imports, scope);
 
         if (!IsType(function.ReturnType, BuiltInSystemTypes.Void) &&
@@ -333,6 +923,97 @@ public sealed class SemanticBinder
         {
             throw new CompilationErrorException(
                 $"Function '{function.FullName}' must return a value of type '{GetTypeName(function.ReturnType)}'.");
+        }
+    }
+
+    private void BindConstructorInitializer(
+        ConstructorDeclaration constructor,
+        IReadOnlyList<QualifiedIdentifier> imports,
+        LocalScope scope)
+    {
+        var parent = constructor.ParentClassDeclaration!;
+        if (parent.ClassType != ClassType.Class && constructor.Initializer is null)
+        {
+            return;
+        }
+
+        if (constructor.Initializer is null)
+        {
+            if (parent.BaseClassType is null)
+            {
+                return;
+            }
+            constructor.SetInitializer(new ConstructorInitializer(
+                ConstructorInitializerKind.Base,
+                []));
+        }
+
+        var initializer = constructor.Initializer!;
+        var argumentTypes = initializer.Arguments
+            .Select(argument => BindExpression(argument, constructor, imports, scope))
+            .ToArray();
+        TypeBase targetType;
+        if (initializer.Kind == ConstructorInitializerKind.This)
+        {
+            targetType = _types.Single(type =>
+                ReferenceEquals(type.Declaration, parent)).Type;
+        }
+        else
+        {
+            targetType = parent.BaseClassType
+                ?? throw new CompilationErrorException(
+                    $"Constructor '{constructor.FullName}' cannot invoke base because " +
+                    $"'{parent.FullName}' has no base class.");
+        }
+
+        var candidates = _constructors
+            .Where(candidate =>
+                IsType(candidate.ConstructedType, targetType) &&
+                ParametersMatch(
+                    candidate.Constructor.ParameterTypes,
+                    argumentTypes))
+            .ToArray();
+        if (candidates.Length == 0)
+        {
+            var targetName = initializer.Kind == ConstructorInitializerKind.This
+                ? parent.FullName
+                : GetTypeName(targetType);
+            throw new CompilationErrorException(
+                $"No constructor for '{targetName}' accepts " +
+                $"({string.Join(", ", argumentTypes.Select(GetTypeName))}).");
+        }
+        if (candidates.Length > 1)
+        {
+            throw new CompilationErrorException(
+                $"Constructor initializer for '{constructor.FullName}' is ambiguous.");
+        }
+
+        var target = candidates[0].Constructor;
+        initializer.BindTarget(target);
+        foreach (var pair in initializer.Arguments.Zip(target.ParameterTypes))
+        {
+            ApplyContextualType(pair.First, pair.Second);
+        }
+    }
+
+    private void ValidateConstructorInitializerCycles()
+    {
+        foreach (var constructor in _constructors
+            .Select(symbol => symbol.Constructor.Declaration)
+            .OfType<ConstructorDeclaration>())
+        {
+            var visiting = new HashSet<ConstructorDeclaration>();
+            var current = constructor;
+            while (current.Initializer is
+                { Kind: ConstructorInitializerKind.This, Target.Declaration: ConstructorDeclaration next })
+            {
+                if (!visiting.Add(current))
+                {
+                    throw new CompilationErrorException(
+                        $"Constructor initializer cycle detected in '{constructor.ParentClassDeclaration!.FullName}'.");
+                }
+                current = next;
+            }
         }
     }
 
@@ -805,25 +1486,31 @@ public sealed class SemanticBinder
         if (identifier.Identifier.Parts.Length == 1 &&
             function.ParentClassDeclaration is { } parentClass)
         {
-            var field = _fields.SingleOrDefault(candidate =>
-                ReferenceEquals(candidate.Declaration.ParentClassDeclaration, parentClass) &&
-                candidate.Declaration.Name == identifier.Identifier.Parts[0]);
-            if (field is not null)
+            var fieldMatch = FindField(
+                parentClass,
+                identifier.Identifier.Parts[0],
+                staticOnly: null);
+            if (fieldMatch is not null)
             {
+                var field = fieldMatch.Value.Symbol;
                 if (!field.Declaration.IsStatic && function.IsStatic)
                 {
                     throw new CompilationErrorException(
                         $"Instance field '{field.Declaration.Name}' cannot be used from a static function.");
                 }
-                identifier.BindField(field);
+                identifier.BindField(
+                    field,
+                    field.Declaration.IsStatic ? 0 : fieldMatch.Value.BaseDepth);
                 return field.Declaration.Type;
             }
 
-
-            var property = _properties.SingleOrDefault(candidate =>
-                candidate.FullName == new QualifiedIdentifier(parentClass.FullName, identifier.Identifier.Parts[0]));
-            if (property is not null)
+            var propertyMatch = FindProperty(
+                parentClass,
+                identifier.Identifier.Parts[0],
+                staticOnly: null);
+            if (propertyMatch is not null)
             {
+                var property = propertyMatch.Value.Symbol;
                 if (!property.IsStatic && function.IsStatic)
                 {
                     throw new CompilationErrorException(
@@ -835,7 +1522,10 @@ public sealed class SemanticBinder
                     "get",
                     [],
                     !property.IsStatic && function.Const);
-                identifier.BindProperty(property, getter);
+                identifier.BindProperty(
+                    property,
+                    getter,
+                    property.IsStatic ? 0 : propertyMatch.Value.BaseDepth);
                 return property.Type;
             }
         }
@@ -884,58 +1574,78 @@ public sealed class SemanticBinder
                 return staticTarget.Type;
             }
 
-            var staticField = _fields.SingleOrDefault(candidate =>
-                IsType(candidate.ContainingType, staticTarget.Type) &&
-                candidate.Declaration.Name == memberAccess.MemberName &&
-                candidate.Declaration.IsStatic);
+            var staticClass = staticTarget.Declaration as ClassDeclaration;
+            var staticField = staticClass is null
+                ? null
+                : FindField(staticClass, memberAccess.MemberName, staticOnly: true);
             if (staticField is null)
             {
-                var staticProperty = _properties.SingleOrDefault(candidate =>
-                    IsType(candidate.ContainingType, staticTarget.Type) &&
-                    candidate.FullName.Parts[^1] == memberAccess.MemberName &&
-                    candidate.IsStatic);
+                var staticProperty = staticClass is null
+                    ? null
+                    : FindProperty(staticClass, memberAccess.MemberName, staticOnly: true);
                 if (staticProperty is null)
                 {
                     throw new CompilationErrorException(
                         $"Static member '{staticTarget.Declaration.FullName}.{memberAccess.MemberName}' does not exist.");
                 }
-                EnsurePropertyValueIsSupported(staticProperty);
-                var getter = SelectPropertyAccessor(staticProperty, "get", [], false);
-                memberAccess.BindProperty(staticProperty, getter);
-                return staticProperty.Type;
+                EnsurePropertyValueIsSupported(staticProperty.Value.Symbol);
+                var getter = SelectPropertyAccessor(
+                    staticProperty.Value.Symbol, "get", [], false);
+                memberAccess.BindProperty(staticProperty.Value.Symbol, getter);
+                return staticProperty.Value.Symbol.Type;
             }
-            memberAccess.BindField(staticField);
-            return staticField.Declaration.Type;
+            memberAccess.BindField(staticField.Value.Symbol);
+            return staticField.Value.Symbol.Declaration.Type;
         }
 
         var targetType = BindExpression(memberAccess.Target, function, imports, scope);
-        var field = _fields.SingleOrDefault(candidate =>
-            IsType(candidate.ContainingType, targetType) &&
-            candidate.Declaration.Name == memberAccess.MemberName &&
-            !candidate.Declaration.IsStatic);
+        var targetClass = GetClassDeclaration(targetType);
+        var field = targetClass is null
+            ? _fields
+                .Where(candidate =>
+                    IsType(candidate.ContainingType, targetType) &&
+                    candidate.Declaration.Name == memberAccess.MemberName &&
+                    !candidate.Declaration.IsStatic)
+                .Select(candidate => ((FieldSymbol Symbol, int BaseDepth)?)(candidate, 0))
+                .SingleOrDefault()
+            : FindField(targetClass, memberAccess.MemberName, staticOnly: false);
         if (field is null)
         {
-            var property = _properties.SingleOrDefault(candidate =>
-                IsType(candidate.ContainingType, targetType) &&
-                candidate.FullName.Parts[^1] == memberAccess.MemberName &&
-                !candidate.IsStatic);
+            var property = targetClass is null
+                ? _properties
+                    .Where(candidate =>
+                        IsType(candidate.ContainingType, targetType) &&
+                        candidate.FullName.Parts[^1] == memberAccess.MemberName &&
+                        !candidate.IsStatic)
+                    .Select(candidate => ((PropertySymbol Symbol, int BaseDepth)?)(candidate, 0))
+                    .SingleOrDefault()
+                : FindProperty(targetClass, memberAccess.MemberName, staticOnly: false);
             if (property is null)
             {
                 throw new CompilationErrorException(
                     $"Instance member '{GetTypeName(targetType)}.{memberAccess.MemberName}' does not exist.");
             }
-            EnsurePropertyValueIsSupported(property);
+            EnsurePropertyValueIsSupported(property.Value.Symbol);
             var getter = SelectPropertyAccessor(
-                property,
+                property.Value.Symbol,
                 "get",
                 [],
                 UnwrapConst(targetType) != targetType);
-            memberAccess.BindProperty(property, getter);
-            return property.Type;
+            var dispatch = GetInterfacePropertyDispatch(
+                targetType,
+                property.Value.Symbol,
+                getter);
+            memberAccess.BindProperty(
+                property.Value.Symbol,
+                getter,
+                property.Value.BaseDepth,
+                dispatch.SlotIndex,
+                dispatch.TemporaryName);
+            return property.Value.Symbol.Type;
         }
 
-        memberAccess.BindField(field);
-        return field.Declaration.Type;
+        memberAccess.BindField(field.Value.Symbol, field.Value.BaseDepth);
+        return field.Value.Symbol.Declaration.Type;
     }
 
     private ResolvedTypeSymbol? TryResolveTypeExpression(
@@ -993,14 +1703,15 @@ public sealed class SemanticBinder
             {
                 return null;
             }
-            var property = _properties.SingleOrDefault(candidate =>
-                candidate.FullName == new QualifiedIdentifier(
-                    parentClass.FullName,
-                    identifier.Identifier.Parts[0]));
-            if (property is null)
+            var propertyMatch = FindProperty(
+                parentClass,
+                identifier.Identifier.Parts[0],
+                staticOnly: null);
+            if (propertyMatch is null)
             {
                 return null;
             }
+            var property = propertyMatch.Value.Symbol;
             if (!property.IsStatic && function.IsStatic)
             {
                 throw new CompilationErrorException(
@@ -1009,7 +1720,9 @@ public sealed class SemanticBinder
             return new PropertyReference(
                 property,
                 null,
-                !property.IsStatic && function.Const);
+                !property.IsStatic && function.Const,
+                property.IsStatic ? 0 : propertyMatch.Value.BaseDepth,
+                null);
         }
 
         if (expression is not MemberAccessExpression memberAccess)
@@ -1025,29 +1738,66 @@ public sealed class SemanticBinder
             scope);
         if (staticTarget is not null)
         {
-            var property = _properties.SingleOrDefault(candidate =>
-                IsType(candidate.ContainingType, staticTarget.Type) &&
-                candidate.FullName.Parts[^1] == memberAccess.MemberName &&
-                candidate.IsStatic);
+            var targetClass = staticTarget.Declaration as ClassDeclaration;
+            var property = targetClass is null
+                ? null
+                : FindProperty(targetClass, memberAccess.MemberName, staticOnly: true);
             return property is null
                 ? null
-                : new PropertyReference(property, null, false);
+                : new PropertyReference(property.Value.Symbol, null, false, 0, null);
         }
 
         var receiverType = BindExpression(memberAccess.Target, function, imports, scope);
-        var instanceProperty = _properties.SingleOrDefault(candidate =>
-            IsType(candidate.ContainingType, receiverType) &&
-            candidate.FullName.Parts[^1] == memberAccess.MemberName &&
-            !candidate.IsStatic);
+        var receiverClass = GetClassDeclaration(receiverType);
+        var instanceProperty = receiverClass is null
+            ? _properties
+                .Where(candidate =>
+                    IsType(candidate.ContainingType, receiverType) &&
+                    candidate.FullName.Parts[^1] == memberAccess.MemberName &&
+                    !candidate.IsStatic)
+                .Select(candidate => ((PropertySymbol Symbol, int BaseDepth)?)(candidate, 0))
+                .SingleOrDefault()
+            : FindProperty(receiverClass, memberAccess.MemberName, staticOnly: false);
         return instanceProperty is null
             ? null
             : new PropertyReference(
-                instanceProperty,
+                instanceProperty.Value.Symbol,
                 memberAccess.Target,
-                receiverType is ConstType);
+                receiverType is ConstType,
+                instanceProperty.Value.BaseDepth,
+                receiverType);
     }
 
-    private static PropertyAccessorSymbol SelectPropertyAccessor(
+    private (int? SlotIndex, string? TemporaryName) GetInterfacePropertyDispatch(
+        TypeBase? receiverType,
+        PropertySymbol property,
+        PropertyAccessorSymbol accessor)
+    {
+        if (receiverType is null ||
+            GetClassDeclaration(receiverType) is not { ClassType: ClassType.Interface } receiverInterface)
+        {
+            return (null, null);
+        }
+
+        var kind = accessor.Name == "get"
+            ? InterfaceDispatchSlotKind.PropertyGetter
+            : InterfaceDispatchSlotKind.PropertySetter;
+        var slot = receiverInterface.InterfaceDispatchSlots.Single(candidate =>
+        {
+            if (candidate.Kind != kind || candidate.ContractAccessor is not { } contract)
+            {
+                return false;
+            }
+            return contract.ParentPropertyDeclaration.FullName == property.FullName &&
+                contract.Const == accessor.Const &&
+                contract.Parameters.Count == accessor.ParameterTypes.Count &&
+                contract.Parameters.Zip(accessor.ParameterTypes).All(pair =>
+                    IsType(pair.First.ParameterType, pair.Second));
+        });
+        return (slot.Index, $"__cx_iface_receiver_{_interfaceReceiverIndex++}");
+    }
+
+    private PropertyAccessorSymbol SelectPropertyAccessor(
         PropertySymbol property,
         string accessorName,
         IReadOnlyList<TypeBase> argumentTypes,
@@ -1122,41 +1872,211 @@ public sealed class SemanticBinder
             argumentTypes.Add(BindExpression(argument, function, imports, scope));
         }
 
-        var sourceName = FlattenIdentifier(invocation.Target);
-        var candidateNames = GetCandidateNames(sourceName, function.Namespace, imports);
-        var namedCandidates = _symbols
-            .Where(symbol => candidateNames.Contains(symbol.FullName))
-            .ToArray();
+        var currentNamespace = function.ParentClassDeclaration?.Namespace ?? function.Namespace;
+        ExpressionBase? receiver = null;
+        TypeBase? receiverType = null;
+        IReadOnlyList<(FunctionSymbol Symbol, int BaseDepth)> namedCandidates;
+        string sourceDisplay;
 
-        if (namedCandidates.Length == 0)
+        if (invocation.Target is IdentifierExpression identifier &&
+            identifier.Identifier.Parts.Length == 1 &&
+            function.ParentClassDeclaration is { } currentClass)
+        {
+            sourceDisplay = identifier.Identifier.ToString();
+            namedCandidates = FindFunctions(currentClass, sourceDisplay);
+            if (namedCandidates.Count == 0)
+            {
+                namedCandidates = FindNamedFunctions(
+                    identifier.Identifier,
+                    currentNamespace,
+                    imports);
+            }
+        }
+        else if (invocation.Target is MemberAccessExpression memberAccess)
+        {
+            sourceDisplay = memberAccess.MemberName;
+            var staticTarget = TryResolveTypeExpression(
+                memberAccess.Target,
+                currentNamespace,
+                imports,
+                scope);
+            if (staticTarget?.Declaration is ClassDeclaration staticClass)
+            {
+                namedCandidates = FindFunctions(staticClass, memberAccess.MemberName)
+                    .Where(candidate => candidate.Symbol.Declaration?.IsStatic == true)
+                    .ToArray();
+            }
+            else if (staticTarget is not null)
+            {
+                namedCandidates = [];
+            }
+            else if (TryFlattenIdentifier(invocation.Target, out var qualifiedName) &&
+                !scope.TryLookup(qualifiedName.Parts[0], out _) &&
+                FindNamedFunctions(qualifiedName, currentNamespace, imports) is { Count: > 0 } qualifiedCandidates)
+            {
+                sourceDisplay = qualifiedName.ToString();
+                namedCandidates = qualifiedCandidates;
+            }
+            else if (TryFlattenIdentifier(invocation.Target, out qualifiedName) &&
+                !CanResolveValueName(
+                    qualifiedName.Parts[0],
+                    function.ParentClassDeclaration,
+                    scope))
+            {
+                sourceDisplay = qualifiedName.ToString();
+                namedCandidates = FindNamedFunctions(
+                    qualifiedName,
+                    currentNamespace,
+                    imports);
+            }
+            else
+            {
+                receiver = memberAccess.Target;
+                receiverType = BindExpression(receiver, function, imports, scope);
+                var receiverClass = GetClassDeclaration(receiverType);
+                namedCandidates = receiverClass is null
+                    ? []
+                    : FindFunctions(receiverClass, memberAccess.MemberName)
+                        .Where(candidate => candidate.Symbol.Declaration?.IsStatic == false)
+                        .ToArray();
+            }
+
+            if (namedCandidates.Count == 0 && receiver is null)
+            {
+                var flattenedName = FlattenIdentifier(invocation.Target);
+                sourceDisplay = flattenedName.ToString();
+                namedCandidates = FindNamedFunctions(
+                    flattenedName,
+                    currentNamespace,
+                    imports);
+            }
+        }
+        else
+        {
+            var sourceName = FlattenIdentifier(invocation.Target);
+            sourceDisplay = sourceName.ToString();
+            namedCandidates = FindNamedFunctions(sourceName, currentNamespace, imports);
+        }
+
+        if (namedCandidates.Count == 0)
         {
             throw new CompilationErrorException(
-                $"Cannot resolve function '{sourceName}' with {invocation.Arguments.Count} argument(s).");
+                $"Cannot resolve function '{sourceDisplay}' with {invocation.Arguments.Count} argument(s).");
         }
 
         var candidates = namedCandidates
-            .Where(symbol => ParametersMatch(symbol.ParameterTypes, argumentTypes))
+            .Where(candidate => ParametersMatch(
+                candidate.Symbol.ParameterTypes,
+                argumentTypes))
             .ToArray();
+
+        if (function.IsStatic && receiver is null)
+        {
+            candidates = candidates
+                .Where(candidate => candidate.Symbol.Declaration?.IsStatic != false)
+                .ToArray();
+        }
+
+        if (receiverType is ConstType || receiver is null && function.Const)
+        {
+            candidates = candidates
+                .Where(candidate => candidate.Symbol.Declaration?.Const == true)
+                .ToArray();
+        }
+
+        if (candidates.Length > 0)
+        {
+            var closestDepth = candidates.Min(candidate => candidate.BaseDepth);
+            candidates = candidates
+                .Where(candidate => candidate.BaseDepth == closestDepth)
+                .ToArray();
+        }
 
         if (candidates.Length == 0)
         {
             throw new CompilationErrorException(
-                $"No overload of '{sourceName}' accepts ({string.Join(", ", argumentTypes.Select(GetTypeName))}).");
+                $"No overload of '{sourceDisplay}' accepts ({string.Join(", ", argumentTypes.Select(GetTypeName))}).");
         }
 
         if (candidates.Length > 1)
         {
             throw new CompilationErrorException(
-                $"Function call '{sourceName}' with {invocation.Arguments.Count} argument(s) is ambiguous.");
+                $"Function call '{sourceDisplay}' with {invocation.Arguments.Count} argument(s) is ambiguous.");
         }
 
         var target = candidates[0];
-        invocation.BindTarget(target);
-        foreach (var pair in invocation.Arguments.Zip(target.ParameterTypes))
+        int? dispatchSlotIndex = null;
+        if (receiverType is not null &&
+            GetClassDeclaration(receiverType) is { ClassType: ClassType.Interface } receiverInterface &&
+            target.Symbol.Declaration is { } targetDeclaration)
+        {
+            dispatchSlotIndex = receiverInterface.VirtualMethodSlots
+                .Single(slot => FunctionSignaturesMatch(slot.Contract, targetDeclaration))
+                .Index;
+        }
+        invocation.BindTarget(
+            target.Symbol,
+            receiver,
+            target.BaseDepth,
+            dispatchSlotIndex,
+            dispatchSlotIndex is null
+                ? null
+                : $"__cx_iface_receiver_{_interfaceReceiverIndex++}");
+        foreach (var pair in invocation.Arguments.Zip(target.Symbol.ParameterTypes))
         {
             ApplyContextualType(pair.First, pair.Second);
         }
-        return target.ReturnType;
+        return target.Symbol.ReturnType;
+    }
+
+    private IReadOnlyList<(FunctionSymbol Symbol, int BaseDepth)> FindNamedFunctions(
+        QualifiedIdentifier sourceName,
+        QualifiedIdentifier currentNamespace,
+        IReadOnlyList<QualifiedIdentifier> imports)
+    {
+        var candidateNames = GetCandidateNames(sourceName, currentNamespace, imports);
+        return _symbols
+            .Where(symbol => candidateNames.Contains(symbol.FullName))
+            .Select(symbol => (symbol, 0))
+            .ToArray();
+    }
+
+    private bool CanResolveValueName(
+        string name,
+        ClassDeclaration? currentClass,
+        LocalScope scope)
+    {
+        return scope.TryLookup(name, out _) ||
+            currentClass is not null &&
+            (FindField(currentClass, name, staticOnly: null) is not null ||
+             FindProperty(currentClass, name, staticOnly: null) is not null);
+    }
+
+    private IReadOnlyList<(FunctionSymbol Symbol, int BaseDepth)> FindFunctions(
+        ClassDeclaration declaration,
+        string name)
+    {
+        var hierarchy = declaration.ClassType == ClassType.Interface
+            ? EnumerateTypeHierarchy(declaration)
+            : EnumerateBaseClasses(declaration);
+        return hierarchy
+            .SelectMany(type => _symbols
+                .Where(symbol =>
+                    symbol.Declaration is { } function &&
+                    ReferenceEquals(function.ParentClassDeclaration, type.Declaration) &&
+                    function.Name == name)
+                .Select(symbol => (symbol, type.BaseDepth)))
+            .ToArray();
+    }
+
+    private static IEnumerable<(ClassDeclaration Declaration, int BaseDepth)>
+        EnumerateBaseClasses(ClassDeclaration declaration)
+    {
+        var depth = 0;
+        for (var current = declaration; current is not null; current = current.BaseClassDeclaration)
+        {
+            yield return (current, depth++);
+        }
     }
 
     private TypeBase BindObjectCreation(
@@ -1334,6 +2254,16 @@ public sealed class SemanticBinder
         }
         if (!IsType(whenTrueType, whenFalseType))
         {
+            if (CanAssign(whenTrueType, whenFalseType))
+            {
+                ApplyContextualType(conditional.WhenFalse, whenTrueType);
+                return whenTrueType;
+            }
+            if (CanAssign(whenFalseType, whenTrueType))
+            {
+                ApplyContextualType(conditional.WhenTrue, whenFalseType);
+                return whenFalseType;
+            }
             throw new CompilationErrorException(
                 $"Conditional expression branches must have the same type, but found " +
                 $"'{GetTypeName(whenTrueType)}' and '{GetTypeName(whenFalseType)}'.");
@@ -1526,10 +2456,17 @@ public sealed class SemanticBinder
         }
 
         ApplyContextualType(assignment.Value, propertyReference.Property.Type);
+        var dispatch = GetInterfacePropertyDispatch(
+            propertyReference.ReceiverType,
+            propertyReference.Property,
+            setter);
         assignment.BindPropertySetter(
             propertyReference.Property,
             setter,
-            $"__cx_property_value_{_propertyAssignmentIndex++}");
+            $"__cx_property_value_{_propertyAssignmentIndex++}",
+            propertyReference.ReceiverBaseDepth,
+            dispatch.SlotIndex,
+            dispatch.TemporaryName);
         return propertyReference.Property.Type;
     }
 
@@ -1612,7 +2549,16 @@ public sealed class SemanticBinder
                 "get",
                 argumentTypes,
                 propertyReference.ReceiverIsConst);
-            expression.BindProperty(propertyReference.Property, getter);
+            var dispatch = GetInterfacePropertyDispatch(
+                propertyReference.ReceiverType,
+                propertyReference.Property,
+                getter);
+            expression.BindProperty(
+                propertyReference.Property,
+                getter,
+                propertyReference.ReceiverBaseDepth,
+                dispatch.SlotIndex,
+                dispatch.TemporaryName);
             return propertyReference.Property.Type;
         }
 
@@ -1764,7 +2710,7 @@ public sealed class SemanticBinder
         };
     }
 
-    private static bool ParametersMatch(
+    private bool ParametersMatch(
         IReadOnlyList<TypeBase> parameterTypes,
         IReadOnlyList<TypeBase> argumentTypes)
     {
@@ -1772,10 +2718,39 @@ public sealed class SemanticBinder
             parameterTypes.Zip(argumentTypes).All(pair => CanAssign(pair.First, pair.Second));
     }
 
-    private static bool CanAssign(TypeBase targetType, TypeBase valueType)
+    private bool CanAssign(TypeBase targetType, TypeBase valueType)
     {
-        return IsType(targetType, valueType) ||
-            valueType is NullType && IsNullAssignable(targetType);
+        if (IsType(targetType, valueType) ||
+            valueType is NullType && IsNullAssignable(targetType))
+        {
+            return true;
+        }
+
+        var unwrappedTarget = UnwrapConst(targetType);
+        var unwrappedValue = UnwrapConst(valueType);
+        var valueClass = GetClassDeclaration(unwrappedValue);
+        var targetClass = GetClassDeclaration(unwrappedTarget);
+        if (valueClass?.ClassType is not (ClassType.Class or ClassType.Interface))
+        {
+            return false;
+        }
+        if (unwrappedTarget is ObjectType)
+        {
+            return valueClass.ClassType == ClassType.Class;
+        }
+
+        return targetClass?.ClassType switch
+        {
+            ClassType.Class when valueClass.ClassType == ClassType.Class => EnumerateTypeHierarchy(valueClass).Any(candidate =>
+                ReferenceEquals(candidate.Declaration, targetClass)),
+            ClassType.Interface when valueClass.ClassType == ClassType.Class =>
+                GetImplementedInterfaces(valueClass).Any(@interface =>
+                    ReferenceEquals(@interface, targetClass)),
+            ClassType.Interface when valueClass.ClassType == ClassType.Interface =>
+                GetImplementedInterfaces(valueClass).Any(@interface =>
+                    ReferenceEquals(@interface, targetClass)),
+            _ => false,
+        };
     }
 
     private static bool IsNullAssignable(TypeBase type)
@@ -1785,8 +2760,21 @@ public sealed class SemanticBinder
             type is NamedType { ClassType: ClassType.Class or ClassType.Interface };
     }
 
-    private static void ApplyContextualType(ExpressionBase expression, TypeBase type)
+    private void ApplyContextualType(ExpressionBase expression, TypeBase type)
     {
+        if (expression.InferredType is { } sourceType &&
+            GetClassDeclaration(sourceType) is { ClassType: ClassType.Interface } sourceInterface &&
+            GetClassDeclaration(type) is { ClassType: ClassType.Interface } targetInterface &&
+            !ReferenceEquals(sourceInterface, targetInterface))
+        {
+            var upcastIndex = sourceInterface.InterfaceUpcastTargets
+                .Select((candidate, index) => (candidate, index))
+                .Single(pair => ReferenceEquals(pair.candidate, targetInterface))
+                .index;
+            expression.BindInterfaceUpcast(
+                sourceInterface.InterfaceDispatchSlots.Count + 1 + upcastIndex);
+        }
+
         switch (expression)
         {
             case LiteralExpression { SourceText: "null" }:
@@ -1898,6 +2886,108 @@ public sealed class SemanticBinder
         }
     }
 
+    private ClassDeclaration? GetClassDeclaration(TypeBase type)
+    {
+        type = UnwrapConst(type);
+        return _types.SingleOrDefault(candidate => IsType(candidate.Type, type))?.Declaration;
+    }
+
+    private IEnumerable<(ClassDeclaration Declaration, int BaseDepth)> EnumerateTypeHierarchy(
+        ClassDeclaration declaration)
+    {
+        var visited = new HashSet<ClassDeclaration>();
+        var pending = new Queue<(ClassDeclaration Declaration, int BaseDepth)>();
+        pending.Enqueue((declaration, 0));
+        while (pending.TryDequeue(out var current))
+        {
+            if (!visited.Add(current.Declaration))
+            {
+                continue;
+            }
+            yield return current;
+
+            if (current.Declaration.BaseClassDeclaration is not null)
+            {
+                pending.Enqueue((
+                    current.Declaration.BaseClassDeclaration,
+                    current.BaseDepth + 1));
+            }
+            foreach (var baseInterface in current.Declaration.BaseInterfaces)
+            {
+                pending.Enqueue((baseInterface, current.BaseDepth));
+            }
+        }
+    }
+
+    private IEnumerable<ClassDeclaration> GetImplementedInterfaces(
+        ClassDeclaration declaration)
+    {
+        var visited = new HashSet<ClassDeclaration>();
+        for (var current = declaration; current is not null; current = current.BaseClassDeclaration)
+        {
+            foreach (var @interface in current.BaseInterfaces)
+            {
+                foreach (var result in Visit(@interface))
+                {
+                    yield return result;
+                }
+            }
+        }
+
+        IEnumerable<ClassDeclaration> Visit(ClassDeclaration @interface)
+        {
+            if (!visited.Add(@interface))
+            {
+                yield break;
+            }
+            yield return @interface;
+            foreach (var baseInterface in @interface.BaseInterfaces)
+            {
+                foreach (var result in Visit(baseInterface))
+                {
+                    yield return result;
+                }
+            }
+        }
+    }
+
+    private (FieldSymbol Symbol, int BaseDepth)? FindField(
+        ClassDeclaration declaration,
+        string name,
+        bool? staticOnly)
+    {
+        foreach (var type in EnumerateTypeHierarchy(declaration))
+        {
+            var field = _fields.SingleOrDefault(candidate =>
+                ReferenceEquals(candidate.Declaration.ParentClassDeclaration, type.Declaration) &&
+                candidate.Declaration.Name == name &&
+                (staticOnly is null || candidate.Declaration.IsStatic == staticOnly));
+            if (field is not null)
+            {
+                return (field, type.BaseDepth);
+            }
+        }
+        return null;
+    }
+
+    private (PropertySymbol Symbol, int BaseDepth)? FindProperty(
+        ClassDeclaration declaration,
+        string name,
+        bool? staticOnly)
+    {
+        foreach (var type in EnumerateTypeHierarchy(declaration))
+        {
+            var property = _properties.SingleOrDefault(candidate =>
+                candidate.FullName == new QualifiedIdentifier(type.Declaration.FullName, name) &&
+                (staticOnly is null || candidate.IsStatic == staticOnly));
+            if (property is not null)
+            {
+                return (property, type.BaseDepth);
+            }
+        }
+        return null;
+    }
+
     private sealed class LocalScope
     {
         private readonly LocalScope? _parent;
@@ -1953,5 +3043,7 @@ public sealed class SemanticBinder
     private sealed record PropertyReference(
         PropertySymbol Property,
         ExpressionBase? Receiver,
-        bool ReceiverIsConst);
+        bool ReceiverIsConst,
+        int ReceiverBaseDepth,
+        TypeBase? ReceiverType);
 }
