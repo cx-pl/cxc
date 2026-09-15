@@ -4,16 +4,19 @@ namespace CxCompiler.Model.Common;
 public class DeclarationScope
 {
     public DeclarationScope? Parent { get; }
-    public QualifiedIdentifier Namespace { get; private set; } = QualifiedIdentifier.Empty;
+    public QualifiedIdentifier Namespace { get; private set; }
+    public QualifiedIdentifier FullNamespace => Parent?.FullNamespace + Namespace;
 
-    private readonly List<DeclarationBase> declarations = [];
-    public IReadOnlyList<DeclarationBase> Declarations => declarations.AsReadOnly();
+    private readonly List<DeclarationBase> _declarations = [];
+    public IReadOnlyList<DeclarationBase> Declarations => _declarations.AsReadOnly();
 
-    public QualifiedIdentifier FullNamespace => _GetFullNamespace();
-
-    public DeclarationScope(DeclarationScope? parent = null)
+    public DeclarationScope(
+        DeclarationScope? parent = null,
+        QualifiedIdentifier? @namespace = null)
     {
         Parent = parent;
+
+        Namespace = @namespace ?? QualifiedIdentifier.Empty;
     }
 
     public void SetNamespace(QualifiedIdentifier @namespace)
@@ -23,58 +26,29 @@ public class DeclarationScope
 
     public void AddDeclaration(DeclarationBase declaration)
     {
-        _ValidateDeclarationCanBeAdded(declaration);
-
-        declarations.Add(declaration);
+        _declarations.Add(declaration);
     }
 
     public void AddDeclarations(ReadOnlySpan<DeclarationBase> declarations)
     {
-        foreach (var declaration in declarations)
-        {
-            AddDeclaration(declaration);
-        }            
+        _declarations.AddRange(declarations);
     }
 
-    private void _ValidateDeclarationCanBeAdded(DeclarationBase declaration)
+    public IReadOnlyList<DeclarationBase> FindDeclarations(string name, bool searchInParent = true)
     {
-        // TODO: add partial declaration support
-
-        // TODO: implement
-        //if (_FindDeclaration(declaration.Name, false) is not null)
-        //{
-        //    throw new CompilationErrorException($"'{declaration.Name}' is already declared");
-        //}
-    }
-
-    private DeclarationBase? _FindDeclaration(string name, bool findInParent = true)
-    {
-        var declaration = declarations.FirstOrDefault(x => x.Name == name);
-        if (declaration != null)
+        var declarations = _declarations
+            .Where(x => x.Name == name)
+            .ToArray();
+        if (declarations.Length != 0)
         {
-            return declaration;
+            return declarations;
         }
 
-        if (findInParent && Parent != null)
+        if (searchInParent && Parent != null)
         {
-            return Parent._FindDeclaration(name);
+            return Parent.FindDeclarations(name, searchInParent);
         }
 
-        return null;
-    }
-
-    private QualifiedIdentifier _GetFullNamespace()
-    {
-        var parts = new List<string>(Namespace.Parts);
-        var currentScope = Parent;
-        while (currentScope != null)
-        {
-            if (!currentScope.Namespace.IsEmpty)
-            {
-                parts.InsertRange(0, currentScope.Namespace.Parts);
-            }
-            currentScope = currentScope.Parent;
-        }
-        return new QualifiedIdentifier(parts.ToArray());
+        return [];
     }
 }

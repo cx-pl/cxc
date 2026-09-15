@@ -5,13 +5,13 @@ namespace CxCompiler.Model.Types;
 
 public class FunctionParameter : DeclarationBase
 {
-    public TypeBase Type { get; }
+    public TypeBase ParameterType { get; }
     public LiteralBase? DefaultValue { get; }
 
-    public FunctionParameter(string name, TypeBase type, LiteralBase? defaultValue)
-        : base(name)
+    public FunctionParameter(string name, TypeBase parameterType, LiteralBase? defaultValue)
+        : base("functionParameter", name)
     {
-        Type = type;
+        ParameterType = parameterType;
         DefaultValue = defaultValue;
     }
 }

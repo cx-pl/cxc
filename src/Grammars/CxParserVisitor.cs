@@ -8,7 +8,7 @@
 // </auto-generated>
 //------------------------------------------------------------------------------
 
-// Generated from c:/workspace/cx-pl/cxc/src/Grammars/CxParser.g4 by ANTLR 4.13.1
+// Generated from CxParser.g4 by ANTLR 4.13.1
 
 // Unreachable code detected
 #pragma warning disable 0162
@@ -225,6 +225,24 @@ public interface ICxParserVisitor<Result> : IParseTreeVisitor<Result> {
 	/// <return>The visitor result.</return>
 	Result VisitFunctionBody([NotNull] CxParser.FunctionBodyContext context);
 	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.enumDeclaration"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitEnumDeclaration([NotNull] CxParser.EnumDeclarationContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.enumDeclarationBody"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitEnumDeclarationBody([NotNull] CxParser.EnumDeclarationBodyContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.enumMemberDeclaration"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitEnumMemberDeclaration([NotNull] CxParser.EnumMemberDeclarationContext context);
+	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.typedefDeclaration"/>.
 	/// </summary>
 	/// <param name="context">The parse tree.</param>
@@ -368,6 +386,18 @@ public interface ICxParserVisitor<Result> : IParseTreeVisitor<Result> {
 	/// <param name="context">The parse tree.</param>
 	/// <return>The visitor result.</return>
 	Result VisitReturnStatement([NotNull] CxParser.ReturnStatementContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.breakStatement"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitBreakStatement([NotNull] CxParser.BreakStatementContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.continueStatement"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitContinueStatement([NotNull] CxParser.ContinueStatementContext context);
 	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.throwStatement"/>.
 	/// </summary>
@@ -518,6 +548,18 @@ public interface ICxParserVisitor<Result> : IParseTreeVisitor<Result> {
 	/// <param name="context">The parse tree.</param>
 	/// <return>The visitor result.</return>
 	Result VisitPrimaryExpressionStart([NotNull] CxParser.PrimaryExpressionStartContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.arrayCreationExpression"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitArrayCreationExpression([NotNull] CxParser.ArrayCreationExpressionContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.arrayElementType"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitArrayElementType([NotNull] CxParser.ArrayElementTypeContext context);
 	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.arrayExpression"/>.
 	/// </summary>

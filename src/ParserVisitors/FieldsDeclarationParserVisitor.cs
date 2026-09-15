@@ -1,6 +1,5 @@
 ﻿using Antlr4.Runtime.Misc;
 using CxCompiler.Grammar;
-using CxCompiler.Model.Common;
 using CxCompiler.Model.Types;
 using CxCompiler.Model.Types.BuiltInTypes;
 
@@ -8,15 +7,13 @@ namespace CxCompiler.ParserVisitors;
 
 public class FieldsDeclarationParserVisitor : CxParserBaseVisitor<FieldDeclaration[]>
 {
-    private readonly QualifiedIdentifier _className;
     private readonly ClassDeclaration _classDeclaration;
     private TypeBase _fieldType = BuiltInSystemTypes.Void;
     private MemberModifier[] _memberModifiers = [];
     private List<FieldDeclaration> _fieldDeclarations = new();
 
-    public FieldsDeclarationParserVisitor(QualifiedIdentifier className, ClassDeclaration classDeclaration)
+    public FieldsDeclarationParserVisitor(ClassDeclaration classDeclaration)
     {
-        _className = className;
         _classDeclaration = classDeclaration;
     }
 

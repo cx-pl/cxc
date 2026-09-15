@@ -1,34 +1,45 @@
 ﻿using CxCompiler.Model.Common;
 
+using CxCompiler.Model.Statements;
+
 namespace CxCompiler.Model.Types;
 
 public class FunctionDeclaration : DeclarationBase
 {
     public TypeBase ReturnType { get; }
 
-    public List<FunctionParameter> _parameters = new();
-    public List<FunctionParameter> Parameters => _parameters;
+    private List<FunctionParameter> _parameters = new();
+    public IReadOnlyList<FunctionParameter> Parameters => _parameters.AsReadOnly();
 
     public MemberModifier[] MemberModifiers { get; }
 
-    public bool IsStatic => MemberModifiers.Contains(MemberModifier.Static);
+    public bool Const { get; }
+
+    public bool IsStatic => ParentClassDeclaration is null || MemberModifiers.Contains(MemberModifier.Static);
     
     public ClassDeclaration? ParentClassDeclaration { get; }
 
-    // TODO: public StatementBase[] Body { get; }
+    public IReadOnlyList<StatementBase>? Body { get; private set; }
 
     public FunctionDeclaration(
         string name, QualifiedIdentifier @namespace, TypeBase returnType, 
-        MemberModifier[] memberModifiers, ClassDeclaration? parentClassDeclaration)
-        : base(name, @namespace)
+        MemberModifier[] memberModifiers, ClassDeclaration? parentClassDeclaration,
+        bool @const = false)
+        : base("function", @namespace, name)
     {
         ReturnType = returnType;
         MemberModifiers = memberModifiers;
         ParentClassDeclaration = parentClassDeclaration;
+        Const = @const;
     }
 
     public void AddParameter(FunctionParameter parameter)
     {
         _parameters.Add(parameter);
+    }
+
+    public void SetBody(IReadOnlyList<StatementBase> body)
+    {
+        Body = body;
     }
 }

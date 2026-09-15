@@ -1,5 +1,5 @@
 ﻿namespace CxCompiler.Model.Statements;
 
-internal class StatementBase
+public abstract class StatementBase
 {
 }

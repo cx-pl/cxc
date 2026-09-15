@@ -143,9 +143,10 @@ Equal: '==';
 NotEqual: '!=';
 QuestionQuestion: '??';
 Arrow: '=>';
-PipeThen: '|>';
-PipeError: '->';
 Dot: '.';
+QuestionArrow: '?=>';
+PipeThen: '|=>';
+PipeError: '!=>';
 
 // $antlr-format allowShortRulesOnASingleLine false, alignSemicolons hanging
 

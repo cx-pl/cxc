@@ -1,5 +1,4 @@
 ﻿using Antlr4.Runtime.Misc;
-using Antlr4.Runtime.Tree;
 using CxCompiler.Grammar;
 using CxCompiler.Model;
 using CxCompiler.Model.Types;
@@ -16,6 +15,7 @@ public class MemberModifiersParserVisitor : CxParserBaseVisitor<MemberModifier[]
         }
 
         var modifiers = new List<MemberModifier>();
+        // TODO: use ITerminalNode like in ClassTypeParserVisitor
         foreach (var child in context.children)
         {
             modifiers.Add(child.GetText() switch

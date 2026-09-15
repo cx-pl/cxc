@@ -1,20 +1,25 @@
+using System.Diagnostics;
+
 namespace CxCompiler.Model.Common;
 
+[DebuggerDisplay("{FullName}")]
 public abstract class DeclarationBase
 {
+    public string DeclarationType { get; }
     public string Name { get; }
-    public QualifiedIdentifier Namespace { get; set; }
-    public QualifiedIdentifier FullName => new QualifiedIdentifier(Namespace, Name);
+    public QualifiedIdentifier Namespace { get; }
+    public QualifiedIdentifier FullName { get; }
 
-    protected DeclarationBase(string name)
+    protected DeclarationBase(string type, string name)
+        : this(type, QualifiedIdentifier.Empty, name)
     {
-        Name = name;
-        Namespace = QualifiedIdentifier.Empty;
     }
 
-    protected DeclarationBase(string name, QualifiedIdentifier @namespace)
+    protected DeclarationBase(string type, QualifiedIdentifier? @namespace, string name)
     {
+        Namespace = @namespace ?? QualifiedIdentifier.Empty;
+        DeclarationType = type;
         Name = name;
-        Namespace = @namespace;
+        FullName = new(Namespace, Name);
     }
 }

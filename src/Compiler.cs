@@ -4,6 +4,7 @@ using CxCompiler.Model.Errors;
 using CxCompiler.Model.Project;
 using CxCompiler.OutputGenerators;
 using CxCompiler.ParserVisitors;
+using CxCompiler.Semantics;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -32,6 +33,7 @@ public class Compiler
             }
         }
 
+        new SemanticBinder().Bind(_project!);
         CCodeOutputGenerator.GenerateOutput(_project!, _projectPath!);
     }
 

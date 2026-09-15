@@ -9,7 +9,7 @@ public class FunctionDeclarationParserVisitor : CxParserBaseVisitor<FunctionDecl
 {
     private QualifiedIdentifier _namespace;
     private ClassDeclaration? _parentClassDeclaration = null;
-    private FunctionDeclaration _functionDeclaration = null;
+    private FunctionDeclaration _functionDeclaration = null!;
 
     public FunctionDeclarationParserVisitor(QualifiedIdentifier @namespace, ClassDeclaration? parentClassDeclaration)
     {
@@ -27,17 +27,23 @@ public class FunctionDeclarationParserVisitor : CxParserBaseVisitor<FunctionDecl
             _namespace,
             returnType,
             memberModifiers,
-            _parentClassDeclaration);
+            _parentClassDeclaration,
+            context.Const() != null);
 
         base.VisitChildren(context);
+
+        var functionBody = context.functionBody();
+        if (functionBody.LeftBrace() is not null)
+        {
+            _functionDeclaration.SetBody(StatementParserVisitor.ParseStatements(functionBody.statements()));
+        }
 
         return _functionDeclaration;
     }
 
     public override FunctionDeclaration VisitFunctionParameter([NotNull] CxParser.FunctionParameterContext context)
     {
-        var typeNameContextVisitor = new TypeNameContextVisitor();
-        var type = typeNameContextVisitor.Visit(context.typeName());
+        var type = new TypeNameContextVisitor().Visit(context.typeName());
 
         var funtionParameter = new FunctionParameter(
             context.name.Text,
@@ -48,4 +54,5 @@ public class FunctionDeclarationParserVisitor : CxParserBaseVisitor<FunctionDecl
 
         return base.VisitFunctionParameter(context);
     }
+
 }

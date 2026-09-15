@@ -25,7 +25,8 @@ public class TypeNameContextVisitor : CxParserBaseVisitor<TypeBase>
 
         if (context.namedType != null)
         {
-            underlyingType = new NamedType(context.namedType.GetText());
+            var genericParams = new GenericParamsParserVisitor().VisitGenericParams(context.genericParams());
+            underlyingType = new NamedType(context.namedType.GetText(), genericParams);
         }
         else if (context.autoVarType != null)
         {
@@ -37,7 +38,7 @@ public class TypeNameContextVisitor : CxParserBaseVisitor<TypeBase>
         }
         else
         {
-            underlyingType = base.VisitTypeName(context);
+            underlyingType = Visit(context.builtInType());
         }
 
         if (context.arrayDimension() != null && context.arrayDimension().Length > 0)
@@ -48,6 +49,11 @@ public class TypeNameContextVisitor : CxParserBaseVisitor<TypeBase>
         if (context.Question() != null)
         {
             underlyingType = new NullableType(underlyingType);
+        }
+
+        if (context.Const() != null && context.autoConstType == null)
+        {
+            underlyingType = new ConstType(underlyingType);
         }
 
         return underlyingType;

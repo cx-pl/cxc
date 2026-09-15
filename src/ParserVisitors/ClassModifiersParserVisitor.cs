@@ -1,14 +1,13 @@
 ﻿using Antlr4.Runtime.Misc;
-using Antlr4.Runtime.Tree;
 using CxCompiler.Grammar;
 using CxCompiler.Model;
 using CxCompiler.Model.Types;
 
 namespace CxCompiler.ParserVisitors;
 
-public class ClassModifiersParserVisitor : CxParserBaseVisitor<IReadOnlyCollection<ClassModifier>>
+public class ClassModifiersParserVisitor : CxParserBaseVisitor<IReadOnlyList<ClassModifier>>
 {
-    override public IReadOnlyCollection<ClassModifier> VisitClassModifiers([NotNull] CxParser.ClassModifiersContext context)
+    override public IReadOnlyList<ClassModifier> VisitClassModifiers([NotNull] CxParser.ClassModifiersContext context)
     {
         if (context.children == null)
         {
@@ -30,6 +29,6 @@ public class ClassModifiersParserVisitor : CxParserBaseVisitor<IReadOnlyCollecti
                 _ => throw new InternalCompilerException($"Unknown class modifier {child.GetText()}"),
             });
         }
-        return modifiers;
+        return modifiers.AsReadOnly();
     }
 }

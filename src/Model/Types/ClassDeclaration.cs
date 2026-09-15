@@ -12,6 +12,7 @@ public class ClassDeclaration : DeclarationBase
     public bool IsAbstract { get; }
     public bool IsFinal { get; }
     public bool IsStatic { get; }
+    public string[] GenericTypeNames { get; }
 
     private readonly List<QualifiedIdentifier> _baseTypes = [];
     public IReadOnlyList<QualifiedIdentifier> BaseTypes => _baseTypes.AsReadOnly();
@@ -24,14 +25,16 @@ public class ClassDeclaration : DeclarationBase
         ClassType classType,
         string? customClassTypeName,
         string name,
+        string[] genericTypeNames,
         DeclarationScope declarationScope)
-        : base(name, declarationScope.FullNamespace)
+        : base("class", declarationScope.FullNamespace, name)
     {        
         Visibility = Visibility.Private;
         IsPartial = partial;
         ClassType = classType;
         CustomClassTypeName = customClassTypeName;
         MemberDeclarations = declarationScope;
+        GenericTypeNames = genericTypeNames;
 
         foreach (var modifier in classModifiers)
         {

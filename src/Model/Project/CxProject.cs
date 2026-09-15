@@ -2,12 +2,12 @@
 
 public class CxProject
 {
-    public string Name { get; set; }
-    public string Version { get; set; }
-    public string Description { get; set; }
-    public string Licence { get; set; }
-    public string Website { get; set; }
-    public string Author { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Version { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string Licence { get; set; } = string.Empty;
+    public string Website { get; set; } = string.Empty;
+    public string Author { get; set; } = string.Empty;
     public CxProjectType Type { get; set; }
 
     private List<CompilationContext> _compilationContexts = new List<CompilationContext>();

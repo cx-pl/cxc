@@ -29,7 +29,7 @@ topLevelDeclarations
 topLevelDeclaration
 	: classDeclaration
 	| functionDeclaration
-	// enumDeclaration
+	| enumDeclaration
 	| typedefDeclaration
 	| extensionDeclaration
 	;
@@ -71,7 +71,7 @@ classType
 	;
 
 classDeclaration
-	: modifiers = classModifiers partial = Partial? classType name = Identifier genericParams? base = classBase?
+	: classModifiers partial = Partial? classType name = Identifier genericParams? base = classBase?
 		body = classDeclarationBody
 	;
 
@@ -105,7 +105,7 @@ memberDeclaration
 	;
 
 fieldsDeclaration
-	: modifiers = memberModifiers typeName fieldInitializers Semicolon
+	: memberModifiers typeName fieldInitializers Semicolon
 	;
 
 fieldInitializers
@@ -118,7 +118,7 @@ fieldInitializer
 	;
 
 propertyDeclaration
-	: modifiers = memberModifiers typeName Identifier LeftBrace propertyAccessorDeclarations RightBrace
+	: memberModifiers typeName Identifier LeftBrace propertyAccessorDeclarations RightBrace
 	;
 
 propertyAccessorDeclarations
@@ -169,6 +169,20 @@ functionBody
 	: LeftBrace statements? RightBrace
 	| Arrow statement
 	| Semicolon
+	;
+
+enumDeclaration
+	: visibilityModifier? Enum name = Identifier enumDeclarationBody
+	;
+
+enumDeclarationBody
+	: LeftBrace members = enumMemberDeclaration* RightBrace
+	| Semicolon
+	;
+
+enumMemberDeclaration
+	: Identifier (value = Assign literal)?
+	// TODO: allow memberDeclaration to build rich enums
 	;
 
 typedefDeclaration
@@ -223,6 +237,8 @@ embeddedStatement
 	| forStatement
 	| foreachStatement
 	| returnStatement
+	| breakStatement
+	| continueStatement
 	| throwStatement
 	| tryStatement
 	| usingStatement
@@ -288,6 +304,14 @@ returnStatement
 	: Return expression? Semicolon
 	;
 
+breakStatement
+	: Break Semicolon
+	;
+
+continueStatement
+	: Continue Semicolon
+	;
+
 throwStatement
 	: Throw expression? Semicolon
 	;
@@ -320,7 +344,7 @@ expression
 	;
 
 assignmentExpression
-	: qualifiedIdentifier assignOperator expression
+	: primaryExpression assignOperator expression
 	;
 
 assignOperator
@@ -428,7 +452,17 @@ primaryExpression
 primaryExpressionStart
 	: literal
 	| qualifiedIdentifier
+	| arrayCreationExpression
 	| New typeName functionInvocation
+	;
+
+arrayCreationExpression
+	: New arrayElementType LeftBracket expression RightBracket
+	;
+
+arrayElementType
+	: builtInType
+	| qualifiedIdentifier genericParams?
 	;
 
 arrayExpression
@@ -480,7 +514,7 @@ typeNameOrVoid
 
 typeName
 	: Const? builtInType arrayDimension* Question?
-	| Const? namedType = qualifiedIdentifier genericParams? arrayDimension* Question?
+	| Const? namedType = qualifiedIdentifier namedTypeGenericParams = genericParams? arrayDimension* Question?
 	| autoVarType = Var
 	| autoConstType = Const
 	// TODO: functionType

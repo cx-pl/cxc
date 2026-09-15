@@ -12,34 +12,29 @@ public class QualifiedIdentifier
         Parts = [];
     }
 
-    public QualifiedIdentifier(string name)
-    {
-        Parts = [name];
-    }
-
-    public QualifiedIdentifier(QualifiedIdentifier @base, string name)
-    {
-        Parts = [.. @base.Parts, name];
-    }
-
-    public QualifiedIdentifier(string @base, QualifiedIdentifier name)
-    {
-        Parts = [@base, .. name.Parts];
-    }
-
-    public QualifiedIdentifier(ReadOnlySpan<string> parts)
-    {
-        Parts = parts.ToArray();
-    }
-
     public QualifiedIdentifier(params string[] parts)
     {
-        Parts = [.. parts];
+        Parts = parts;
+    }
+
+    public QualifiedIdentifier(params QualifiedIdentifier?[] parts)
+    {
+        Parts = [.. parts.SelectMany(p => p?.Parts ?? [])];
     }
 
     public override string ToString()
     {
         return string.Join('.', Parts);
+    }
+
+    public static implicit operator QualifiedIdentifier(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            return Empty;
+        }
+
+        return new QualifiedIdentifier([name]);
     }
 
     public static bool operator ==(QualifiedIdentifier left, QualifiedIdentifier right)
@@ -56,10 +51,26 @@ public class QualifiedIdentifier
         return !(left == right);
     }
 
+    public static QualifiedIdentifier operator +(QualifiedIdentifier? left, QualifiedIdentifier? right)
+    {
+        if ((left is null || left.IsEmpty) && (right is null || right.IsEmpty))
+        {
+            return Empty;
+        }
+        if (left is null || left.IsEmpty)
+        {
+            return right!;
+        }
+        if (right is null || right.IsEmpty)
+        {
+            return left;
+        }
+        return new QualifiedIdentifier(left, right);
+    }
+
     public override bool Equals(object? obj)
     {
         return
-            obj is not null &&
             obj is QualifiedIdentifier &&
             this == (obj as QualifiedIdentifier)!;
     }

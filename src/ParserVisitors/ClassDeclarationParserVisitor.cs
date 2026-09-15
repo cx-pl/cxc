@@ -23,9 +23,10 @@ public class ClassDeclarationParserVisitor : CxParserBaseVisitor<DeclarationBase
 
     public override DeclarationBase VisitClassDeclaration([NotNull] CxParser.ClassDeclarationContext context)
     {
-        var classModifiers = new ClassModifiersParserVisitor().VisitClassModifiers(context.modifiers);
+        var classModifiers = new ClassModifiersParserVisitor().VisitClassModifiers(context.classModifiers());
         var (classType, customTypeName) = new ClassTypeParserVisitor().VisitClassType(context.classType());
-        
+        var genericParams = new GenericParamsParserVisitor().VisitGenericParams(context.genericParams());
+
         if (_classDeclaration == null)
         {
             _classDeclaration = new ClassDeclaration(
@@ -34,6 +35,7 @@ public class ClassDeclarationParserVisitor : CxParserBaseVisitor<DeclarationBase
                 classType,
                 customTypeName,
                 context.name.Text,
+                genericParams,
                 // TODO: Get Base types
                 DeclarationScope);
 
@@ -56,21 +58,33 @@ public class ClassDeclarationParserVisitor : CxParserBaseVisitor<DeclarationBase
             throw new InternalCompilerException("Class declaration is null");
         }
 
-        var fieldsDeclaration = new FieldsDeclarationParserVisitor(_classDeclaration.FullName, _classDeclaration).Visit(context);
+        var fieldsDeclaration = new FieldsDeclarationParserVisitor(_classDeclaration).Visit(context);
         _classDeclaration.MemberDeclarations.AddDeclarations(fieldsDeclaration);
         return _classDeclaration;
     }
 
     public override DeclarationBase VisitPropertyDeclaration([NotNull] CxParser.PropertyDeclarationContext context)
     {
-        // TODO
-        return base.VisitPropertyDeclaration(context);
+        if (_classDeclaration is null)
+        {
+            throw new InternalCompilerException("Class declaration is null");
+        }
+
+        var propertyDeclaration = new PropertyDeclarationParserVisitor(_classDeclaration).Visit(context);
+        _classDeclaration.MemberDeclarations.AddDeclaration(propertyDeclaration);
+        return _classDeclaration;
     }
 
     public override DeclarationBase VisitConstructorDeclaration([NotNull] CxParser.ConstructorDeclarationContext context)
     {
-        // TODO
-        return base.VisitConstructorDeclaration(context);
+        if (_classDeclaration is null)
+        {
+            throw new InternalCompilerException("Class declaration is null");
+        }
+
+        var constructorDeclaration = new ConstructorDeclarationParserVisitor(_classDeclaration.FullName, _classDeclaration).Visit(context);
+        _classDeclaration.MemberDeclarations.AddDeclaration(constructorDeclaration);
+        return _classDeclaration;
     }
 
     public override DeclarationBase VisitFunctionDeclaration([NotNull] CxParser.FunctionDeclarationContext context)
