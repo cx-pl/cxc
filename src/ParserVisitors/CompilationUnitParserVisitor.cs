@@ -47,7 +47,10 @@ public class CompilationUnitParserVisitor : CxParserBaseVisitor<CompilationConte
 
     public override CompilationContext VisitEnumDeclaration([NotNull] CxParser.EnumDeclarationContext context)
     {
-        throw new NotImplementedException("Enum declarations are not yet supported.");
+        var enumDeclaration = new EnumDeclarationParserVisitor(
+            compilationContext.Namespace).Visit(context);
+        compilationContext.DeclarationScope.AddDeclaration(enumDeclaration);
+        return compilationContext;
     }
 
     public override CompilationContext VisitTypedefDeclaration([NotNull] CxParser.TypedefDeclarationContext context)

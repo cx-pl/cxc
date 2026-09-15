@@ -16,6 +16,7 @@ public sealed class SemanticBinder
     private readonly List<ConstructorSymbol> _constructors = [];
     private readonly List<FieldSymbol> _fields = [];
     private readonly List<PropertySymbol> _properties = [];
+    private readonly List<EnumTypeSymbol> _enums = [];
     private int _loopDepth;
     private int _breakableDepth;
     private int _objectCreationIndex;
@@ -28,6 +29,7 @@ public sealed class SemanticBinder
         _constructors.Clear();
         _fields.Clear();
         _properties.Clear();
+        _enums.Clear();
         AddCoreSymbols();
 
         foreach (var context in project.CompilationContexts)
@@ -45,6 +47,7 @@ public sealed class SemanticBinder
         }
 
         BindFieldInitializers();
+        BindEnumMembers();
 
         foreach (var context in project.CompilationContexts)
         {
@@ -142,6 +145,16 @@ public sealed class SemanticBinder
         string moduleName,
         IEnumerable<DeclarationBase> declarations)
     {
+        foreach (var enumDeclaration in declarations.OfType<EnumDeclaration>())
+        {
+            var type = new NamedType(enumDeclaration.FullName.ToString(), []);
+            type.SetResolvedType(
+                enumDeclaration.FullName,
+                moduleName,
+                ClassType.Enum);
+            _enums.Add(new EnumTypeSymbol(moduleName, enumDeclaration, type));
+        }
+
         foreach (var classDeclaration in declarations.OfType<ClassDeclaration>())
         {
             var type = new NamedType(classDeclaration.FullName.ToString(), []);
@@ -268,6 +281,24 @@ public sealed class SemanticBinder
                     $"'{GetTypeName(field.Declaration.Type)}' with '{GetTypeName(initializerType)}'.");
             }
             ApplyContextualType(initializer, field.Declaration.Type);
+        }
+    }
+
+    private void BindEnumMembers()
+    {
+        foreach (var enumType in _enums)
+        {
+            foreach (var member in enumType.Declaration.Members
+                .Where(member => member.Value is not null))
+            {
+                var valueType = BindLiteral(member.Value!);
+                member.Value!.SetInferredType(valueType);
+                if (!IsInteger(valueType))
+                {
+                    throw new CompilationErrorException(
+                        $"Enum member '{member.FullName}' must have an integer value.");
+                }
+            }
         }
     }
 
@@ -501,22 +532,25 @@ public sealed class SemanticBinder
             {
                 throw new CompilationErrorException("Switch case filters are not supported yet.");
             }
-            if (label.Value is not LiteralExpression literal)
+            var labelType = BindExpression(label.Value!, function, imports, scope);
+            var caseValue = label.Value switch
             {
-                throw new CompilationErrorException("Switch case labels must be constant literals.");
-            }
-
-            var labelType = BindExpression(label.Value, function, imports, scope);
+                LiteralExpression literal => literal.SourceText,
+                MemberAccessExpression { TargetEnumMember: not null } memberAccess =>
+                    memberAccess.TargetEnumMember.Declaration.FullName.ToString(),
+                _ => throw new CompilationErrorException(
+                    "Switch case labels must be literals or enum members."),
+            };
             if (!IsType(selectorType, labelType))
             {
                 throw new CompilationErrorException(
                     $"Switch case type '{GetTypeName(labelType)}' does not match " +
                     $"selector type '{GetTypeName(selectorType)}'.");
             }
-            if (!caseValues.Add(literal.SourceText))
+            if (!caseValues.Add(caseValue))
             {
                 throw new CompilationErrorException(
-                    $"Switch case label '{literal.SourceText}' is duplicated.");
+                    $"Switch case label '{caseValue}' is duplicated.");
             }
         }
 
@@ -836,6 +870,20 @@ public sealed class SemanticBinder
             scope);
         if (staticTarget is not null)
         {
+            if (staticTarget.Declaration is EnumDeclaration enumDeclaration)
+            {
+                var enumMember = enumDeclaration.Members.SingleOrDefault(
+                    member => member.Name == memberAccess.MemberName)
+                    ?? throw new CompilationErrorException(
+                        $"Enum '{enumDeclaration.FullName}' has no member named " +
+                        $"'{memberAccess.MemberName}'.");
+                memberAccess.BindEnumMember(new EnumMemberSymbol(
+                    staticTarget.ModuleName,
+                    enumMember,
+                    staticTarget.Type));
+                return staticTarget.Type;
+            }
+
             var staticField = _fields.SingleOrDefault(candidate =>
                 IsType(candidate.ContainingType, staticTarget.Type) &&
                 candidate.Declaration.Name == memberAccess.MemberName &&
@@ -890,7 +938,7 @@ public sealed class SemanticBinder
         return field.Declaration.Type;
     }
 
-    private TypeSymbol? TryResolveTypeExpression(
+    private ResolvedTypeSymbol? TryResolveTypeExpression(
         ExpressionBase expression,
         QualifiedIdentifier currentNamespace,
         IReadOnlyList<QualifiedIdentifier> imports,
@@ -904,14 +952,31 @@ public sealed class SemanticBinder
         }
 
         var candidateNames = GetCandidateNames(sourceName, currentNamespace, imports);
-        var candidates = _types
+        var classCandidates = _types
             .Where(candidate => candidateNames.Contains(candidate.Declaration.FullName))
             .ToArray();
-        if (candidates.Length > 1)
+        var enumCandidates = _enums
+            .Where(candidate => candidateNames.Contains(candidate.Declaration.FullName))
+            .ToArray();
+        if (classCandidates.Length + enumCandidates.Length > 1)
         {
             throw new CompilationErrorException($"Type name '{sourceName}' is ambiguous.");
         }
-        return candidates.SingleOrDefault();
+        if (classCandidates.SingleOrDefault() is { } classCandidate)
+        {
+            return new ResolvedTypeSymbol(
+                classCandidate.ModuleName,
+                classCandidate.Declaration,
+                classCandidate.Type);
+        }
+        if (enumCandidates.SingleOrDefault() is { } enumCandidate)
+        {
+            return new ResolvedTypeSymbol(
+                enumCandidate.ModuleName,
+                enumCandidate.Declaration,
+                enumCandidate.Type);
+        }
+        return null;
     }
 
     private PropertyReference? ResolvePropertyReference(
@@ -1202,21 +1267,30 @@ public sealed class SemanticBinder
                 var sourceName = new QualifiedIdentifier(
                     namedType.Name.Split('.', StringSplitOptions.RemoveEmptyEntries));
                 var candidateNames = GetCandidateNames(sourceName, currentNamespace, imports);
-                var candidates = _types
+                var classCandidates = _types
                     .Where(candidate => candidateNames.Contains(candidate.Declaration.FullName))
                     .ToArray();
-                if (candidates.Length > 1)
+                var enumCandidates = _enums
+                    .Where(candidate => candidateNames.Contains(candidate.Declaration.FullName))
+                    .ToArray();
+                if (classCandidates.Length + enumCandidates.Length > 1)
                 {
                     throw new CompilationErrorException(
                         $"Type name '{namedType.Name}' is ambiguous.");
                 }
-                if (candidates.Length == 1)
+                if (classCandidates.SingleOrDefault() is { } classCandidate)
                 {
-                    var candidate = candidates[0];
                     namedType.SetResolvedType(
-                        candidate.Declaration.FullName,
-                        candidate.ModuleName,
-                        candidate.Declaration.ClassType);
+                        classCandidate.Declaration.FullName,
+                        classCandidate.ModuleName,
+                        classCandidate.Declaration.ClassType);
+                }
+                else if (enumCandidates.SingleOrDefault() is { } enumCandidate)
+                {
+                    namedType.SetResolvedType(
+                        enumCandidate.Declaration.FullName,
+                        enumCandidate.ModuleName,
+                        ClassType.Enum);
                 }
                 return;
         }
@@ -1461,6 +1535,12 @@ public sealed class SemanticBinder
 
     private static void ValidateWritableField(ExpressionBase expression)
     {
+        if (expression is MemberAccessExpression { TargetEnumMember: not null } enumMember)
+        {
+            throw new CompilationErrorException(
+                $"Enum member '{enumMember.TargetEnumMember.Declaration.FullName}' cannot be assigned to.");
+        }
+
         var field = expression switch
         {
             IdentifierExpression identifier => identifier.TargetField,
@@ -1658,7 +1738,8 @@ public sealed class SemanticBinder
     {
         return IsInteger(type) ||
             IsType(type, BuiltInSystemTypes.Bool) ||
-            IsType(type, BuiltInSystemTypes.Char);
+            IsType(type, BuiltInSystemTypes.Char) ||
+            UnwrapConst(type) is NamedType { ClassType: ClassType.Enum };
     }
 
     private static bool AlwaysReturns(IEnumerable<StatementBase> statements)
@@ -1852,6 +1933,16 @@ public sealed class SemanticBinder
     private sealed record TypeSymbol(
         string ModuleName,
         ClassDeclaration Declaration,
+        TypeBase Type);
+
+    private sealed record EnumTypeSymbol(
+        string ModuleName,
+        EnumDeclaration Declaration,
+        TypeBase Type);
+
+    private sealed record ResolvedTypeSymbol(
+        string ModuleName,
+        DeclarationBase Declaration,
         TypeBase Type);
 
     private sealed record ConstructorSymbol(

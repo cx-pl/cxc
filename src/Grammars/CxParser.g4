@@ -176,7 +176,7 @@ enumDeclaration
 	;
 
 enumDeclarationBody
-	: LeftBrace members = enumMemberDeclaration* RightBrace
+	: LeftBrace (enumMemberDeclaration (Comma enumMemberDeclaration)* Comma?)? RightBrace
 	| Semicolon
 	;
 

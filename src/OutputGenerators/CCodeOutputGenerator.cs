@@ -76,7 +76,24 @@ public static partial class CCodeOutputGenerator
     {
         foreach (var declaration in declarations)
         {
-            if (declaration is ClassDeclaration classDeclaration)
+            if (declaration is EnumDeclaration enumDeclaration)
+            {
+                var enumName = enumDeclaration.ToCIdentifier(moduleName);
+                writer.WriteLine($"typedef enum {enumName} {{");
+                writer.IncreaseIndent();
+                for (var index = 0; index < enumDeclaration.Members.Count; index++)
+                {
+                    var member = enumDeclaration.Members[index];
+                    var value = member.Value is null
+                        ? string.Empty
+                        : $" = {member.Value.SourceText}";
+                    var comma = index + 1 < enumDeclaration.Members.Count ? "," : string.Empty;
+                    writer.WriteLine($"{member.ToCIdentifier(moduleName)}{value}{comma}");
+                }
+                writer.DecreaseIndent();
+                writer.WriteLine($"}} {enumName};");
+            }
+            else if (declaration is ClassDeclaration classDeclaration)
             {
                 writer.WriteLine($"{classDeclaration.ToCIdentifier(moduleName)};");
 
@@ -665,6 +682,10 @@ public static partial class CCodeOutputGenerator
                 {
                     declarations.Add(functionDeclaration);
                 }
+                else if (declaration is EnumDeclaration enumDeclaration)
+                {
+                    declarations.Add(enumDeclaration);
+                }
                 else
                 {
                     throw new InternalCompilerException(
@@ -714,20 +735,21 @@ public static partial class CCodeOutputGenerator
                     return QualifiedIdentifier.Compare(xClassDeclaration.FullName, yClassDeclaration.FullName);
                 }
             }
-            else if (x is FunctionDeclaration xFunctionDeclaration && y is FunctionDeclaration yFunctionDeclaration)
+            else if (x.GetType() == y.GetType())
             {
-                return QualifiedIdentifier.Compare(xFunctionDeclaration.FullName, yFunctionDeclaration.FullName);
+                return QualifiedIdentifier.Compare(x.FullName, y.FullName);
             }
-            else if (x is ClassDeclaration)
-            {
-                return -1; // Classes before functions
-            }
-            else
-            {
-                return 1; // Functions after classes
-            }
+            return GetDeclarationOrder(x).CompareTo(GetDeclarationOrder(y));
         })).ToList();
         return result;
+
+        static int GetDeclarationOrder(DeclarationBase declaration) => declaration switch
+        {
+            EnumDeclaration => 0,
+            ClassDeclaration => 1,
+            FunctionDeclaration => 2,
+            _ => 3,
+        };
     }
 
     private static int GetNameOverrideIndex(FunctionDeclaration functionDeclaration, IReadOnlyCollection<DeclarationBase> declarations)
@@ -743,6 +765,16 @@ public static partial class CCodeOutputGenerator
     {
         var fullName = new QualifiedIdentifier(moduleName, classDeclaration.FullName);
         return $"{(includeStruct ? "struct " : "")}{fullName.ToCIdentifier()}";
+    }
+
+    private static string ToCIdentifier(this EnumDeclaration enumDeclaration, string moduleName)
+    {
+        return new QualifiedIdentifier(moduleName, enumDeclaration.FullName).ToCIdentifier();
+    }
+
+    private static string ToCIdentifier(this EnumMemberDeclaration member, string moduleName)
+    {
+        return new QualifiedIdentifier(moduleName, member.FullName).ToCIdentifier();
     }
 
     private static string ToCIdentifier(this FunctionDeclaration functionDeclaration, string moduleName, int nameOverrideIndex)
@@ -801,6 +833,7 @@ public static partial class CCodeOutputGenerator
 
             NamedType namedType when namedType.ClassType == ClassType.Struct => $"{constString} struct {namedType.ResolvedTypeFullName.ToCIdentifier()}",
             NamedType namedType when namedType.ClassType == ClassType.Class => $"{constString} struct {namedType.ResolvedTypeFullName.ToCIdentifier()}*",
+            NamedType namedType when namedType.ClassType == ClassType.Enum => $"{constString} {namedType.ResolvedTypeFullName.ToCIdentifier()}",
 
             _ => "_unknowntype_" // TODO: throw below exception for unsupported types
             //_ => throw new InternalCompilerException($"Unsupported type: {typeBase.GetType().Name}"),

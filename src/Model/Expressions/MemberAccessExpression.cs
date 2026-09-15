@@ -10,6 +10,7 @@ public sealed class MemberAccessExpression : ExpressionBase
     public FieldSymbol? TargetField { get; private set; }
     public PropertySymbol? TargetProperty { get; private set; }
     public PropertyAccessorSymbol? PropertyGetter { get; private set; }
+    public EnumMemberSymbol? TargetEnumMember { get; private set; }
 
     public MemberAccessExpression(ExpressionBase target, string memberName)
     {
@@ -26,5 +27,10 @@ public sealed class MemberAccessExpression : ExpressionBase
     {
         TargetProperty = property;
         PropertyGetter = getter;
+    }
+
+    public void BindEnumMember(EnumMemberSymbol member)
+    {
+        TargetEnumMember = member;
     }
 }

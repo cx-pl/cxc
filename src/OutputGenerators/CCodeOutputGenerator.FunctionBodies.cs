@@ -450,6 +450,10 @@ public static partial class CCodeOutputGenerator
                 ToCIndexedPropertyGetter(arrayAccess, functionDeclaration, moduleName),
             ArrayAccessExpression arrayAccess =>
                 ToCArrayAccess(arrayAccess, functionDeclaration, moduleName),
+            MemberAccessExpression { TargetEnumMember: not null } memberAccess =>
+                new QualifiedIdentifier(
+                    memberAccess.TargetEnumMember.ModuleName,
+                    memberAccess.TargetEnumMember.Declaration.FullName).ToCIdentifier(),
             MemberAccessExpression { PropertyGetter: not null } memberAccess =>
                 ToCPropertyCall(
                     memberAccess.TargetProperty!,
