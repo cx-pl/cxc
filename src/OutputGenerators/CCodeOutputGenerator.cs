@@ -156,10 +156,6 @@ public static partial class CCodeOutputGenerator
                         foreach (var fieldDeclaration in fieldMemberDeclarations)
                         {
                             writer.WriteLine($"{fieldDeclaration.Type.ToCIdentifier(false)} {fieldDeclaration.Name};");
-                            //if (fieldDeclaration.InitialValue != null)
-                            //{
-                            //    writer.Write($" = {fieldDeclaration.InitialValue.ToCIdentifier()}");
-                            //}
                         }
                     }
 
@@ -258,18 +254,8 @@ public static partial class CCodeOutputGenerator
                         {
                             FunctionParameter? parameter = functionDeclaration.Parameters[i];
 
-                            //if (parameter.Name == "T")
-                            //{
-                            //    ;
-                            //}
-
                             writer.WriteIndent();
-                            writer.Write($"{parameter.ParameterType.ToCIdentifier(false /* TODO */)} {parameter.Name}");
-
-                            //if (parameter.DefaultValue != null)
-                            //{
-                            //    writer.Write($" = {parameter.DefaultValue.ToCIdentifier()}");
-                            //}
+                            writer.Write($"{parameter.ParameterType.ToCIdentifier(@const: false)} {parameter.Name}");
 
                             if (i != functionDeclaration.Parameters.Count - 1)
                             {
@@ -295,7 +281,6 @@ public static partial class CCodeOutputGenerator
                     }
                     foreach (var propertyAccessorDeclaration in propertyDeclaration.PropertyAccessorDeclarations)
                     {
-                        // TODO: Allow accessor declarations have member modifiers
                         exportable =
                         (
                             propertyDeclaration.ParentClassDeclaration.ClassType == ClassType.Interface
@@ -309,7 +294,7 @@ public static partial class CCodeOutputGenerator
                             propertyDeclaration.ParentClassDeclaration.ClassType == ClassType.Class &&
                             propertyDeclaration.MemberModifiers.Contains(MemberModifier.Public) &&
                             propertyDeclaration.ParentClassDeclaration.Visibility == Visibility.Public
-                        ); // TODO: Traverse up all class hierarchy
+                        );
 
                         writer.WriteIndent();
                         writer.Write($"extern {(exportable ? "CX_EXPORT " : "")}{propertyAccessorDeclaration.ToCIdentifier(moduleName)}(");
@@ -340,7 +325,7 @@ public static partial class CCodeOutputGenerator
                                 isFirstParameter = false;
 
                                 writer.WriteIndent();
-                                writer.Write($"{parameter.ParameterType.ToCIdentifier(false /* TODO */)} {parameter.Name}");
+                                writer.Write($"{parameter.ParameterType.ToCIdentifier(@const: false)} {parameter.Name}");
 
                                 if (i != propertyAccessorDeclaration.Parameters.Count - 1)
                                 {
@@ -1023,7 +1008,7 @@ public static partial class CCodeOutputGenerator
             ? new QualifiedIdentifier(functionDeclaration.FullName, $"_{nameOverrideIndex}")
             : functionDeclaration.FullName;
         var fullName = new QualifiedIdentifier(moduleName, name);
-        return $"{functionDeclaration.ReturnType.ToCReturnType(false /* TODO */)} {fullName.ToCIdentifier()}";
+        return $"{functionDeclaration.ReturnType.ToCReturnType(@const: false)} {fullName.ToCIdentifier()}";
     }
 
     private static string ToCFunctionName(
@@ -1061,7 +1046,7 @@ public static partial class CCodeOutputGenerator
 
     private static string ToCIdentifier(this TypeBase typeBase, bool @const)
     {
-        var constString = @const ? "const" : "";
+        var constString = @const ? "const " : "";
         return typeBase switch
         {
             ConstType constType => constType.UnderlyingType.ToCIdentifier(true),
@@ -1081,21 +1066,21 @@ public static partial class CCodeOutputGenerator
             FloatType => "cx_float",
             DoubleType => "cx_double",
 
-            ObjectType => $"{constString} struct CX_ID_3(cxcore, System, Object)*",
-            StringType => $"{constString} struct CX_ID_3(cxcore, System, String)*",
-            PtrType => $"{constString} cx_ptr",
+            ObjectType => $"{constString}struct CX_ID_3(cxcore, System, Object)*",
+            StringType => $"{constString}struct CX_ID_3(cxcore, System, String)*",
+            PtrType => $"{constString}cx_ptr",
 
             FunctionType => throw new NotImplementedException(), // TODO
             VoidType => "void",
             NullType => "cx_ptr",
 
-            ArrayType => $"{constString} struct CX_ID_3(cxcore, System, Array)*",
-            NullableType => $"{constString} struct CX_ID_3(cxcore, System, Nullable)",
+            ArrayType => $"{constString}struct CX_ID_3(cxcore, System, Array)*",
+            NullableType => $"{constString}struct CX_ID_3(cxcore, System, Nullable)",
 
-            NamedType namedType when namedType.ClassType == ClassType.Struct => $"{constString} struct {namedType.ResolvedTypeFullName.ToCIdentifier()}",
-            NamedType namedType when namedType.ClassType == ClassType.Class => $"{constString} struct {namedType.ResolvedTypeFullName.ToCIdentifier()}*",
-            NamedType { ClassType: ClassType.Interface } => $"{constString} struct cx_iface_ref",
-            NamedType namedType when namedType.ClassType == ClassType.Enum => $"{constString} {namedType.ResolvedTypeFullName.ToCIdentifier()}",
+            NamedType namedType when namedType.ClassType == ClassType.Struct => $"{constString}struct {namedType.ResolvedTypeFullName.ToCIdentifier()}",
+            NamedType namedType when namedType.ClassType == ClassType.Class => $"{constString}struct {namedType.ResolvedTypeFullName.ToCIdentifier()}*",
+            NamedType { ClassType: ClassType.Interface } => $"{constString}struct cx_iface_ref",
+            NamedType namedType when namedType.ClassType == ClassType.Enum => $"{constString}{namedType.ResolvedTypeFullName.ToCIdentifier()}",
 
             _ => "_unknowntype_" // TODO: throw below exception for unsupported types
             //_ => throw new InternalCompilerException($"Unsupported type: {typeBase.GetType().Name}"),
