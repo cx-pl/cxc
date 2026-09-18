@@ -191,8 +191,8 @@ public sealed class FieldAccessTests
         var (header, source) = Generate(project);
 
         Assert.Contains("cx_int value;", header);
-        Assert.Contains("extern  struct CX_ID_3(cxcore, System, String)* CX_ID_3(Unnamed, Counter, Name);", header);
-        Assert.Contains("CX_ID_3(Unnamed, Counter, Name) = &CX_ID_2(Unnamed, __string_", source);
+        Assert.Contains("extern  struct CX_ID_3(cxcore, System, String)* CX_ID_3(unnamed, Counter, Name);", header);
+        Assert.Contains("CX_ID_3(unnamed, Counter, Name) = &CX_ID_2(unnamed, __string_", source);
         Assert.Contains("__this->value = 1;", source);
         Assert.Contains("__this->value = (other)->value;", source);
         Assert.Contains("return (__this)->value;", source);
@@ -200,7 +200,7 @@ public sealed class FieldAccessTests
 
     private static CxProject CreateProject(string source)
     {
-        var project = CxProject.CreateUnnamedApplicationProject();
+        var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse(source));
         return project;
     }
@@ -217,8 +217,8 @@ public sealed class FieldAccessTests
                 project,
                 Path.Combine(outputDirectory, "Fields.cx"));
             return (
-                File.ReadAllText(Path.Combine(outputDirectory, "Unnamed.h")),
-                File.ReadAllText(Path.Combine(outputDirectory, "Unnamed.c")));
+                File.ReadAllText(Path.Combine(outputDirectory, "unnamed.h")),
+                File.ReadAllText(Path.Combine(outputDirectory, "unnamed.c")));
         }
         finally
         {

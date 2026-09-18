@@ -150,9 +150,9 @@ public sealed class NullExpressionTests
                 project,
                 Path.Combine(outputDirectory, "NullExpressions.cx"));
             var generatedSource = File.ReadAllText(
-                Path.Combine(outputDirectory, "Unnamed.c"));
+                Path.Combine(outputDirectory, "unnamed.c"));
 
-            Assert.Contains("((value) != CX_NULL ? (value) : &CX_ID_2(Unnamed, __string_", generatedSource);
+            Assert.Contains("((value) != CX_NULL ? (value) : &CX_ID_2(unnamed, __string_", generatedSource);
             Assert.Contains("((value)._obj != CX_NULL ? *(cx_int*)(value)._obj : 42)", generatedSource);
             Assert.Contains("((value)._obj == CX_NULL)", generatedSource);
             Assert.Contains("return ( struct CX_ID_3(cxcore, System, Nullable)){ CX_NULL };", generatedSource);
@@ -169,7 +169,7 @@ public sealed class NullExpressionTests
 
     private static CxProject CreateProject(string source)
     {
-        var project = CxProject.CreateUnnamedApplicationProject();
+        var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse(source));
         return project;
     }

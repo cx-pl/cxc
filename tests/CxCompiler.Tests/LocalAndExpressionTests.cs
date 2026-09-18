@@ -114,7 +114,7 @@ public sealed class LocalAndExpressionTests
                 project,
                 Path.Combine(outputDirectory, "Expressions.cx"));
             var generatedSource = File.ReadAllText(
-                Path.Combine(outputDirectory, "Unnamed.c"));
+                Path.Combine(outputDirectory, "unnamed.c"));
 
             Assert.Contains("cx_int result = (value + 1);", generatedSource);
             Assert.Contains("cx_int nested = (result * 2);", generatedSource);
@@ -132,7 +132,7 @@ public sealed class LocalAndExpressionTests
 
     private static CxProject CreateProject(string source)
     {
-        var project = CxProject.CreateUnnamedApplicationProject();
+        var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse(source));
         return project;
     }

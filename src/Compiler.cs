@@ -73,7 +73,8 @@ public class Compiler
         if (_project is null)
         {
             _projectPath = filePath;
-            _project = CxProject.CreateUnnamedApplicationProject();
+            _project = CxProject.CreateDefaultApplicationProject(
+                name: Path.GetFileNameWithoutExtension(filePath));
         }
 
         using var reader = new StreamReader(filePath);

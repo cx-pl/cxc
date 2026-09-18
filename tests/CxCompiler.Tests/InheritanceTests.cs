@@ -117,24 +117,24 @@ public sealed class InheritanceTests
         var (header, source) = GenerateOutput(project);
 
         Assert.True(
-            header.IndexOf("CX_TYPE_DEF(CX_ID_2(Unnamed, Parent))", StringComparison.Ordinal) <
-            header.IndexOf("CX_TYPE_DEF(CX_ID_2(Unnamed, Child))", StringComparison.Ordinal));
-        Assert.Contains("struct CX_ID_2(Unnamed, Parent) __base;", header);
+            header.IndexOf("CX_TYPE_DEF(CX_ID_2(unnamed, Parent))", StringComparison.Ordinal) <
+            header.IndexOf("CX_TYPE_DEF(CX_ID_2(unnamed, Child))", StringComparison.Ordinal));
+        Assert.Contains("struct CX_ID_2(unnamed, Parent) __base;", header);
         Assert.Contains(
-            "CX_ID_3(Unnamed, Parent, __constructor)(&__this->__base, initial);",
+            "CX_ID_3(unnamed, Parent, __constructor)(&__this->__base, initial);",
             source);
         Assert.Contains("(__this)->__base.value", source);
         Assert.Contains(
-            "CX_ID_4(Unnamed, Parent, Number, __const_get)(&((__this)->__base))",
+            "CX_ID_4(unnamed, Parent, Number, __const_get)(&((__this)->__base))",
             source);
         Assert.Contains(
-            "CX_ID_3(Unnamed, Parent, Add)(&((other)->__base), 1)",
+            "CX_ID_3(unnamed, Parent, Add)(&((other)->__base), 1)",
             source);
         Assert.Contains(
-            "CX_ID_4(Unnamed, Parent, Number, __set)(&((__this)->__base)",
+            "CX_ID_4(unnamed, Parent, Number, __set)(&((__this)->__base)",
             source);
         Assert.Contains(
-            "CX_ID_3(Unnamed, Parent, __typeinfo)",
+            "CX_ID_3(unnamed, Parent, __typeinfo)",
             source);
     }
 
@@ -182,7 +182,7 @@ public sealed class InheritanceTests
             """);
         var missingException = Assert.Throws<CompilationErrorException>(
             () => new SemanticBinder().Bind(missingBase));
-        Assert.Contains("No constructor for 'Unnamed.Parent' accepts", missingException.Message);
+        Assert.Contains("No constructor for 'unnamed.Parent' accepts", missingException.Message);
 
         var cycle = CreateProject("""
             public class Value {
@@ -197,7 +197,7 @@ public sealed class InheritanceTests
 
     private static CxProject CreateProject(string source)
     {
-        var project = CxProject.CreateUnnamedApplicationProject();
+        var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse(source));
         return project;
     }
@@ -214,8 +214,8 @@ public sealed class InheritanceTests
                 project,
                 Path.Combine(outputDirectory, "Inheritance.cx"));
             return (
-                File.ReadAllText(Path.Combine(outputDirectory, "Unnamed.h")),
-                File.ReadAllText(Path.Combine(outputDirectory, "Unnamed.c")));
+                File.ReadAllText(Path.Combine(outputDirectory, "unnamed.h")),
+                File.ReadAllText(Path.Combine(outputDirectory, "unnamed.c")));
         }
         finally
         {

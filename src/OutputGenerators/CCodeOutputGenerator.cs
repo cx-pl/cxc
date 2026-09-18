@@ -18,9 +18,39 @@ public static partial class CCodeOutputGenerator
             throw new InternalCompilerException("Project is null");
         }
 
+        WriteCMakeListsFile(project, Path.Combine(Path.GetDirectoryName(filePath)!, "CMakeLists.txt"));
         WriteProjectHeaderFile(project, Path.Combine(Path.GetDirectoryName(filePath)!, $"{project.Name}.h"));
         WriteProjectSourceFile(project, Path.Combine(Path.GetDirectoryName(filePath)!, $"{project.Name}.c"));
     }
+
+    private static void WriteCMakeListsFile(CxProject project, string outputFilePath)
+    {
+        if (Path.Exists(outputFilePath)) return;
+
+        using var fileWriter = new StreamWriter(outputFilePath);
+
+        fileWriter.WriteLine("cmake_minimum_required(VERSION 3.31)");
+        fileWriter.WriteLine($"project({project.Name})");
+        fileWriter.WriteLine();
+
+        switch (project.Type)
+        {
+            case CxProjectType.Library:
+                fileWriter.WriteLine($"add_library({project.Name} SHARED {project.Name}.c)");
+                break;
+
+            case CxProjectType.Executable:
+                fileWriter.WriteLine($"add_executable({project.Name} {project.Name}.c)");
+                break;
+
+            default:
+                throw new ArgumentOutOfRangeException($"Invalid CxProjectType {project.Type}");
+        }
+
+        fileWriter.Flush();
+        fileWriter.Close();
+    }
+
 
     private static void WriteProjectHeaderFile(CxProject project, string outputFilePath)
     {

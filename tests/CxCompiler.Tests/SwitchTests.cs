@@ -144,7 +144,7 @@ public sealed class SwitchTests
                 project,
                 Path.Combine(outputDirectory, "Switch.cx"));
             var generatedSource = File.ReadAllText(
-                Path.Combine(outputDirectory, "Unnamed.c"));
+                Path.Combine(outputDirectory, "unnamed.c"));
 
             Assert.Contains("switch (value)", generatedSource);
             Assert.Contains("case 0:", generatedSource);
@@ -163,7 +163,7 @@ public sealed class SwitchTests
 
     private static CxProject CreateProject(string source)
     {
-        var project = CxProject.CreateUnnamedApplicationProject();
+        var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse(source));
         return project;
     }

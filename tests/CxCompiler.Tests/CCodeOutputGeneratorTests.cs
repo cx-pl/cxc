@@ -19,12 +19,12 @@ public sealed class CCodeOutputGeneratorTests
         var generatedSource = GenerateSource(source);
 
         Assert.Contains(
-            "CX_STRING_DEF(CX_ID_2(Unnamed, __string_",
+            "CX_STRING_DEF(CX_ID_2(unnamed, __string_",
             generatedSource);
         Assert.Contains("\"Hello world!\");", generatedSource);
-        Assert.Contains("void CX_ID_2(Unnamed, Main)()", generatedSource);
+        Assert.Contains("void CX_ID_2(unnamed, Main)()", generatedSource);
         Assert.Contains(
-            "CX_ID_4(cxcore, System, Console, WriteLine)(&CX_ID_2(Unnamed, __string_",
+            "CX_ID_4(cxcore, System, Console, WriteLine)(&CX_ID_2(unnamed, __string_",
             generatedSource);
     }
 
@@ -46,13 +46,13 @@ public sealed class CCodeOutputGeneratorTests
 
         var generatedSource = GenerateSource(source);
 
-        Assert.Contains("CX_ID_3(Unnamed, Print, _2)(", generatedSource);
+        Assert.Contains("CX_ID_3(unnamed, Print, _2)(", generatedSource);
         Assert.Contains("return value;", generatedSource);
     }
 
     private static string GenerateSource(string source)
     {
-        var project = CxProject.CreateUnnamedApplicationProject();
+        var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse(source));
         new SemanticBinder().Bind(project);
         var outputDirectory = Path.Combine(
@@ -67,7 +67,7 @@ public sealed class CCodeOutputGeneratorTests
                 Path.Combine(outputDirectory, "HelloWorld.cx"));
 
             return File.ReadAllText(
-                Path.Combine(outputDirectory, "Unnamed.c"));
+                Path.Combine(outputDirectory, "unnamed.c"));
         }
         finally
         {

@@ -81,12 +81,12 @@ public sealed class ConditionalExpressionTests
                 project,
                 Path.Combine(outputDirectory, "Conditional.cx"));
             var generatedSource = File.ReadAllText(
-                Path.Combine(outputDirectory, "Unnamed.c"));
+                Path.Combine(outputDirectory, "unnamed.c"));
 
             Assert.Contains("CX_STRING_DEF", generatedSource);
             Assert.Contains("\"yes\"", generatedSource);
             Assert.Contains("\"no\"", generatedSource);
-            Assert.Contains("return (condition ? &CX_ID_2(Unnamed, __string_", generatedSource);
+            Assert.Contains("return (condition ? &CX_ID_2(unnamed, __string_", generatedSource);
         }
         finally
         {
@@ -99,7 +99,7 @@ public sealed class ConditionalExpressionTests
 
     private static CxProject CreateProject(string source)
     {
-        var project = CxProject.CreateUnnamedApplicationProject();
+        var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse(source));
         return project;
     }

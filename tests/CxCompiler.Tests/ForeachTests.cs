@@ -109,7 +109,7 @@ public sealed class ForeachTests
                 project,
                 Path.Combine(outputDirectory, "Foreach.cx"));
             var generatedSource = File.ReadAllText(
-                Path.Combine(outputDirectory, "Unnamed.c"));
+                Path.Combine(outputDirectory, "unnamed.c"));
 
             Assert.Contains(
                 "struct CX_ID_3(cxcore, System, Array)* __cx_foreach_collection_value = values;",
@@ -133,7 +133,7 @@ public sealed class ForeachTests
 
     private static CxProject CreateProject(string source)
     {
-        var project = CxProject.CreateUnnamedApplicationProject();
+        var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse(source));
         return project;
     }

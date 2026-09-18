@@ -75,14 +75,14 @@ public sealed class EnumTests
 
         var (header, source) = GenerateOutput(project);
 
-        Assert.Contains("typedef enum CX_ID_3(Unnamed, Drawing, Color) {", header);
-        Assert.Contains("CX_ID_4(Unnamed, Drawing, Color, Red),", header);
-        Assert.Contains("CX_ID_4(Unnamed, Drawing, Color, Green) = 5,", header);
-        Assert.Contains("} CX_ID_3(Unnamed, Drawing, Color);", header);
+        Assert.Contains("typedef enum CX_ID_3(unnamed, Drawing, Color) {", header);
+        Assert.Contains("CX_ID_4(unnamed, Drawing, Color, Red),", header);
+        Assert.Contains("CX_ID_4(unnamed, Drawing, Color, Green) = 5,", header);
+        Assert.Contains("} CX_ID_3(unnamed, Drawing, Color);", header);
         Assert.Contains(
-            "CX_ID_3(Unnamed, Drawing, Color) CX_ID_3(Unnamed, Drawing, Favorite)()",
+            "CX_ID_3(unnamed, Drawing, Color) CX_ID_3(unnamed, Drawing, Favorite)()",
             source);
-        Assert.Contains("return CX_ID_4(Unnamed, Drawing, Color, Green);", source);
+        Assert.Contains("return CX_ID_4(unnamed, Drawing, Color, Green);", source);
     }
 
     [Fact]
@@ -103,8 +103,8 @@ public sealed class EnumTests
             """);
         var typeException = Assert.Throws<CompilationErrorException>(
             () => new SemanticBinder().Bind(crossEnum));
-        Assert.Contains("returns 'Unnamed.Direction'", typeException.Message);
-        Assert.Contains("'Unnamed.Color' is required", typeException.Message);
+        Assert.Contains("returns 'unnamed.Direction'", typeException.Message);
+        Assert.Contains("'unnamed.Color' is required", typeException.Message);
     }
 
     [Fact]
@@ -136,7 +136,7 @@ public sealed class EnumTests
 
     private static CxProject CreateProject(string source)
     {
-        var project = CxProject.CreateUnnamedApplicationProject();
+        var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse(source));
         return project;
     }
@@ -153,8 +153,8 @@ public sealed class EnumTests
                 project,
                 Path.Combine(outputDirectory, "Enums.cx"));
             return (
-                File.ReadAllText(Path.Combine(outputDirectory, "Unnamed.h")),
-                File.ReadAllText(Path.Combine(outputDirectory, "Unnamed.c")));
+                File.ReadAllText(Path.Combine(outputDirectory, "unnamed.h")),
+                File.ReadAllText(Path.Combine(outputDirectory, "unnamed.c")));
         }
         finally
         {

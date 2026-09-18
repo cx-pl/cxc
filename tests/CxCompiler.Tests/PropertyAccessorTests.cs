@@ -10,7 +10,7 @@ public sealed class PropertyAccessorTests
     [Fact]
     public void PreservesConstTypesAndConstMethodReceiversInCSignatures()
     {
-        var project = CxProject.CreateUnnamedApplicationProject();
+        var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse("""
             public struct Character {
                 public extern char Lower() const;
@@ -32,12 +32,12 @@ public sealed class PropertyAccessorTests
             CCodeOutputGenerator.GenerateOutput(
                 project,
                 Path.Combine(outputDirectory, "ConstSignatures.cx"));
-            var header = File.ReadAllText(Path.Combine(outputDirectory, "Unnamed.h"));
+            var header = File.ReadAllText(Path.Combine(outputDirectory, "unnamed.h"));
 
-            Assert.Contains("const struct CX_ID_2(Unnamed, Character)* __this", header);
+            Assert.Contains("const struct CX_ID_2(unnamed, Character)* __this", header);
             Assert.Contains("const struct CX_ID_3(cxcore, System, String)* value", header);
             Assert.Contains(
-                "extern CX_EXPORT const struct CX_ID_3(cxcore, System, String)* CX_ID_4(Unnamed, Output, Empty, __const_get)()",
+                "extern CX_EXPORT const struct CX_ID_3(cxcore, System, String)* CX_ID_4(unnamed, Output, Empty, __const_get)()",
                 header);
         }
         finally
@@ -52,7 +52,7 @@ public sealed class PropertyAccessorTests
     [Fact]
     public void PreservesAccessorParametersAndEmitsMatchingCSignatures()
     {
-        var project = CxProject.CreateUnnamedApplicationProject();
+        var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse("""
             public class Container<T> {
                 public T Item {
@@ -82,13 +82,13 @@ public sealed class PropertyAccessorTests
             CCodeOutputGenerator.GenerateOutput(
                 project,
                 Path.Combine(outputDirectory, "Properties.cx"));
-            var header = File.ReadAllText(Path.Combine(outputDirectory, "Unnamed.h"));
+            var header = File.ReadAllText(Path.Combine(outputDirectory, "unnamed.h"));
 
-            Assert.Contains("CX_ID_4(Unnamed, Container, Item, __const_get)", header);
-            Assert.Contains("const struct CX_ID_2(Unnamed, Container)* __this", header);
+            Assert.Contains("CX_ID_4(unnamed, Container, Item, __const_get)", header);
+            Assert.Contains("const struct CX_ID_2(unnamed, Container)* __this", header);
             Assert.Contains("cx_uint index", header);
             Assert.Contains("void* __returnValue", header);
-            Assert.Contains("CX_ID_4(Unnamed, Container, Item, __set)", header);
+            Assert.Contains("CX_ID_4(unnamed, Container, Item, __set)", header);
             Assert.Contains("void* value", header);
         }
         finally

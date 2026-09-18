@@ -3,6 +3,5 @@
 public enum CxProjectType
 {
     Library = 0,
-    Application = 1,
-    Test = 2
+    Executable = 1
 }

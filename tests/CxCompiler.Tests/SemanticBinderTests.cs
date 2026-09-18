@@ -49,7 +49,7 @@ public sealed class SemanticBinderTests
         var statement = Assert.IsType<ExpressionStatement>(Assert.Single(main.Body!));
         var invocation = Assert.IsType<InvocationExpression>(statement.Expression);
         Assert.NotNull(invocation.TargetSymbol);
-        Assert.Equal("Unnamed", invocation.TargetSymbol.ModuleName);
+        Assert.Equal("unnamed", invocation.TargetSymbol.ModuleName);
         Assert.Equal("Example.Helper", invocation.TargetSymbol.FullName.ToString());
     }
 
@@ -160,7 +160,7 @@ public sealed class SemanticBinderTests
 
     private static CxProject CreateProject(string source)
     {
-        var project = CxProject.CreateUnnamedApplicationProject();
+        var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse(source));
         return project;
     }

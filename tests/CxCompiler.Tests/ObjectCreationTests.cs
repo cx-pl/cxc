@@ -143,15 +143,15 @@ public sealed class ObjectCreationTests
         new SemanticBinder().Bind(project);
         var generatedSource = GenerateSource(project);
 
-        Assert.Contains("CX_INIT_VTABLE(__this, CX_ID_2(Unnamed, Widget));", generatedSource);
-        Assert.Contains("cx_object_new((cx_uint)sizeof( struct CX_ID_2(Unnamed, Widget)))", generatedSource);
-        Assert.Contains("CX_ID_3(Unnamed, Widget, __constructor)(__cx_new_0 =", generatedSource);
-        Assert.Contains("CX_ID_3(Unnamed, Number, __constructor)(&__cx_new_0, 7)", generatedSource);
+        Assert.Contains("CX_INIT_VTABLE(__this, CX_ID_2(unnamed, Widget));", generatedSource);
+        Assert.Contains("cx_object_new((cx_uint)sizeof( struct CX_ID_2(unnamed, Widget)))", generatedSource);
+        Assert.Contains("CX_ID_3(unnamed, Widget, __constructor)(__cx_new_0 =", generatedSource);
+        Assert.Contains("CX_ID_3(unnamed, Number, __constructor)(&__cx_new_0, 7)", generatedSource);
     }
 
     private static CxProject CreateProject(string source)
     {
-        var project = CxProject.CreateUnnamedApplicationProject();
+        var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse(source));
         return project;
     }
@@ -167,7 +167,7 @@ public sealed class ObjectCreationTests
             CCodeOutputGenerator.GenerateOutput(
                 project,
                 Path.Combine(outputDirectory, "Construction.cx"));
-            return File.ReadAllText(Path.Combine(outputDirectory, "Unnamed.c"));
+            return File.ReadAllText(Path.Combine(outputDirectory, "unnamed.c"));
         }
         finally
         {

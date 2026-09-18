@@ -136,7 +136,7 @@ public sealed class ArrayExpressionTests
                 project,
                 Path.Combine(outputDirectory, "Arrays.cx"));
             var generatedSource = File.ReadAllText(
-                Path.Combine(outputDirectory, "Unnamed.c"));
+                Path.Combine(outputDirectory, "unnamed.c"));
 
             Assert.Contains(
                 "cx_array_new((cx_uint)(3), (cx_uint)sizeof(cx_int))",
@@ -159,7 +159,7 @@ public sealed class ArrayExpressionTests
 
     private static CxProject CreateProject(string source)
     {
-        var project = CxProject.CreateUnnamedApplicationProject();
+        var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse(source));
         return project;
     }

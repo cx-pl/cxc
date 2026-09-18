@@ -76,7 +76,7 @@ public sealed class LoopExitTests
                 project,
                 Path.Combine(outputDirectory, "LoopExits.cx"));
             var generatedSource = File.ReadAllText(
-                Path.Combine(outputDirectory, "Unnamed.c"));
+                Path.Combine(outputDirectory, "unnamed.c"));
 
             Assert.Contains("continue;", generatedSource);
             Assert.Contains("break;", generatedSource);
@@ -92,7 +92,7 @@ public sealed class LoopExitTests
 
     private static CxProject CreateProject(string source)
     {
-        var project = CxProject.CreateUnnamedApplicationProject();
+        var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse(source));
         return project;
     }

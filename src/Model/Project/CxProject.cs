@@ -13,21 +13,12 @@ public class CxProject
     private List<CompilationContext> _compilationContexts = new List<CompilationContext>();
     public IReadOnlyList<CompilationContext> CompilationContexts => _compilationContexts.AsReadOnly();
 
-    public static CxProject CreateUnnamedApplicationProject() => new()
+    public static CxProject CreateDefaultApplicationProject(string name = "unnamed") => new()
     {
-        Name = "Unnamed",
-        Version = "0.0",
-        Type = CxProjectType.Application,
+        Name = name,
+        Version = "1.0",
+        Type = CxProjectType.Executable,
     };
-
-    //public CxProject(string name, string version, string description, string author, CxProjectType type)
-    //{
-    //    Name = name;
-    //    Version = version;
-    //    Description = description;
-    //    Author = author;
-    //    Type = type;
-    //}
 
     public void AddCompilationContext(CompilationContext context)
     {

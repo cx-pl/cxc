@@ -1980,7 +1980,7 @@ public sealed class SemanticBinder
         if (receiverType is ConstType || receiver is null && function.Const)
         {
             candidates = candidates
-                .Where(candidate => candidate.Symbol.Declaration?.Const == true)
+                .Where(candidate => candidate.Symbol.Declaration?.Const == true || candidate.Symbol.Declaration?.IsStatic == true)
                 .ToArray();
         }
 
@@ -2670,7 +2670,9 @@ public sealed class SemanticBinder
 
     private static bool IsNumeric(TypeBase type)
     {
-        return IsInteger(type) ||
+        return 
+            IsType(type, BuiltInSystemTypes.Char) ||
+            IsInteger(type) ||
             IsType(type, BuiltInSystemTypes.Float) ||
             IsType(type, BuiltInSystemTypes.Double);
     }

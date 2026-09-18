@@ -57,11 +57,11 @@ public sealed class VirtualDispatchTests
 
         var (_, source) = GenerateOutput(project);
 
-        Assert.Contains("CX_VTABLE_ENTRY(CX_ID_3(Unnamed, Parent, Value))", source);
-        Assert.Contains("CX_VTABLE_ENTRY(CX_ID_3(Unnamed, Child, Value))", source);
+        Assert.Contains("CX_VTABLE_ENTRY(CX_ID_3(unnamed, Parent, Value))", source);
+        Assert.Contains("CX_VTABLE_ENTRY(CX_ID_3(unnamed, Child, Value))", source);
         Assert.Contains("CX_GET_VTABLE(value))[1]", source);
-        Assert.Contains("CX_ID_2(Unnamed, Parent)* value = (", source);
-        Assert.Contains("CX_ID_2(Unnamed, Parent)*)(", source);
+        Assert.Contains("CX_ID_2(unnamed, Parent)* value = (", source);
+        Assert.Contains("CX_ID_2(unnamed, Parent)*)(", source);
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public sealed class VirtualDispatchTests
 
     private static CxProject CreateProject(string source)
     {
-        var project = CxProject.CreateUnnamedApplicationProject();
+        var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse(source));
         return project;
     }
@@ -125,8 +125,8 @@ public sealed class VirtualDispatchTests
                 project,
                 Path.Combine(outputDirectory, "Virtual.cx"));
             return (
-                File.ReadAllText(Path.Combine(outputDirectory, "Unnamed.h")),
-                File.ReadAllText(Path.Combine(outputDirectory, "Unnamed.c")));
+                File.ReadAllText(Path.Combine(outputDirectory, "unnamed.h")),
+                File.ReadAllText(Path.Combine(outputDirectory, "unnamed.c")));
         }
         finally
         {

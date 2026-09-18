@@ -178,15 +178,15 @@ public sealed class PropertyExpressionTests
         var source = GenerateSource(project);
 
         Assert.Contains("cx_int __cx_property_value_0;", source);
-        Assert.Contains("CX_ID_4(Unnamed, Values, Number, __get)(other)", source);
-        Assert.Contains("CX_ID_4(Unnamed, Values, Number, __set)(__this, __cx_property_value_0 =", source);
-        Assert.Contains("CX_ID_4(Unnamed, Values, Item, __const_get)(__this, 0u)", source);
-        Assert.Contains("CX_ID_4(Unnamed, Values, Count, __get)()", source);
+        Assert.Contains("CX_ID_4(unnamed, Values, Number, __get)(other)", source);
+        Assert.Contains("CX_ID_4(unnamed, Values, Number, __set)(__this, __cx_property_value_0 =", source);
+        Assert.Contains("CX_ID_4(unnamed, Values, Item, __const_get)(__this, 0u)", source);
+        Assert.Contains("CX_ID_4(unnamed, Values, Count, __get)()", source);
     }
 
     private static CxProject CreateProject(string source)
     {
-        var project = CxProject.CreateUnnamedApplicationProject();
+        var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse(source));
         return project;
     }
@@ -210,7 +210,7 @@ public sealed class PropertyExpressionTests
             CCodeOutputGenerator.GenerateOutput(
                 project,
                 Path.Combine(outputDirectory, "Properties.cx"));
-            return File.ReadAllText(Path.Combine(outputDirectory, "Unnamed.c"));
+            return File.ReadAllText(Path.Combine(outputDirectory, "unnamed.c"));
         }
         finally
         {

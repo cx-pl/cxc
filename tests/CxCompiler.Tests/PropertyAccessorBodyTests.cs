@@ -32,11 +32,11 @@ public sealed class PropertyAccessorBodyTests
 
         var source = GenerateSource(project);
         Assert.Contains(
-            "CX_ID_4(Unnamed, Counter, Value, __const_get)(const struct CX_ID_2(Unnamed, Counter)* __this)",
+            "CX_ID_4(unnamed, Counter, Value, __const_get)(const struct CX_ID_2(unnamed, Counter)* __this)",
             source);
         Assert.Contains("return __this->_value;", source);
         Assert.Contains(
-            "CX_ID_4(Unnamed, Counter, Value, __set)(struct CX_ID_2(Unnamed, Counter)* __this, cx_int value)",
+            "CX_ID_4(unnamed, Counter, Value, __set)(struct CX_ID_2(unnamed, Counter)* __this, cx_int value)",
             source);
         Assert.Contains("__this->_value = value;", source);
     }
@@ -65,7 +65,7 @@ public sealed class PropertyAccessorBodyTests
 
         var source = GenerateSource(project);
         Assert.Contains(
-            "CX_ID_4(Unnamed, Values, Item, __set)(struct CX_ID_2(Unnamed, Values)* __this, cx_uint index, cx_uint value)",
+            "CX_ID_4(unnamed, Values, Item, __set)(struct CX_ID_2(unnamed, Values)* __this, cx_uint index, cx_uint value)",
             source);
         Assert.Contains("__this->_last = (index + value);", source);
     }
@@ -87,9 +87,9 @@ public sealed class PropertyAccessorBodyTests
         new SemanticBinder().Bind(project);
         var source = GenerateSource(project);
 
-        Assert.Contains("CX_ID_4(Unnamed, Settings, Current, __get)()", source);
-        Assert.Contains("return CX_ID_3(Unnamed, Settings, _current);", source);
-        Assert.Contains("CX_ID_4(Unnamed, Settings, Current, __set)(cx_int value)", source);
+        Assert.Contains("CX_ID_4(unnamed, Settings, Current, __get)()", source);
+        Assert.Contains("return CX_ID_3(unnamed, Settings, _current);", source);
+        Assert.Contains("CX_ID_4(unnamed, Settings, Current, __set)(cx_int value)", source);
     }
 
     [Fact]
@@ -124,7 +124,7 @@ public sealed class PropertyAccessorBodyTests
 
     private static CxProject CreateProject(string source)
     {
-        var project = CxProject.CreateUnnamedApplicationProject();
+        var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse(source));
         return project;
     }
@@ -148,7 +148,7 @@ public sealed class PropertyAccessorBodyTests
             CCodeOutputGenerator.GenerateOutput(
                 project,
                 Path.Combine(outputDirectory, "PropertyBodies.cx"));
-            return File.ReadAllText(Path.Combine(outputDirectory, "Unnamed.c"));
+            return File.ReadAllText(Path.Combine(outputDirectory, "unnamed.c"));
         }
         finally
         {
