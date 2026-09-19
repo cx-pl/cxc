@@ -117,6 +117,11 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
             return new ThisExpression();
         }
 
+        if (context.expression() is { } parenthesizedExpression)
+        {
+            return Visit(parenthesizedExpression);
+        }
+
         if (context.arrayCreationExpression() is { } arrayCreation)
         {
             var elementTypeContext = arrayCreation.arrayElementType();

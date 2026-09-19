@@ -453,6 +453,7 @@ primaryExpressionStart
 	: literal
 	| Identifier
 	| This
+	| LeftParen expression RightParen
 	| arrayCreationExpression
 	| New typeName functionInvocation
 	;

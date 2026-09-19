@@ -2326,25 +2326,37 @@ public sealed class SemanticBinder
         LocalScope scope)
     {
         var operandType = BindExpression(unary.Operand, function, imports, scope);
-        if (unary.Operator is "++" or "--" &&
-            unary.Operand is not IdentifierExpression and
-            not ArrayAccessExpression and
-            not MemberAccessExpression)
-        {
-            throw new CompilationErrorException(
-                $"Operator '{unary.Operator}' requires an assignable value.");
-        }
+        var valueType = UnwrapConst(operandType);
         if (unary.Operator is "++" or "--")
         {
+            if (unary.Operand is not IdentifierExpression and
+                not ArrayAccessExpression and
+                not MemberAccessExpression)
+            {
+                throw new CompilationErrorException(
+                    $"Operator '{unary.Operator}' requires an assignable value.");
+            }
+            if (operandType is ConstType)
+            {
+                throw new CompilationErrorException(
+                    $"Operator '{unary.Operator}' requires a writable value.");
+            }
+            if (unary.Operand is IdentifierExpression { TargetProperty: not null } or
+                MemberAccessExpression { TargetProperty: not null } or
+                ArrayAccessExpression { TargetProperty: not null })
+            {
+                throw new CompilationErrorException(
+                    $"Operator '{unary.Operator}' on properties is not supported yet.");
+            }
             ValidateWritableField(unary.Operand);
         }
 
         return unary.Operator switch
         {
-            "+" or "-" when IsNumeric(operandType) => operandType,
-            "~" when IsInteger(operandType) => operandType,
-            "!" when IsType(operandType, BuiltInSystemTypes.Bool) => BuiltInSystemTypes.Bool,
-            "++" or "--" when IsNumeric(operandType) => operandType,
+            "+" or "-" when IsNumeric(valueType) => valueType,
+            "~" when IsInteger(valueType) => valueType,
+            "!" when IsType(valueType, BuiltInSystemTypes.Bool) => BuiltInSystemTypes.Bool,
+            "++" or "--" when IsNumeric(valueType) => valueType,
             _ => throw new CompilationErrorException(
                 $"Operator '{unary.Operator}' cannot be applied to '{GetTypeName(operandType)}'."),
         };
@@ -2679,7 +2691,7 @@ public sealed class SemanticBinder
 
     private static bool IsInteger(TypeBase type)
     {
-        return type is IntTypeBase;
+        return UnwrapConst(type) is IntTypeBase;
     }
 
     private static bool IsSwitchType(TypeBase type)
