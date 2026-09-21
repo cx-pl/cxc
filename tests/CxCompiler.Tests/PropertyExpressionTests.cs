@@ -184,6 +184,26 @@ public sealed class PropertyExpressionTests
         Assert.Contains("CX_ID_4(unnamed, Values, Count, __get)()", source);
     }
 
+    [Fact]
+    public void EmitsPointerReceiverForExplicitThisOnStructProperty()
+    {
+        var project = CreateProject("""
+            public struct Value {
+                public int Number { extern const get; }
+
+                public int Read() const {
+                    return this.Number;
+                }
+            }
+            """);
+        new SemanticBinder().Bind(project);
+
+        var source = GenerateSource(project);
+
+        Assert.Contains("CX_ID_4(unnamed, Value, Number, __const_get)(__this)", source);
+        Assert.DoesNotContain("CX_ID_4(unnamed, Value, Number, __const_get)(&(__this))", source);
+    }
+
     private static CxProject CreateProject(string source)
     {
         var project = CxProject.CreateDefaultApplicationProject();

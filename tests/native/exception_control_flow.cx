@@ -1,0 +1,44 @@
+class ExceptionProbe {
+    public static int State;
+}
+
+int RunFinallyTransfers() {
+    ExceptionProbe.State = 0;
+    while (true) {
+        try {
+            ExceptionProbe.State = ExceptionProbe.State + 1;
+            break;
+        }
+        finally {
+            ExceptionProbe.State = ExceptionProbe.State + 10;
+        }
+    }
+    for (int index = 0; index < 1; index++) {
+        try {
+            continue;
+        }
+        finally {
+            ExceptionProbe.State = ExceptionProbe.State + 100;
+        }
+    }
+    try {
+        try {
+            return 7;
+        }
+        finally {
+            ExceptionProbe.State = ExceptionProbe.State + 1000;
+        }
+    }
+    finally {
+        ExceptionProbe.State = ExceptionProbe.State + 10000;
+    }
+}
+
+int ReturnFromFinally() {
+    try {
+        return 1;
+    }
+    finally {
+        return 2;
+    }
+}

@@ -53,6 +53,8 @@ public static partial class CCodeOutputGenerator
             writer.Write(string.Join(", ", parameters));
             writer.WriteLine(") {");
             writer.IncreaseIndent();
+            var context = new StatementWriteContext(functionDeclaration);
+            context.WriteDeclarations(writer);
 
             if (functionDeclaration is ConstructorDeclaration constructor)
             {
@@ -99,8 +101,9 @@ public static partial class CCodeOutputGenerator
 
             foreach (var statement in functionDeclaration.Body)
             {
-                WriteStatement(writer, statement, functionDeclaration, moduleName);
+                WriteStatement(writer, statement, functionDeclaration, moduleName, context);
             }
+            context.WriteEpilogue(writer);
 
             writer.DecreaseIndent();
             writer.WriteLine("}");
@@ -132,11 +135,14 @@ public static partial class CCodeOutputGenerator
             writer.Write(string.Join(", ", parameters));
             writer.WriteLine(") {");
             writer.IncreaseIndent();
+            var context = new StatementWriteContext(function);
+            context.WriteDeclarations(writer);
 
             foreach (var statement in function.Body!)
             {
-                WriteStatement(writer, statement, function, moduleName);
+                WriteStatement(writer, statement, function, moduleName, context);
             }
+            context.WriteEpilogue(writer);
 
             writer.DecreaseIndent();
             writer.WriteLine("}");
@@ -148,7 +154,8 @@ public static partial class CCodeOutputGenerator
         IndentingWriter writer,
         StatementBase statement,
         FunctionDeclaration functionDeclaration,
-        string moduleName)
+        string moduleName,
+        StatementWriteContext context)
     {
         WriteExpressionTemporaries(writer, GetDirectExpressions(statement));
 
@@ -160,10 +167,7 @@ public static partial class CCodeOutputGenerator
                 break;
 
             case ReturnStatement returnStatement:
-                var expression = returnStatement.Expression is null
-                    ? string.Empty
-                    : $" {ToCExpressionAsType(returnStatement.Expression, functionDeclaration.ReturnType, functionDeclaration, moduleName)}";
-                writer.WriteLine($"return{expression};");
+                WriteReturnStatement(writer, returnStatement, functionDeclaration, moduleName, context);
                 break;
 
             case LocalVariableDeclarationStatement localDeclaration:
@@ -183,7 +187,7 @@ public static partial class CCodeOutputGenerator
                 writer.IncreaseIndent();
                 foreach (var nestedStatement in block.Statements)
                 {
-                    WriteStatement(writer, nestedStatement, functionDeclaration, moduleName);
+                    WriteStatement(writer, nestedStatement, functionDeclaration, moduleName, context);
                 }
                 writer.DecreaseIndent();
                 writer.WriteLine("}");
@@ -196,7 +200,8 @@ public static partial class CCodeOutputGenerator
                     writer,
                     ifStatement.ThenStatement,
                     functionDeclaration,
-                    moduleName);
+                    moduleName,
+                    context);
                 if (ifStatement.ElseStatement is not null)
                 {
                     writer.WriteLine("else");
@@ -204,7 +209,8 @@ public static partial class CCodeOutputGenerator
                         writer,
                         ifStatement.ElseStatement,
                         functionDeclaration,
-                        moduleName);
+                        moduleName,
+                        context);
                 }
                 break;
 
@@ -213,31 +219,53 @@ public static partial class CCodeOutputGenerator
                     writer,
                     switchStatement,
                     functionDeclaration,
-                    moduleName);
+                    moduleName,
+                    context);
                 break;
 
             case WhileStatement whileStatement:
+                var whileTarget = context.PushLoop();
                 writer.WriteLine(
                     $"while ({ToCExpression(whileStatement.Condition, functionDeclaration, moduleName)})");
-                WriteControlledStatement(
-                    writer,
-                    whileStatement.Body,
-                    functionDeclaration,
-                    moduleName);
+                writer.WriteLine("{");
+                writer.IncreaseIndent();
+                WriteStatement(writer, whileStatement.Body, functionDeclaration, moduleName, context);
+                if (whileTarget.ContinueLabelUsed)
+                {
+                    writer.WriteLine($"{whileTarget.ContinueLabel}:;");
+                }
+                writer.DecreaseIndent();
+                writer.WriteLine("}");
+                if (whileTarget.BreakLabelUsed)
+                {
+                    writer.WriteLine($"{whileTarget.BreakLabel}:;");
+                }
+                context.PopLoop(whileTarget);
                 break;
 
             case DoWhileStatement doWhileStatement:
+                var doTarget = context.PushLoop();
                 writer.WriteLine("do");
-                WriteControlledStatement(
-                    writer,
-                    doWhileStatement.Body,
-                    functionDeclaration,
-                    moduleName);
+                writer.WriteLine("{");
+                writer.IncreaseIndent();
+                WriteStatement(writer, doWhileStatement.Body, functionDeclaration, moduleName, context);
+                if (doTarget.ContinueLabelUsed)
+                {
+                    writer.WriteLine($"{doTarget.ContinueLabel}:;");
+                }
+                writer.DecreaseIndent();
+                writer.WriteLine("}");
                 writer.WriteLine(
                     $"while ({ToCExpression(doWhileStatement.Condition, functionDeclaration, moduleName)});");
+                if (doTarget.BreakLabelUsed)
+                {
+                    writer.WriteLine($"{doTarget.BreakLabel}:;");
+                }
+                context.PopLoop(doTarget);
                 break;
 
             case ForStatement forStatement:
+                var forTarget = context.PushLoop();
                 var forInitializer = forStatement.DeclarationInitializer is not null
                     ? ToCForDeclaration(
                         forStatement.DeclarationInitializer,
@@ -251,11 +279,20 @@ public static partial class CCodeOutputGenerator
                 var iterators = string.Join(", ", forStatement.Iterators.Select(
                     expression => ToCExpression(expression, functionDeclaration, moduleName)));
                 writer.WriteLine($"for ({forInitializer}; {condition}; {iterators})");
-                WriteControlledStatement(
-                    writer,
-                    forStatement.Body,
-                    functionDeclaration,
-                    moduleName);
+                writer.WriteLine("{");
+                writer.IncreaseIndent();
+                WriteStatement(writer, forStatement.Body, functionDeclaration, moduleName, context);
+                if (forTarget.ContinueLabelUsed)
+                {
+                    writer.WriteLine($"{forTarget.ContinueLabel}:;");
+                }
+                writer.DecreaseIndent();
+                writer.WriteLine("}");
+                if (forTarget.BreakLabelUsed)
+                {
+                    writer.WriteLine($"{forTarget.BreakLabel}:;");
+                }
+                context.PopLoop(forTarget);
                 break;
 
             case ForeachStatement foreachStatement:
@@ -263,7 +300,8 @@ public static partial class CCodeOutputGenerator
                     writer,
                     foreachStatement,
                     functionDeclaration,
-                    moduleName);
+                    moduleName,
+                    context);
                 break;
 
             case ThrowStatement throwStatement:
@@ -273,7 +311,7 @@ public static partial class CCodeOutputGenerator
                 break;
 
             case TryStatement tryStatement:
-                WriteTryStatement(writer, tryStatement, functionDeclaration, moduleName);
+                WriteTryStatement(writer, tryStatement, functionDeclaration, moduleName, context);
                 break;
 
             case EmptyStatement:
@@ -281,11 +319,11 @@ public static partial class CCodeOutputGenerator
                 break;
 
             case BreakStatement:
-                writer.WriteLine("break;");
+                WriteLoopTransfer(writer, context, context.BreakTarget, isContinue: false);
                 break;
 
             case ContinueStatement:
-                writer.WriteLine("continue;");
+                WriteLoopTransfer(writer, context, context.ContinueTarget, isContinue: true);
                 break;
 
             default:
@@ -337,47 +375,364 @@ public static partial class CCodeOutputGenerator
 
     }
 
+    private static void WriteReturnStatement(
+        IndentingWriter writer,
+        ReturnStatement statement,
+        FunctionDeclaration function,
+        string moduleName,
+        StatementWriteContext context)
+    {
+        var expression = statement.Expression is null
+            ? null
+            : ToCExpressionAsType(statement.Expression, function.ReturnType, function, moduleName);
+        var target = FlowTransfer.Return(context.NextTransferId(), context.FrameCount);
+        var crossesFinally = context.CrossesFinally(target);
+        var leavesExceptionRegion = context.FrameCount > target.FrameDepth ||
+            context.InCatch || context.InFinallyBody;
+        if (!crossesFinally && !leavesExceptionRegion)
+        {
+            writer.WriteLine(expression is null ? "return;" : $"return {expression};");
+            return;
+        }
+
+        if (expression is not null)
+        {
+            writer.WriteLine($"__cx_return_value = {expression};");
+        }
+        context.HasStructuredReturn = true;
+        if (crossesFinally)
+        {
+            WriteStructuredTransfer(writer, context, target);
+        }
+        else
+        {
+            context.WriteCatchClear(writer);
+            writer.WriteLine($"__cx_transfer = {target.Id};");
+            context.WriteFramePops(writer, target.FrameDepth);
+            writer.WriteLine($"if (__cx_transfer == {target.Id}) " +
+                (function.ReturnType is VoidType ? "return;" : "return __cx_return_value;"));
+        }
+    }
+
+    private static void WriteLoopTransfer(
+        IndentingWriter writer,
+        StatementWriteContext context,
+        FlowTarget target,
+        bool isContinue)
+    {
+        if (isContinue)
+        {
+            target.ContinueLabelUsed = context.FrameCount > target.FrameDepth ||
+                context.FinallyDepth > target.FinallyDepth || context.InCatch ||
+                context.InFinallyBody;
+        }
+        else
+        {
+            target.BreakLabelUsed = context.FrameCount > target.FrameDepth ||
+                context.FinallyDepth > target.FinallyDepth || context.InCatch ||
+                context.InFinallyBody;
+        }
+        var transfer = new FlowTransfer(
+            context.NextTransferId(),
+            isContinue ? target.ContinueLabel! : target.BreakLabel,
+            target.FinallyDepth,
+            target.FrameDepth,
+            IsReturn: false);
+        if (!context.CrossesFinally(transfer))
+        {
+            context.WriteCatchClear(writer);
+            if (context.FrameCount > transfer.FrameDepth || context.InCatch || context.InFinallyBody)
+            {
+                writer.WriteLine($"__cx_transfer = {transfer.Id};");
+            }
+            context.WriteFramePops(writer, transfer.FrameDepth);
+            writer.WriteLine(context.FrameCount > transfer.FrameDepth || context.InCatch || context.InFinallyBody
+                ? $"if (__cx_transfer == {transfer.Id}) goto {transfer.DestinationLabel};"
+                : isContinue ? "continue;" : "break;");
+            return;
+        }
+        WriteStructuredTransfer(writer, context, transfer);
+    }
+
+    private static void WriteStructuredTransfer(
+        IndentingWriter writer,
+        StatementWriteContext context,
+        FlowTransfer transfer)
+    {
+        var finallyScope = context.RegisterWithInnermostFinally(transfer);
+        context.WriteCatchClear(writer);
+        writer.WriteLine($"__cx_transfer = {transfer.Id};");
+        context.WriteFramePops(writer, finallyScope.EntryFrameDepth);
+        writer.WriteLine($"if (__cx_transfer == {transfer.Id}) goto {finallyScope.CleanupLabel};");
+    }
+
+    private static void WriteTransferDispatch(
+        IndentingWriter writer,
+        StatementWriteContext context,
+        FinallyScope scope)
+    {
+        foreach (var transfer in scope.Transfers)
+        {
+            writer.WriteLine($"if (__cx_transfer == {transfer.Id})");
+            writer.WriteLine("{");
+            writer.IncreaseIndent();
+            if (context.CrossesFinally(transfer))
+            {
+                var outer = context.RegisterWithInnermostFinally(transfer);
+                context.WriteFramePops(writer, outer.EntryFrameDepth);
+                writer.WriteLine($"goto {outer.CleanupLabel};");
+            }
+            else
+            {
+                context.WriteFramePops(writer, transfer.FrameDepth);
+                writer.WriteLine(transfer.IsReturn
+                    ? context.Function.ReturnType is VoidType
+                        ? "return;"
+                        : "return __cx_return_value;"
+                    : $"goto {transfer.DestinationLabel};");
+            }
+            writer.DecreaseIndent();
+            writer.WriteLine("}");
+        }
+    }
+
+    private sealed class StatementWriteContext(FunctionDeclaration function)
+    {
+        private int _nextId;
+        private int _catchDepth;
+        private int _finallyBodyDepth;
+        private readonly List<string> _frames = [];
+        private readonly List<FinallyScope> _finallyScopes = [];
+        private readonly Stack<FlowTarget> _breakTargets = [];
+        private readonly Stack<FlowTarget> _continueTargets = [];
+
+        public FunctionDeclaration Function { get; } = function;
+        public int FrameCount => _frames.Count;
+        public int FinallyDepth => _finallyScopes.Count;
+        public bool InCatch => _catchDepth > 0;
+        public bool InFinallyBody => _finallyBodyDepth > 0;
+        public bool HasStructuredReturn { get; set; }
+        public FlowTarget BreakTarget => _breakTargets.Peek();
+        public FlowTarget ContinueTarget => _continueTargets.Peek();
+
+        public int NextTransferId() => ++_nextId;
+
+        public void WriteDeclarations(IndentingWriter writer)
+        {
+            writer.WriteLine("cx_int __cx_transfer = 0;");
+            writer.WriteLine("(void)&__cx_transfer;");
+            if (Function.ReturnType is not VoidType)
+            {
+                writer.WriteLine($"{Function.ReturnType.ToCIdentifier(false)} __cx_return_value;");
+                writer.WriteLine("(void)&__cx_return_value;");
+            }
+        }
+
+        public void WriteEpilogue(IndentingWriter writer)
+        {
+            if (HasStructuredReturn && Function.ReturnType is not VoidType)
+            {
+                writer.WriteLine("return __cx_return_value;");
+            }
+        }
+
+        public string PushExceptionFrame()
+        {
+            var name = $"__cx_exception_frame_{++_nextId}";
+            _frames.Add(name);
+            return name;
+        }
+
+        public void PopExceptionFrame(string name)
+        {
+            if (_frames.Count == 0 || _frames[^1] != name)
+            {
+                throw new InternalCompilerException("Exception frame generation stack is unbalanced.");
+            }
+            _frames.RemoveAt(_frames.Count - 1);
+        }
+
+        public FinallyScope PushFinally()
+        {
+            var id = ++_nextId;
+            var scope = new FinallyScope(
+                $"__cx_finally_frame_{id}",
+                $"__cx_finally_{id}",
+                _frames.Count);
+            _finallyScopes.Add(scope);
+            _frames.Add(scope.FrameName);
+            return scope;
+        }
+
+        public void LeaveFinallyProtectedRegion(FinallyScope scope)
+        {
+            PopExceptionFrame(scope.FrameName);
+            if (_finallyScopes.Count == 0 || _finallyScopes[^1] != scope)
+            {
+                throw new InternalCompilerException("Finally generation stack is unbalanced.");
+            }
+            _finallyScopes.RemoveAt(_finallyScopes.Count - 1);
+        }
+
+        public bool CrossesFinally(FlowTransfer transfer) =>
+            _finallyScopes.Count > transfer.FinallyDepth;
+
+        public FinallyScope RegisterWithInnermostFinally(FlowTransfer transfer)
+        {
+            var scope = _finallyScopes[^1];
+            scope.Transfers.Add(transfer);
+            return scope;
+        }
+
+        public FlowTarget PushLoop()
+        {
+            var id = ++_nextId;
+            var target = new FlowTarget(
+                $"__cx_break_{id}",
+                $"__cx_continue_{id}",
+                _finallyScopes.Count,
+                _frames.Count);
+            _breakTargets.Push(target);
+            _continueTargets.Push(target);
+            return target;
+        }
+
+        public void PopLoop(FlowTarget target)
+        {
+            if (_breakTargets.Pop() != target || _continueTargets.Pop() != target)
+            {
+                throw new InternalCompilerException("Loop generation stack is unbalanced.");
+            }
+        }
+
+        public FlowTarget PushSwitch()
+        {
+            var id = ++_nextId;
+            var target = new FlowTarget(
+                $"__cx_break_{id}",
+                null,
+                _finallyScopes.Count,
+                _frames.Count);
+            _breakTargets.Push(target);
+            return target;
+        }
+
+        public void PopSwitch(FlowTarget target)
+        {
+            if (_breakTargets.Pop() != target)
+            {
+                throw new InternalCompilerException("Switch generation stack is unbalanced.");
+            }
+        }
+
+        public void EnterCatch() => _catchDepth++;
+        public void LeaveCatch() => _catchDepth--;
+        public void EnterFinallyBody() => _finallyBodyDepth++;
+        public void LeaveFinallyBody() => _finallyBodyDepth--;
+
+        public void WriteCatchClear(IndentingWriter writer)
+        {
+            if (_catchDepth > 0)
+            {
+                writer.WriteLine("cx_exception_clear();");
+            }
+            else if (_frames.Count > 0 || _finallyBodyDepth > 0)
+            {
+                writer.WriteLine("if (cx_exception_pending()) cx_exception_clear();");
+            }
+        }
+
+        public void WriteFramePops(IndentingWriter writer, int targetDepth)
+        {
+            for (var index = _frames.Count - 1; index >= targetDepth; index--)
+            {
+                writer.WriteLine($"cx_exception_pop(&{_frames[index]});");
+            }
+        }
+    }
+
+    private sealed class FlowTarget(
+        string breakLabel,
+        string? continueLabel,
+        int finallyDepth,
+        int frameDepth)
+    {
+        public string BreakLabel { get; } = breakLabel;
+        public string? ContinueLabel { get; } = continueLabel;
+        public int FinallyDepth { get; } = finallyDepth;
+        public int FrameDepth { get; } = frameDepth;
+        public bool BreakLabelUsed { get; set; }
+        public bool ContinueLabelUsed { get; set; }
+    }
+
+    private sealed record FlowTransfer(
+        int Id,
+        string? DestinationLabel,
+        int FinallyDepth,
+        int FrameDepth,
+        bool IsReturn)
+    {
+        public static FlowTransfer Return(int id, int frameDepth) =>
+            new(id, null, 0, 0, IsReturn: true);
+    }
+
+    private sealed record FinallyScope(
+        string FrameName,
+        string CleanupLabel,
+        int EntryFrameDepth)
+    {
+        public List<FlowTransfer> Transfers { get; } = [];
+    }
+
     private static void WriteTryStatement(
         IndentingWriter writer,
         TryStatement statement,
         FunctionDeclaration functionDeclaration,
-        string moduleName)
+        string moduleName,
+        StatementWriteContext context)
     {
         writer.WriteLine("{");
         writer.IncreaseIndent();
 
         if (statement.FinallyBody is not null)
         {
-            writer.WriteLine("struct cx_exception_frame __cx_finally_frame;");
-            writer.WriteLine("cx_exception_push(&__cx_finally_frame);");
-            writer.WriteLine("if (setjmp(__cx_finally_frame.environment) == 0)");
+            var finallyScope = context.PushFinally();
+            writer.WriteLine($"struct cx_exception_frame {finallyScope.FrameName};");
+            writer.WriteLine($"cx_exception_push(&{finallyScope.FrameName});");
+            writer.WriteLine($"if (setjmp({finallyScope.FrameName}.environment) == 0)");
             writer.WriteLine("{");
             writer.IncreaseIndent();
-            WriteTryAndCatches(writer, statement, functionDeclaration, moduleName);
-            writer.WriteLine("cx_exception_pop(&__cx_finally_frame);");
+            WriteTryAndCatches(writer, statement, functionDeclaration, moduleName, context);
+            writer.WriteLine($"cx_exception_pop(&{finallyScope.FrameName});");
             writer.DecreaseIndent();
             writer.WriteLine("}");
             writer.WriteLine("else");
             writer.WriteLine("{");
             writer.IncreaseIndent();
-            writer.WriteLine("cx_exception_pop(&__cx_finally_frame);");
+            writer.WriteLine($"cx_exception_pop(&{finallyScope.FrameName});");
             writer.DecreaseIndent();
             writer.WriteLine("}");
+            context.LeaveFinallyProtectedRegion(finallyScope);
+            writer.WriteLine($"{finallyScope.CleanupLabel}:;");
+            context.EnterFinallyBody();
             WriteControlledStatement(
                 writer,
                 statement.FinallyBody,
                 functionDeclaration,
-                moduleName);
+                moduleName,
+                context);
+            context.LeaveFinallyBody();
             writer.WriteLine("if (cx_exception_pending())");
             writer.WriteLine("{");
             writer.IncreaseIndent();
             writer.WriteLine("CX_RETHROW();");
             writer.DecreaseIndent();
             writer.WriteLine("}");
+            WriteTransferDispatch(writer, context, finallyScope);
         }
         else
         {
-            WriteTryAndCatches(writer, statement, functionDeclaration, moduleName);
+            WriteTryAndCatches(writer, statement, functionDeclaration, moduleName, context);
         }
 
         writer.DecreaseIndent();
@@ -388,21 +743,24 @@ public static partial class CCodeOutputGenerator
         IndentingWriter writer,
         TryStatement statement,
         FunctionDeclaration functionDeclaration,
-        string moduleName)
+        string moduleName,
+        StatementWriteContext context)
     {
-        writer.WriteLine("struct cx_exception_frame __cx_exception_frame;");
-        writer.WriteLine("cx_exception_push(&__cx_exception_frame);");
-        writer.WriteLine("if (setjmp(__cx_exception_frame.environment) == 0)");
+        var frameName = context.PushExceptionFrame();
+        writer.WriteLine($"struct cx_exception_frame {frameName};");
+        writer.WriteLine($"cx_exception_push(&{frameName});");
+        writer.WriteLine($"if (setjmp({frameName}.environment) == 0)");
         writer.WriteLine("{");
         writer.IncreaseIndent();
-        WriteStatement(writer, statement.Body, functionDeclaration, moduleName);
-        writer.WriteLine("cx_exception_pop(&__cx_exception_frame);");
+        WriteStatement(writer, statement.Body, functionDeclaration, moduleName, context);
+        writer.WriteLine($"cx_exception_pop(&{frameName});");
         writer.DecreaseIndent();
         writer.WriteLine("}");
         writer.WriteLine("else");
         writer.WriteLine("{");
         writer.IncreaseIndent();
-        writer.WriteLine("cx_exception_pop(&__cx_exception_frame);");
+        context.PopExceptionFrame(frameName);
+        writer.WriteLine($"cx_exception_pop(&{frameName});");
 
         foreach (var clause in statement.CatchClauses)
         {
@@ -432,7 +790,9 @@ public static partial class CCodeOutputGenerator
                 writer.IncreaseIndent();
             }
 
-            WriteStatement(writer, clause.Body, functionDeclaration, moduleName);
+            context.EnterCatch();
+            WriteStatement(writer, clause.Body, functionDeclaration, moduleName, context);
+            context.LeaveCatch();
             writer.WriteLine("cx_exception_clear();");
 
             if (clause.Filter is not null)
@@ -458,17 +818,18 @@ public static partial class CCodeOutputGenerator
         IndentingWriter writer,
         StatementBase statement,
         FunctionDeclaration functionDeclaration,
-        string moduleName)
+        string moduleName,
+        StatementWriteContext context)
     {
         if (statement is BlockStatement)
         {
-            WriteStatement(writer, statement, functionDeclaration, moduleName);
+            WriteStatement(writer, statement, functionDeclaration, moduleName, context);
             return;
         }
 
         writer.WriteLine("{");
         writer.IncreaseIndent();
-        WriteStatement(writer, statement, functionDeclaration, moduleName);
+        WriteStatement(writer, statement, functionDeclaration, moduleName, context);
         writer.DecreaseIndent();
         writer.WriteLine("}");
     }
@@ -477,7 +838,8 @@ public static partial class CCodeOutputGenerator
         IndentingWriter writer,
         ForeachStatement statement,
         FunctionDeclaration functionDeclaration,
-        string moduleName)
+        string moduleName,
+        StatementWriteContext context)
     {
         var variableType = statement.VariableType ?? throw new InternalCompilerException(
             $"Foreach variable '{statement.VariableName}' is not bound.");
@@ -486,6 +848,7 @@ public static partial class CCodeOutputGenerator
 
         writer.WriteLine("{");
         writer.IncreaseIndent();
+        var loopTarget = context.PushLoop();
         writer.WriteLine(
             $"struct CX_ID_3(cxcore, System, Array)* {collectionName} = " +
             $"{ToCExpression(statement.Collection, functionDeclaration, moduleName)};");
@@ -501,15 +864,24 @@ public static partial class CCodeOutputGenerator
         {
             foreach (var nestedStatement in block.Statements)
             {
-                WriteStatement(writer, nestedStatement, functionDeclaration, moduleName);
+                WriteStatement(writer, nestedStatement, functionDeclaration, moduleName, context);
             }
         }
         else
         {
-            WriteStatement(writer, statement.Body, functionDeclaration, moduleName);
+            WriteStatement(writer, statement.Body, functionDeclaration, moduleName, context);
+        }
+        if (loopTarget.ContinueLabelUsed)
+        {
+            writer.WriteLine($"{loopTarget.ContinueLabel}:;");
         }
         writer.DecreaseIndent();
         writer.WriteLine("}");
+        if (loopTarget.BreakLabelUsed)
+        {
+            writer.WriteLine($"{loopTarget.BreakLabel}:;");
+        }
+        context.PopLoop(loopTarget);
         writer.DecreaseIndent();
         writer.WriteLine("}");
     }
@@ -518,8 +890,10 @@ public static partial class CCodeOutputGenerator
         IndentingWriter writer,
         SwitchStatement statement,
         FunctionDeclaration functionDeclaration,
-        string moduleName)
+        string moduleName,
+        StatementWriteContext context)
     {
+        var switchTarget = context.PushSwitch();
         writer.WriteLine(
             $"switch ({ToCExpression(statement.Expression, functionDeclaration, moduleName)})");
         writer.WriteLine("{");
@@ -542,13 +916,18 @@ public static partial class CCodeOutputGenerator
             writer.IncreaseIndent();
             foreach (var nestedStatement in section.Statements)
             {
-                WriteStatement(writer, nestedStatement, functionDeclaration, moduleName);
+                WriteStatement(writer, nestedStatement, functionDeclaration, moduleName, context);
             }
             writer.DecreaseIndent();
             writer.WriteLine("}");
         }
         writer.DecreaseIndent();
         writer.WriteLine("}");
+        if (switchTarget.BreakLabelUsed)
+        {
+            writer.WriteLine($"{switchTarget.BreakLabel}:;");
+        }
+        context.PopSwitch(switchTarget);
     }
 
     private static string ToCForDeclaration(
@@ -752,7 +1131,7 @@ public static partial class CCodeOutputGenerator
                     moduleName);
                 arguments.Add(ToCBaseReceiver(
                     receiver,
-                    IsCReferenceType(invocation.Receiver.InferredType!),
+                    IsCPointerReceiver(invocation.Receiver),
                     invocation.ReceiverBaseDepth));
             }
         }
@@ -866,8 +1245,7 @@ public static partial class CCodeOutputGenerator
             else
             {
                 var receiverExpression = ToCExpression(receiver, functionDeclaration, moduleName);
-                var receiverIsPointer = receiver.InferredType is not null &&
-                    IsCReferenceType(receiver.InferredType);
+                var receiverIsPointer = IsCPointerReceiver(receiver);
                 arguments.Add(ToCBaseReceiver(
                     receiverExpression,
                     receiverIsPointer,
@@ -946,6 +1324,12 @@ public static partial class CCodeOutputGenerator
         type = type is ConstType constType ? constType.UnderlyingType : type;
         return type is ReferenceTypeBase or ArrayType ||
             type is NamedType { ClassType: ClassType.Class };
+    }
+
+    private static bool IsCPointerReceiver(ExpressionBase receiver)
+    {
+        return receiver is ThisExpression ||
+            receiver.InferredType is not null && IsCReferenceType(receiver.InferredType);
     }
 
     private static string ToCExpressionAsType(

@@ -20,7 +20,6 @@ public sealed class SemanticBinder
     private int _loopDepth;
     private int _breakableDepth;
     private int _catchDepth;
-    private int _exceptionRegionDepth;
     private int _objectCreationIndex;
     private int _propertyAssignmentIndex;
     private int _interfaceReceiverIndex;
@@ -1069,7 +1068,6 @@ public sealed class SemanticBinder
                     break;
 
                 case ReturnStatement returnStatement:
-                    ValidateExceptionRegionControlTransfer("return");
                     BindReturnStatement(returnStatement, function, imports, scope);
                     break;
 
@@ -1136,12 +1134,10 @@ public sealed class SemanticBinder
                     break;
 
                 case BreakStatement:
-                    ValidateExceptionRegionControlTransfer("break");
                     ValidateBreak();
                     break;
 
                 case ContinueStatement:
-                    ValidateExceptionRegionControlTransfer("continue");
                     ValidateContinue();
                     break;
 
@@ -1382,15 +1378,7 @@ public sealed class SemanticBinder
         IReadOnlyList<QualifiedIdentifier> imports,
         LocalScope parentScope)
     {
-        _exceptionRegionDepth++;
-        try
-        {
-            BindStatement(statement.Body, function, imports, new LocalScope(parentScope));
-        }
-        finally
-        {
-            _exceptionRegionDepth--;
-        }
+        BindStatement(statement.Body, function, imports, new LocalScope(parentScope));
 
         foreach (var clause in statement.CatchClauses)
         {
@@ -1418,7 +1406,6 @@ public sealed class SemanticBinder
             }
 
             _catchDepth++;
-            _exceptionRegionDepth++;
             try
             {
                 BindStatement(clause.Body, function, imports, catchScope);
@@ -1426,34 +1413,16 @@ public sealed class SemanticBinder
             finally
             {
                 _catchDepth--;
-                _exceptionRegionDepth--;
             }
         }
 
         if (statement.FinallyBody is not null)
         {
-            _exceptionRegionDepth++;
-            try
-            {
-                BindStatement(
-                    statement.FinallyBody,
-                    function,
-                    imports,
-                    new LocalScope(parentScope));
-            }
-            finally
-            {
-                _exceptionRegionDepth--;
-            }
-        }
-    }
-
-    private void ValidateExceptionRegionControlTransfer(string keyword)
-    {
-        if (_exceptionRegionDepth > 0)
-        {
-            throw new CompilationErrorException(
-                $"The '{keyword}' statement inside try, catch, or finally is not supported yet.");
+            BindStatement(
+                statement.FinallyBody,
+                function,
+                imports,
+                new LocalScope(parentScope));
         }
     }
 
@@ -2974,6 +2943,7 @@ public sealed class SemanticBinder
         return statement switch
         {
             ReturnStatement => true,
+            ThrowStatement => true,
             BlockStatement block => AlwaysReturns(block.Statements),
             IfStatement { ElseStatement: not null } conditional =>
                 AlwaysReturns(conditional.ThenStatement) &&
@@ -2982,6 +2952,10 @@ public sealed class SemanticBinder
                 switchStatement.Sections.SelectMany(section => section.Labels).Any(label => label.IsDefault) &&
                 switchStatement.Sections.Count > 0 &&
                 switchStatement.Sections.All(section => AlwaysReturns(section.Statements)),
+            TryStatement tryStatement =>
+                (tryStatement.FinallyBody is not null && AlwaysReturns(tryStatement.FinallyBody)) ||
+                (AlwaysReturns(tryStatement.Body) &&
+                    tryStatement.CatchClauses.All(clause => AlwaysReturns(clause.Body))),
             _ => false,
         };
     }
