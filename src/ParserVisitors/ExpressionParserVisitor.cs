@@ -52,7 +52,31 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
     public override ExpressionBase VisitExclusiveOrExpression([NotNull] CxParser.ExclusiveOrExpressionContext context) => BuildBinary(context);
     public override ExpressionBase VisitAndExpression([NotNull] CxParser.AndExpressionContext context) => BuildBinary(context);
     public override ExpressionBase VisitEqualityExpression([NotNull] CxParser.EqualityExpressionContext context) => BuildBinary(context);
-    public override ExpressionBase VisitRelationalExpression([NotNull] CxParser.RelationalExpressionContext context) => BuildBinary(context);
+    public override ExpressionBase VisitRelationalExpression([NotNull] CxParser.RelationalExpressionContext context)
+    {
+        ExpressionBase expression = Visit(context.shiftExpression(0));
+        var shiftIndex = 1;
+        foreach (var child in context.children.Skip(1))
+        {
+            if (child is ITerminalNode { Symbol.Type: CxLexer.Is })
+            {
+                continue;
+            }
+            if (child is CxParser.TypeNameContext typeName)
+            {
+                expression = new TypeTestExpression(
+                    expression,
+                    new TypeNameContextVisitor().Visit(typeName));
+                continue;
+            }
+            if (child is ITerminalNode terminal)
+            {
+                var right = Visit(context.shiftExpression(shiftIndex++));
+                expression = new BinaryExpression(expression, terminal.GetText(), right);
+            }
+        }
+        return expression;
+    }
     public override ExpressionBase VisitShiftExpression([NotNull] CxParser.ShiftExpressionContext context) => BuildBinary(context);
     public override ExpressionBase VisitAdditiveExpression([NotNull] CxParser.AdditiveExpressionContext context) => BuildBinary(context);
     public override ExpressionBase VisitMultiplicativeExpression([NotNull] CxParser.MultiplicativeExpressionContext context) => BuildBinary(context);
@@ -63,7 +87,13 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
         {
             return Visit(primaryExpression);
         }
-        if (context.LeftParen() is not null || context.Await() is not null)
+        if (context.LeftParen() is not null)
+        {
+            return new CastExpression(
+                new TypeNameContextVisitor().Visit(context.typeName()),
+                Visit(context.unaryExpression()));
+        }
+        if (context.Await() is not null)
         {
             throw new InternalCompilerException($"Unary expression '{context.GetText()}' is not yet supported.");
         }

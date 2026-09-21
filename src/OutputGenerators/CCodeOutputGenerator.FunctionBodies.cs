@@ -618,6 +618,10 @@ public static partial class CCodeOutputGenerator
             ThisExpression => "__this",
             BinaryExpression binary =>
                 ToCBinaryExpression(binary, functionDeclaration, moduleName),
+            CastExpression cast =>
+                ToCCastExpression(cast, functionDeclaration, moduleName),
+            TypeTestExpression typeTest =>
+                ToCTypeTestExpression(typeTest, functionDeclaration, moduleName),
             NullCoalescingExpression coalescing =>
                 ToCNullCoalescingExpression(coalescing, functionDeclaration, moduleName),
             ConditionalExpression conditional =>
@@ -1000,6 +1004,80 @@ public static partial class CCodeOutputGenerator
         }
 
         return $"({targetType.ToCIdentifier(false)})({value})";
+    }
+
+    private static string ToCCastExpression(
+        CastExpression expression,
+        FunctionDeclaration functionDeclaration,
+        string moduleName)
+    {
+        var targetType = expression.TargetType;
+        var targetClassType = GetReferenceClassType(targetType);
+        var targetCType = targetType.ToCIdentifier(false);
+        if (expression.Operand.InferredType is NullType)
+        {
+            return targetClassType == ClassType.Interface
+                ? $"({targetCType}){{ CX_NULL, CX_NULL }}"
+                : $"({targetCType})CX_NULL";
+        }
+
+        var sourceClassType = GetReferenceClassType(expression.Operand.InferredType!);
+        var value = ToCExpression(expression.Operand, functionDeclaration, moduleName);
+        var typeInfo = $"&{GetTypeInfoIdentifier(targetType).ToCIdentifier()}";
+        return (sourceClassType, targetClassType) switch
+        {
+            (ClassType.Class, ClassType.Class) =>
+                $"({targetCType})cx_checked_cast_object((cx_ptr)({value}), {typeInfo})",
+            (ClassType.Interface, ClassType.Class) =>
+                $"({targetCType})cx_checked_cast_interface({value}, {typeInfo})",
+            (ClassType.Class, ClassType.Interface) =>
+                $"cx_checked_cast_object_to_interface((cx_ptr)({value}), {typeInfo})",
+            (ClassType.Interface, ClassType.Interface) =>
+                $"cx_checked_cast_interface_to_interface({value}, {typeInfo})",
+            _ => throw new InternalCompilerException("Checked cast requires reference types."),
+        };
+    }
+
+    private static string ToCTypeTestExpression(
+        TypeTestExpression expression,
+        FunctionDeclaration functionDeclaration,
+        string moduleName)
+    {
+        if (expression.Operand.InferredType is NullType)
+        {
+            return "CX_FALSE";
+        }
+
+        var value = ToCExpression(expression.Operand, functionDeclaration, moduleName);
+        var typeInfo = $"&{GetTypeInfoIdentifier(expression.TargetType).ToCIdentifier()}";
+        return GetReferenceClassType(expression.Operand.InferredType!) == ClassType.Interface
+            ? $"cx_is_interface({value}, {typeInfo})"
+            : $"cx_is_object((cx_ptr)({value}), {typeInfo})";
+    }
+
+    private static ClassType GetReferenceClassType(TypeBase type)
+    {
+        type = type is ConstType constType ? constType.UnderlyingType : type;
+        return type switch
+        {
+            ObjectType or StringType => ClassType.Class,
+            NamedType namedType when namedType.ClassType is ClassType.Class or ClassType.Interface =>
+                namedType.ClassType,
+            _ => throw new InternalCompilerException($"Type '{type.FullName}' is not a reference type."),
+        };
+    }
+
+    private static QualifiedIdentifier GetTypeInfoIdentifier(TypeBase type)
+    {
+        type = type is ConstType constType ? constType.UnderlyingType : type;
+        var fullName = type switch
+        {
+            ObjectType => new QualifiedIdentifier("cxcore", "System", "Object"),
+            StringType => new QualifiedIdentifier("cxcore", "System", "String"),
+            NamedType namedType => namedType.ResolvedTypeFullName,
+            _ => throw new InternalCompilerException($"Type '{type.FullName}' has no runtime type information."),
+        };
+        return new QualifiedIdentifier(fullName, "__typeinfo");
     }
 
     private static string ToCObjectCreationExpression(
@@ -1457,6 +1535,8 @@ public static partial class CCodeOutputGenerator
             MemberAccessExpression memberAccess => [memberAccess.Target],
             InvocationExpression invocation => [invocation.Target, .. invocation.Arguments],
             BinaryExpression binary => [binary.Left, binary.Right],
+            CastExpression cast => [cast.Operand],
+            TypeTestExpression typeTest => [typeTest.Operand],
             ConditionalExpression conditional =>
                 [conditional.Condition, conditional.WhenTrue, conditional.WhenFalse],
             NullCoalescingExpression coalescing => [coalescing.Left, coalescing.Right],

@@ -183,7 +183,7 @@ public sealed class NullExpressionTests
             Assert.Contains("((value) != CX_NULL ? (value) : &CX_ID_2(unnamed, __string_", generatedSource);
             Assert.Contains("((value)._obj != CX_NULL ? *(cx_int*)(value)._obj : 42)", generatedSource);
             Assert.Contains("((value)._obj == CX_NULL)", generatedSource);
-            Assert.Contains("return ( struct CX_ID_3(cxcore, System, Nullable)){ CX_NULL };", generatedSource);
+            Assert.Contains("return (struct CX_ID_3(cxcore, System, Nullable)){ CX_NULL };", generatedSource);
             Assert.Contains("return CX_NULL;", generatedSource);
         }
         finally

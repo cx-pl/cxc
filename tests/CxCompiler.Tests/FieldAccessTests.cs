@@ -191,7 +191,7 @@ public sealed class FieldAccessTests
         var (header, source) = Generate(project);
 
         Assert.Contains("cx_int value;", header);
-        Assert.Contains("extern  struct CX_ID_3(cxcore, System, String)* CX_ID_3(unnamed, Counter, Name);", header);
+        Assert.Contains("extern struct CX_ID_3(cxcore, System, String)* CX_ID_3(unnamed, Counter, Name);", header);
         Assert.Contains("CX_ID_3(unnamed, Counter, Name) = &CX_ID_2(unnamed, __string_", source);
         Assert.Contains("__this->value = 1;", source);
         Assert.Contains("__this->value = (other)->value;", source);

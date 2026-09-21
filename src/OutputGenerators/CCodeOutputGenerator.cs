@@ -603,7 +603,6 @@ public static partial class CCodeOutputGenerator
                     else
                     {
                         WriteVTableDefinition(writer, classDeclaration, moduleName);
-                        WriteTypeInfoDefinition(writer, classDeclaration, moduleName);
                         foreach (var table in classDeclaration.InterfaceDispatchTables)
                         {
                             WriteInterfaceVTableDefinition(
@@ -612,6 +611,8 @@ public static partial class CCodeOutputGenerator
                                 table,
                                 moduleName);
                         }
+                        WriteInterfaceRuntimeMap(writer, classDeclaration, moduleName);
+                        WriteTypeInfoDefinition(writer, classDeclaration, moduleName);
                     }
                     break;
             }
@@ -652,7 +653,15 @@ public static partial class CCodeOutputGenerator
                     _ => new QualifiedIdentifier("cxcore", BuiltInSystemTypes.Object.FullName),
                 };
                 var baseTypeTypeInfoName = new QualifiedIdentifier(baseTypeFullName, "__typeinfo");
-                writer.WriteLine($"CX_CLASS_TYPEINFO_DEF({classDeclaration.ToCIdentifier(moduleName, false)}, {nameIdentifier.ToCIdentifier()}, {namespaceIdentifier.ToCIdentifier()}, {baseTypeTypeInfoName.ToCIdentifier()}, 0x{GetTypeNameHash(classDeclaration.FullName, moduleName):X}, {flagsString});");
+                if (classDeclaration.InterfaceDispatchTables.Count == 0)
+                {
+                    writer.WriteLine($"CX_CLASS_TYPEINFO_DEF({classDeclaration.ToCIdentifier(moduleName, false)}, {nameIdentifier.ToCIdentifier()}, {namespaceIdentifier.ToCIdentifier()}, {baseTypeTypeInfoName.ToCIdentifier()}, 0x{GetTypeNameHash(classDeclaration.FullName, moduleName):X}, {flagsString});");
+                }
+                else
+                {
+                    var mapName = GetInterfaceRuntimeMapIdentifier(classDeclaration, moduleName).ToCIdentifier();
+                    writer.WriteLine($"CX_CLASS_TYPEINFO_WITH_INTERFACES_DEF({classDeclaration.ToCIdentifier(moduleName, false)}, {nameIdentifier.ToCIdentifier()}, {namespaceIdentifier.ToCIdentifier()}, {baseTypeTypeInfoName.ToCIdentifier()}, {mapName}, {classDeclaration.InterfaceDispatchTables.Count}, 0x{GetTypeNameHash(classDeclaration.FullName, moduleName):X}, {flagsString});");
+                }
             }
         }
         else if (classDeclaration.ClassType == ClassType.Interface)
@@ -740,7 +749,7 @@ public static partial class CCodeOutputGenerator
             moduleName).ToCIdentifier();
         writer.WriteLine(
             $"CX_BEGIN_INTERFACE_VTABLE_DEF({vtableName}, " +
-            $"{table.Interface.ToCIdentifier(moduleName, false)})");
+            $"{classDeclaration.ToCIdentifier(moduleName, false)})");
         foreach (var slot in table.Slots.OrderBy(slot => slot.Index))
         {
             writer.WriteLine(slot.Implementation is null
@@ -756,6 +765,41 @@ public static partial class CCodeOutputGenerator
             writer.WriteLine($"{{ .data = {targetVTable} }},");
         }
         writer.WriteLine("CX_END_VTABLE_DEF;");
+    }
+
+    private static void WriteInterfaceRuntimeMap(
+        IndentingWriter writer,
+        ClassDeclaration classDeclaration,
+        string moduleName)
+    {
+        if (classDeclaration.InterfaceDispatchTables.Count == 0)
+        {
+            return;
+        }
+
+        writer.WriteLine($"static const struct cx_interface_impl {GetInterfaceRuntimeMapIdentifier(classDeclaration, moduleName).ToCIdentifier()}[] = {{");
+        writer.IncreaseIndent();
+        foreach (var table in classDeclaration.InterfaceDispatchTables)
+        {
+            var interfaceTypeInfo = new QualifiedIdentifier(
+                moduleName,
+                table.Interface.FullName,
+                "__typeinfo").ToCIdentifier();
+            var vtable = GetInterfaceVTableIdentifier(
+                classDeclaration,
+                table.Interface,
+                moduleName).ToCIdentifier();
+            writer.WriteLine($"{{ &{interfaceTypeInfo}, {vtable} }},");
+        }
+        writer.DecreaseIndent();
+        writer.WriteLine("};");
+    }
+
+    private static QualifiedIdentifier GetInterfaceRuntimeMapIdentifier(
+        ClassDeclaration classDeclaration,
+        string moduleName)
+    {
+        return new QualifiedIdentifier(moduleName, classDeclaration.FullName, "__interfaces");
     }
 
     private static void WriteInterfaceDispatchThunks(

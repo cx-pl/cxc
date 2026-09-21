@@ -1589,6 +1589,14 @@ public sealed class SemanticBinder
                 type = BindBinary(binary, function, imports, scope);
                 break;
 
+            case CastExpression cast:
+                type = BindCast(cast, function, imports, scope);
+                break;
+
+            case TypeTestExpression typeTest:
+                type = BindTypeTest(typeTest, function, imports, scope);
+                break;
+
             case ConditionalExpression conditional:
                 type = BindConditional(conditional, function, imports, scope);
                 break;
@@ -2387,6 +2395,77 @@ public sealed class SemanticBinder
         var leftType = BindExpression(binary.Left, function, imports, scope);
         var rightType = BindExpression(binary.Right, function, imports, scope);
         return GetBinaryResultType(binary.Operator, leftType, rightType);
+    }
+
+    private TypeBase BindCast(
+        CastExpression cast,
+        FunctionDeclaration function,
+        IReadOnlyList<QualifiedIdentifier> imports,
+        LocalScope scope)
+    {
+        var currentNamespace = function.ParentClassDeclaration?.Namespace ?? function.Namespace;
+        ResolveTypeReference(cast.TargetType, currentNamespace, imports);
+        var sourceType = BindExpression(cast.Operand, function, imports, scope);
+        if (!IsPossibleExplicitReferenceConversion(sourceType, cast.TargetType))
+        {
+            throw new CompilationErrorException(
+                $"Cannot explicitly convert '{GetTypeName(sourceType)}' to " +
+                $"'{GetTypeName(cast.TargetType)}'.");
+        }
+        return cast.TargetType;
+    }
+
+    private TypeBase BindTypeTest(
+        TypeTestExpression typeTest,
+        FunctionDeclaration function,
+        IReadOnlyList<QualifiedIdentifier> imports,
+        LocalScope scope)
+    {
+        var currentNamespace = function.ParentClassDeclaration?.Namespace ?? function.Namespace;
+        ResolveTypeReference(typeTest.TargetType, currentNamespace, imports);
+        var sourceType = BindExpression(typeTest.Operand, function, imports, scope);
+        if (!IsPossibleExplicitReferenceConversion(sourceType, typeTest.TargetType))
+        {
+            throw new CompilationErrorException(
+                $"Type test from '{GetTypeName(sourceType)}' to " +
+                $"'{GetTypeName(typeTest.TargetType)}' can never succeed.");
+        }
+        return BuiltInSystemTypes.Bool;
+    }
+
+    private bool IsPossibleExplicitReferenceConversion(TypeBase sourceType, TypeBase targetType)
+    {
+        sourceType = UnwrapConst(sourceType);
+        targetType = UnwrapConst(targetType);
+        if (sourceType is NullType)
+        {
+            return GetClassDeclaration(targetType)?.ClassType is ClassType.Class or ClassType.Interface;
+        }
+
+        var source = GetClassDeclaration(sourceType);
+        var target = GetClassDeclaration(targetType);
+        if (source?.ClassType is not (ClassType.Class or ClassType.Interface) ||
+            target?.ClassType is not (ClassType.Class or ClassType.Interface))
+        {
+            return false;
+        }
+        if (ReferenceEquals(source, target) || CanAssign(targetType, sourceType) || CanAssign(sourceType, targetType))
+        {
+            return true;
+        }
+        if (source.ClassType == ClassType.Interface && target.ClassType == ClassType.Interface)
+        {
+            return true;
+        }
+        if (source.ClassType == ClassType.Class && target.ClassType == ClassType.Interface)
+        {
+            return !source.IsFinal;
+        }
+        if (source.ClassType == ClassType.Interface && target.ClassType == ClassType.Class)
+        {
+            return !target.IsFinal;
+        }
+        return false;
     }
 
     private TypeBase BindConditional(

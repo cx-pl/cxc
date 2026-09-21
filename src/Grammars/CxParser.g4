@@ -411,6 +411,7 @@ equalityExpression
 relationalExpression
 	: shiftExpression (
 		(Less | LessEqual | Greater | GreaterEqual) shiftExpression
+		| Is typeName
 	)*
 	;
 
