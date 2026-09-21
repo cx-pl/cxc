@@ -122,13 +122,14 @@ public static partial class CCodeOutputGenerator
                 }
                 writer.DecreaseIndent();
                 writer.WriteLine($"}} {enumName};");
+                writer.WriteLine($"CX_TYPEINFO_DECL({enumName});");
             }
             else if (declaration is ClassDeclaration classDeclaration)
             {
                 writer.WriteLine($"{classDeclaration.ToCIdentifier(moduleName)};");
 
                 var memberDeclarations = classDeclaration.MemberDeclarations.Declarations
-                    .Where(x => x is ClassDeclaration)
+                    .Where(x => x is ClassDeclaration or EnumDeclaration)
                     .ToArray();
                 if (memberDeclarations.Length != 0)
                 {
@@ -481,20 +482,25 @@ public static partial class CCodeOutputGenerator
     {
         List<QualifiedIdentifier> namespaces = [];
 
-        foreach (var declaration in declarations)
+        foreach (var declaration in EnumerateClasses(declarations))
         {
-            switch (declaration)
-            {
-                case ClassDeclaration classDeclaration:
-                    var nameIdentifier = new QualifiedIdentifier("__name", classDeclaration.FullName);
-                    writer.WriteLine($"CX_STRING_DEF({nameIdentifier.ToCIdentifier()}, \"{classDeclaration.Name}\");");
+            var nameIdentifier = new QualifiedIdentifier("__name", declaration.FullName);
+            writer.WriteLine($"CX_STRING_DEF({nameIdentifier.ToCIdentifier()}, \"{declaration.Name}\");");
 
-                    var @namespace = classDeclaration.Namespace;
-                    if (!namespaces.Contains(@namespace))
-                    {
-                        namespaces.Add(@namespace);
-                    }
-                    break;
+            var @namespace = declaration.Namespace;
+            if (!namespaces.Contains(@namespace))
+            {
+                namespaces.Add(@namespace);
+            }
+        }
+
+        foreach (var declaration in EnumerateEnums(declarations))
+        {
+            var nameIdentifier = new QualifiedIdentifier("__name", declaration.FullName);
+            writer.WriteLine($"CX_STRING_DEF({nameIdentifier.ToCIdentifier()}, \"{declaration.Name}\");");
+            if (!namespaces.Contains(declaration.Namespace))
+            {
+                namespaces.Add(declaration.Namespace);
             }
         }
 
@@ -589,34 +595,59 @@ public static partial class CCodeOutputGenerator
         IReadOnlyCollection<DeclarationBase> declarations,
         string moduleName)
     {
-        foreach (var declaration in declarations)
+        foreach (var classDeclaration in EnumerateClasses(declarations))
         {
             writer.WriteLine();
-
-            switch (declaration)
+            if (classDeclaration.ClassType == ClassType.Class && classDeclaration.IsStatic)
             {
-                case ClassDeclaration classDeclaration:
-                    if (classDeclaration.ClassType == ClassType.Class && classDeclaration.IsStatic)
-                    {
-                        WriteTypeInfoDefinition(writer, classDeclaration, moduleName);
-                    }
-                    else
-                    {
-                        WriteVTableDefinition(writer, classDeclaration, moduleName);
-                        foreach (var table in classDeclaration.InterfaceDispatchTables)
-                        {
-                            WriteInterfaceVTableDefinition(
-                                writer,
-                                classDeclaration,
-                                table,
-                                moduleName);
-                        }
-                        WriteInterfaceRuntimeMap(writer, classDeclaration, moduleName);
-                        WriteTypeInfoDefinition(writer, classDeclaration, moduleName);
-                    }
-                    break;
+                WriteReflectionMetadata(writer, classDeclaration, moduleName);
+                WriteTypeInfoDefinition(writer, classDeclaration, moduleName);
+                continue;
             }
+
+            WriteVTableDefinition(writer, classDeclaration, moduleName);
+            foreach (var table in classDeclaration.InterfaceDispatchTables)
+            {
+                WriteInterfaceVTableDefinition(writer, classDeclaration, table, moduleName);
+            }
+            WriteInterfaceRuntimeMap(writer, classDeclaration, moduleName);
+            WriteReflectionMetadata(writer, classDeclaration, moduleName);
+            WriteTypeInfoDefinition(writer, classDeclaration, moduleName);
         }
+
+        foreach (var enumDeclaration in EnumerateEnums(declarations))
+        {
+            writer.WriteLine();
+            WriteEnumTypeInfoDefinition(writer, enumDeclaration, moduleName);
+        }
+    }
+
+    private static void WriteEnumTypeInfoDefinition(
+        IndentingWriter writer,
+        EnumDeclaration declaration,
+        string moduleName)
+    {
+        var nameIdentifier = new QualifiedIdentifier("__name", declaration.FullName).ToCIdentifier();
+        var namespaceIdentifier = new QualifiedIdentifier("__namespace", declaration.Namespace).ToCIdentifier();
+        var enumName = declaration.ToCIdentifier(moduleName);
+        var visibility = declaration.Visibility switch
+        {
+            Visibility.Public => "CX_REFLECTION_FLAG_VISIBILITY_PUBLIC",
+            Visibility.Protected => "CX_REFLECTION_FLAG_VISIBILITY_PROTECTED",
+            Visibility.Internal => "CX_REFLECTION_FLAG_VISIBILITY_INTERNAL",
+            Visibility.Private => "CX_REFLECTION_FLAG_VISIBILITY_PRIVATE",
+            _ => "CX_REFLECTION_FLAG_VISIBILITY_HIDDEN",
+        };
+        writer.WriteLine($"struct CX_ID_4(cxcore, System, Reflection, TypeInfo) {new QualifiedIdentifier(moduleName, declaration.FullName, "__typeinfo").ToCIdentifier()} = {{");
+        writer.IncreaseIndent();
+        writer.WriteLine($".Hash = 0x{GetTypeNameHash(declaration.FullName, moduleName):X},");
+        writer.WriteLine($".Flags = {visibility} | CX_REFLECTION_FLAG_TYPE_ENUM,");
+        writer.WriteLine($".Size = sizeof({enumName}),");
+        writer.WriteLine($".Name = &{nameIdentifier},");
+        writer.WriteLine($".Namespace = &{namespaceIdentifier},");
+        writer.WriteLine(".BaseType = { ._obj = CX_NULL },");
+        writer.DecreaseIndent();
+        writer.WriteLine("};");
     }
 
     private static void WriteTypeInfoDefinition(
@@ -634,40 +665,47 @@ public static partial class CCodeOutputGenerator
         }
         string flagsString = string.Join(" | ", flags);
 
-        if (classDeclaration.ClassType == ClassType.Struct ||
-            moduleName == "cxcore" && classDeclaration.Name == "Object")
-        {
-            writer.WriteLine($"CX_STRUCT_TYPEINFO_DEF({classDeclaration.ToCIdentifier(moduleName, false)}, {nameIdentifier.ToCIdentifier()}, {namespaceIdentifier.ToCIdentifier()}, 0x{GetTypeNameHash(classDeclaration.FullName, moduleName):X}, {flagsString});");
-        }
-        else if (classDeclaration.ClassType == ClassType.Class)
-        {
-            if (classDeclaration.IsStatic)
+        var reflectedInterfaces = GetReflectedInterfaces(classDeclaration).ToArray();
+        var fields = classDeclaration.MemberDeclarations.Declarations.OfType<FieldDeclaration>().ToArray();
+        var functionCount = GetReflectionFunctionCount(classDeclaration);
+        var baseType = classDeclaration.ClassType == ClassType.Class && !classDeclaration.IsStatic &&
+            !(moduleName == "cxcore" && classDeclaration.Name == "Object")
+            ? classDeclaration.BaseClassType switch
             {
-                writer.WriteLine($"CX_STATIC_CLASS_TYPEINFO_DEF({classDeclaration.ToCIdentifier(moduleName, false)}, {nameIdentifier.ToCIdentifier()}, {namespaceIdentifier.ToCIdentifier()}, 0x{GetTypeNameHash(classDeclaration.FullName, moduleName):X}, {flagsString});");
+                NamedType namedType => $"&{new QualifiedIdentifier(namedType.ResolvedTypeFullName, "__typeinfo").ToCIdentifier()}",
+                _ => "&CX_ID_4(cxcore, System, Object, __typeinfo)",
             }
-            else
-            {
-                var baseTypeFullName = classDeclaration.BaseClassType switch
-                {
-                    NamedType namedType => namedType.ResolvedTypeFullName,
-                    _ => new QualifiedIdentifier("cxcore", BuiltInSystemTypes.Object.FullName),
-                };
-                var baseTypeTypeInfoName = new QualifiedIdentifier(baseTypeFullName, "__typeinfo");
-                if (classDeclaration.InterfaceDispatchTables.Count == 0)
-                {
-                    writer.WriteLine($"CX_CLASS_TYPEINFO_DEF({classDeclaration.ToCIdentifier(moduleName, false)}, {nameIdentifier.ToCIdentifier()}, {namespaceIdentifier.ToCIdentifier()}, {baseTypeTypeInfoName.ToCIdentifier()}, 0x{GetTypeNameHash(classDeclaration.FullName, moduleName):X}, {flagsString});");
-                }
-                else
-                {
-                    var mapName = GetInterfaceRuntimeMapIdentifier(classDeclaration, moduleName).ToCIdentifier();
-                    writer.WriteLine($"CX_CLASS_TYPEINFO_WITH_INTERFACES_DEF({classDeclaration.ToCIdentifier(moduleName, false)}, {nameIdentifier.ToCIdentifier()}, {namespaceIdentifier.ToCIdentifier()}, {baseTypeTypeInfoName.ToCIdentifier()}, {mapName}, {classDeclaration.InterfaceDispatchTables.Count}, 0x{GetTypeNameHash(classDeclaration.FullName, moduleName):X}, {flagsString});");
-                }
-            }
-        }
-        else if (classDeclaration.ClassType == ClassType.Interface)
-        {
-            writer.WriteLine($"CX_INTERFACE_TYPEINFO_DEF({classDeclaration.ToCIdentifier(moduleName, false)}, {nameIdentifier.ToCIdentifier()}, {namespaceIdentifier.ToCIdentifier()}, 0x{GetTypeNameHash(classDeclaration.FullName, moduleName):X}, {flagsString});");
-        }
+            : "CX_NULL";
+        var size = classDeclaration.IsStatic || classDeclaration.ClassType == ClassType.Interface
+            ? "0"
+            : $"sizeof({classDeclaration.ToCIdentifier(moduleName)})";
+        var interfaceMap = reflectedInterfaces.Length == 0
+            ? "CX_NULL"
+            : $"(cx_ptr){GetInterfaceRuntimeMapIdentifier(classDeclaration, moduleName).ToCIdentifier()}";
+        var fieldMap = fields.Length == 0
+            ? "CX_NULL"
+            : $"(cx_ptr){GetReflectionFieldsIdentifier(classDeclaration, moduleName).ToCIdentifier()}";
+        var functionMap = functionCount == 0
+            ? "CX_NULL"
+            : $"(cx_ptr){GetReflectionFunctionsIdentifier(classDeclaration, moduleName).ToCIdentifier()}";
+
+        writer.WriteLine($"struct CX_ID_4(cxcore, System, Reflection, TypeInfo) {new QualifiedIdentifier(moduleName, classDeclaration.FullName, "__typeinfo").ToCIdentifier()} = {{");
+        writer.IncreaseIndent();
+        writer.WriteLine($".Hash = 0x{GetTypeNameHash(classDeclaration.FullName, moduleName, classDeclaration.GenericTypeNames.Length):X},");
+        writer.WriteLine($".Flags = {flagsString},");
+        writer.WriteLine($".Size = {size},");
+        writer.WriteLine($".Name = &{nameIdentifier.ToCIdentifier()},");
+        writer.WriteLine($".Namespace = &{namespaceIdentifier.ToCIdentifier()},");
+        writer.WriteLine($".BaseType = {{ ._obj = {baseType} }},");
+        writer.WriteLine($".RuntimeInterfaces = {interfaceMap},");
+        writer.WriteLine($".RuntimeInterfaceCount = {reflectedInterfaces.Length},");
+        writer.WriteLine($".RuntimeFields = {fieldMap},");
+        writer.WriteLine($".RuntimeFieldCount = {fields.Length},");
+        writer.WriteLine($".RuntimeFunctions = {functionMap},");
+        writer.WriteLine($".RuntimeFunctionCount = {functionCount},");
+        writer.WriteLine($".GenericArity = {classDeclaration.GenericTypeNames.Length},");
+        writer.DecreaseIndent();
+        writer.WriteLine("};");
     }
 
     private static IEnumerable<string> GetTypeInfoFlags(ClassDeclaration classDeclaration)
@@ -683,6 +721,11 @@ public static partial class CCodeOutputGenerator
         if (classDeclaration.IsFinal)
         {
             yield return "CX_REFLECTION_FLAG_FINAL";
+        }
+        if (classDeclaration.GenericTypeNames.Length > 0)
+        {
+            yield return "CX_REFLECTION_FLAG_GENERIC";
+            yield return "CX_REFLECTION_FLAG_TYPE_GENERIC";
         }
 
         if (classDeclaration.Visibility == Visibility.Public)
@@ -772,28 +815,210 @@ public static partial class CCodeOutputGenerator
         ClassDeclaration classDeclaration,
         string moduleName)
     {
-        if (classDeclaration.InterfaceDispatchTables.Count == 0)
+        var interfaces = GetReflectedInterfaces(classDeclaration).ToArray();
+        if (interfaces.Length == 0)
         {
             return;
         }
 
         writer.WriteLine($"static const struct cx_interface_impl {GetInterfaceRuntimeMapIdentifier(classDeclaration, moduleName).ToCIdentifier()}[] = {{");
         writer.IncreaseIndent();
-        foreach (var table in classDeclaration.InterfaceDispatchTables)
+        foreach (var @interface in interfaces)
         {
             var interfaceTypeInfo = new QualifiedIdentifier(
                 moduleName,
-                table.Interface.FullName,
+                @interface.FullName,
                 "__typeinfo").ToCIdentifier();
-            var vtable = GetInterfaceVTableIdentifier(
-                classDeclaration,
-                table.Interface,
-                moduleName).ToCIdentifier();
+            var vtable = classDeclaration.ClassType == ClassType.Class
+                ? GetInterfaceVTableIdentifier(classDeclaration, @interface, moduleName).ToCIdentifier()
+                : "CX_NULL";
             writer.WriteLine($"{{ &{interfaceTypeInfo}, {vtable} }},");
         }
         writer.DecreaseIndent();
         writer.WriteLine("};");
     }
+
+    private static IEnumerable<ClassDeclaration> GetReflectedInterfaces(ClassDeclaration declaration)
+    {
+        return declaration.ClassType == ClassType.Interface
+            ? declaration.InterfaceUpcastTargets
+            : declaration.InterfaceDispatchTables.Select(table => table.Interface);
+    }
+
+    private static void WriteReflectionMetadata(
+        IndentingWriter writer,
+        ClassDeclaration declaration,
+        string moduleName)
+    {
+        var fields = declaration.MemberDeclarations.Declarations.OfType<FieldDeclaration>().ToArray();
+        if (fields.Length > 0)
+        {
+            writer.WriteLine($"static const struct cx_reflection_field {GetReflectionFieldsIdentifier(declaration, moduleName).ToCIdentifier()}[] = {{");
+            writer.IncreaseIndent();
+            foreach (var field in fields)
+            {
+                var offset = field.IsStatic
+                    ? "CX_REFLECTION_NO_OFFSET"
+                    : $"(cx_uint)offsetof({declaration.ToCIdentifier(moduleName)}, {field.Name})";
+                writer.WriteLine(
+                    $"{{ {GetMemberFlags(field.MemberModifiers)}, {offset}, " +
+                    $"{ToTypeInfoPointer(field.Type)}, \"{field.Name}\" }},");
+            }
+            writer.DecreaseIndent();
+            writer.WriteLine("};");
+        }
+
+        var functions = GetReflectionFunctions(declaration).ToArray();
+        for (var index = 0; index < functions.Length; index++)
+        {
+            var function = functions[index];
+            if (function.Parameters.Count == 0)
+            {
+                continue;
+            }
+            writer.WriteLine($"static const struct cx_reflection_parameter {GetReflectionParametersIdentifier(declaration, moduleName, index).ToCIdentifier()}[] = {{");
+            writer.IncreaseIndent();
+            foreach (var parameter in function.Parameters)
+            {
+                writer.WriteLine(
+                    $"{{ 0, {ToTypeInfoPointer(parameter.ParameterType)}, " +
+                    $"\"{parameter.Name}\", CX_NULL }},");
+            }
+            writer.DecreaseIndent();
+            writer.WriteLine("};");
+        }
+
+        if (functions.Length == 0)
+        {
+            return;
+        }
+        writer.WriteLine($"static const struct cx_reflection_function {GetReflectionFunctionsIdentifier(declaration, moduleName).ToCIdentifier()}[] = {{");
+        writer.IncreaseIndent();
+        for (var index = 0; index < functions.Length; index++)
+        {
+            var function = functions[index];
+            var parameters = function.Parameters.Count == 0
+                ? "CX_NULL"
+                : GetReflectionParametersIdentifier(declaration, moduleName, index).ToCIdentifier();
+            var slot = function.VirtualSlotIndex is { } virtualSlot
+                ? virtualSlot.ToString()
+                : "CX_REFLECTION_NO_SLOT";
+            writer.WriteLine(
+                $"{{ {GetFunctionFlags(function)}, {slot}, " +
+                $"{ToTypeInfoPointer(function.ReturnType)}, \"{function.Name}\", " +
+                $"{parameters}, {function.Parameters.Count} }},");
+        }
+        writer.DecreaseIndent();
+        writer.WriteLine("};");
+    }
+
+    private static IEnumerable<ReflectionFunctionSource> GetReflectionFunctions(
+        ClassDeclaration declaration)
+    {
+        foreach (var function in declaration.MemberDeclarations.Declarations.OfType<FunctionDeclaration>())
+        {
+            yield return new ReflectionFunctionSource(
+                function is ConstructorDeclaration ? declaration.Name : function.Name,
+                function.ReturnType,
+                function.Parameters,
+                function.MemberModifiers,
+                function.Const,
+                function is ConstructorDeclaration,
+                null,
+                function.VirtualSlotIndex);
+        }
+        foreach (var property in declaration.MemberDeclarations.Declarations.OfType<PropertyDeclaration>())
+        {
+            foreach (var accessor in property.PropertyAccessorDeclarations)
+            {
+                var parameters = accessor.Parameters.ToList();
+                if (accessor.Name == "set")
+                {
+                    parameters.Add(new FunctionParameter("value", property.Type, null));
+                }
+                yield return new ReflectionFunctionSource(
+                    property.Name,
+                    accessor.Name == "set" ? BuiltInSystemTypes.Void : property.Type,
+                    parameters,
+                    property.MemberModifiers,
+                    accessor.Const,
+                    false,
+                    accessor.Name,
+                    accessor.BodyFunction?.VirtualSlotIndex,
+                    accessor.Extern);
+            }
+        }
+    }
+
+    private static int GetReflectionFunctionCount(ClassDeclaration declaration)
+    {
+        return GetReflectionFunctions(declaration).Count();
+    }
+
+    private static QualifiedIdentifier GetReflectionFieldsIdentifier(
+        ClassDeclaration declaration,
+        string moduleName) =>
+        new(moduleName, declaration.FullName, "__reflection_fields");
+
+    private static QualifiedIdentifier GetReflectionFunctionsIdentifier(
+        ClassDeclaration declaration,
+        string moduleName) =>
+        new(moduleName, declaration.FullName, "__reflection_functions");
+
+    private static QualifiedIdentifier GetReflectionParametersIdentifier(
+        ClassDeclaration declaration,
+        string moduleName,
+        int index) =>
+        new(moduleName, declaration.FullName, $"__reflection_params_{index}");
+
+    private static string ToTypeInfoPointer(TypeBase type)
+    {
+        type = type is ConstType constType ? constType.UnderlyingType : type;
+        if (type is PtrType or FunctionType or AutoType or GenericType or NullType)
+        {
+            return "CX_NULL";
+        }
+        return $"&{GetTypeInfoIdentifier(type).ToCIdentifier()}";
+    }
+
+    private static string GetMemberFlags(IEnumerable<MemberModifier> modifiers)
+    {
+        var modifierSet = modifiers.ToHashSet();
+        var flags = new List<string>();
+        if (modifierSet.Contains(MemberModifier.Public)) flags.Add("CX_REFLECTION_FLAG_VISIBILITY_PUBLIC");
+        else if (modifierSet.Contains(MemberModifier.Protected)) flags.Add("CX_REFLECTION_FLAG_VISIBILITY_PROTECTED");
+        else if (modifierSet.Contains(MemberModifier.Internal)) flags.Add("CX_REFLECTION_FLAG_VISIBILITY_INTERNAL");
+        else if (modifierSet.Contains(MemberModifier.Private)) flags.Add("CX_REFLECTION_FLAG_VISIBILITY_PRIVATE");
+        else flags.Add("CX_REFLECTION_FLAG_VISIBILITY_HIDDEN");
+        if (modifierSet.Contains(MemberModifier.Static)) flags.Add("CX_REFLECTION_FLAG_STATIC");
+        if (modifierSet.Contains(MemberModifier.Virtual) || modifierSet.Contains(MemberModifier.Override)) flags.Add("CX_REFLECTION_FLAG_VIRTUAL");
+        if (modifierSet.Contains(MemberModifier.Abstract)) flags.Add("CX_REFLECTION_FLAG_ABSTRACT");
+        if (modifierSet.Contains(MemberModifier.Final)) flags.Add("CX_REFLECTION_FLAG_FINAL");
+        if (modifierSet.Contains(MemberModifier.Extern)) flags.Add("CX_REFLECTION_FLAG_EXTERN");
+        return string.Join(" | ", flags);
+    }
+
+    private static string GetFunctionFlags(ReflectionFunctionSource function)
+    {
+        var flags = new List<string> { GetMemberFlags(function.Modifiers) };
+        if (function.Const) flags.Add("CX_REFLECTION_FLAG_CONST_CALL");
+        if (function.Extern) flags.Add("CX_REFLECTION_FLAG_EXTERN");
+        if (function.IsConstructor) flags.Add("CX_REFLECTION_FLAG_FUNCTION_CONSTRUCTOR");
+        if (function.AccessorKind == "get") flags.Add("CX_REFLECTION_FLAG_FUNCTION_PROPERTY_GET");
+        if (function.AccessorKind == "set") flags.Add("CX_REFLECTION_FLAG_FUNCTION_PROPERTY_SET");
+        return string.Join(" | ", flags.Distinct());
+    }
+
+    private sealed record ReflectionFunctionSource(
+        string Name,
+        TypeBase ReturnType,
+        IReadOnlyList<FunctionParameter> Parameters,
+        MemberModifier[] Modifiers,
+        bool Const,
+        bool IsConstructor,
+        string? AccessorKind,
+        int? VirtualSlotIndex,
+        bool Extern = false);
 
     private static QualifiedIdentifier GetInterfaceRuntimeMapIdentifier(
         ClassDeclaration classDeclaration,
@@ -948,6 +1173,25 @@ public static partial class CCodeOutputGenerator
                 classDeclaration.MemberDeclarations.Declarations))
             {
                 yield return nested;
+            }
+        }
+    }
+
+    private static IEnumerable<EnumDeclaration> EnumerateEnums(
+        IEnumerable<DeclarationBase> declarations)
+    {
+        foreach (var declaration in declarations)
+        {
+            if (declaration is EnumDeclaration enumDeclaration)
+            {
+                yield return enumDeclaration;
+            }
+            else if (declaration is ClassDeclaration classDeclaration)
+            {
+                foreach (var nested in EnumerateEnums(classDeclaration.MemberDeclarations.Declarations))
+                {
+                    yield return nested;
+                }
             }
         }
     }
@@ -1218,10 +1462,13 @@ public static partial class CCodeOutputGenerator
             effectiveType is NamedType namedType && namedType.GenericParams.Length > 0;
     }
 
-    private static ulong GetTypeNameHash(QualifiedIdentifier typeName, string moduleName)
+    private static ulong GetTypeNameHash(
+        QualifiedIdentifier typeName,
+        string moduleName,
+        int genericArity = 0)
     {
         var fullName = new QualifiedIdentifier(moduleName, typeName);
-        var fullNameString = fullName.ToString();
+        var fullNameString = $"{fullName}{(genericArity == 0 ? string.Empty : $"`{genericArity}")}";
         byte[] bytes = Encoding.Unicode.GetBytes(fullNameString);
         byte[] hash = SHA256.HashData(bytes);
         return

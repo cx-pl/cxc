@@ -39,7 +39,8 @@ public sealed class RuntimeTypeTests
         var source = GenerateSource(project);
 
         Assert.Contains("static const struct cx_interface_impl CX_ID_3(unnamed, Derived, __interfaces)[]", source);
-        Assert.Contains("CX_CLASS_TYPEINFO_WITH_INTERFACES_DEF(CX_ID_2(unnamed, Derived)", source);
+        Assert.Contains("struct CX_ID_4(cxcore, System, Reflection, TypeInfo) CX_ID_3(unnamed, Derived, __typeinfo)", source);
+        Assert.Contains(".RuntimeInterfaces = (cx_ptr)CX_ID_3(unnamed, Derived, __interfaces)", source);
         Assert.Contains("CX_BEGIN_INTERFACE_VTABLE_DEF(CX_ID_5(unnamed, Derived, __iface, IDerived, __vtable), CX_ID_2(unnamed, Derived))", source);
         Assert.Contains("cx_checked_cast_object((cx_ptr)(value), &CX_ID_3(unnamed, Derived, __typeinfo))", source);
         Assert.Contains("cx_checked_cast_interface(value, &CX_ID_3(unnamed, Derived, __typeinfo))", source);

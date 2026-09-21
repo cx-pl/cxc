@@ -1072,10 +1072,15 @@ public static partial class CCodeOutputGenerator
         type = type is ConstType constType ? constType.UnderlyingType : type;
         var fullName = type switch
         {
-            ObjectType => new QualifiedIdentifier("cxcore", "System", "Object"),
-            StringType => new QualifiedIdentifier("cxcore", "System", "String"),
             NamedType namedType => namedType.ResolvedTypeFullName,
-            _ => throw new InternalCompilerException($"Type '{type.FullName}' has no runtime type information."),
+            ArrayType => new QualifiedIdentifier("cxcore", "System", "Array"),
+            NullableType => new QualifiedIdentifier("cxcore", "System", "Nullable"),
+            BoolType or CharType or SByteType or ShortType or IntType or LongType or
+            ByteType or UShortType or UIntType or ULongType or FloatType or DoubleType or
+            ObjectType or StringType or VoidType =>
+                new QualifiedIdentifier("cxcore", type.FullName),
+            _ => throw new InternalCompilerException(
+                $"Type '{type.FullName}' has no runtime type information."),
         };
         return new QualifiedIdentifier(fullName, "__typeinfo");
     }
