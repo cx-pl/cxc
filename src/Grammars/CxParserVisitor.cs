@@ -8,7 +8,7 @@
 // </auto-generated>
 //------------------------------------------------------------------------------
 
-// Generated from c:/workspace/cx-pl/cxc/src/Grammars/CxParser.g4 by ANTLR 4.13.1
+// Generated from CxParser.g4 by ANTLR 4.13.1
 
 // Unreachable code detected
 #pragma warning disable 0162
@@ -416,6 +416,12 @@ public interface ICxParserVisitor<Result> : IParseTreeVisitor<Result> {
 	/// <param name="context">The parse tree.</param>
 	/// <return>The visitor result.</return>
 	Result VisitCatchClauses([NotNull] CxParser.CatchClausesContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.catchClause"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitCatchClause([NotNull] CxParser.CatchClauseContext context);
 	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.exceptionFilter"/>.
 	/// </summary>

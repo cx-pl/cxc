@@ -19,6 +19,8 @@ public sealed class SemanticBinder
     private readonly List<EnumTypeSymbol> _enums = [];
     private int _loopDepth;
     private int _breakableDepth;
+    private int _catchDepth;
+    private int _exceptionRegionDepth;
     private int _objectCreationIndex;
     private int _propertyAssignmentIndex;
     private int _interfaceReceiverIndex;
@@ -83,6 +85,7 @@ public sealed class SemanticBinder
         AddCoreFunction("Console", "Write", [BuiltInSystemTypes.String], BuiltInSystemTypes.UInt);
         AddCoreFunction("Console", "WriteLine", [BuiltInSystemTypes.String], BuiltInSystemTypes.UInt);
         AddCoreConstructor(BuiltInSystemTypes.Object, ClassType.Class, "Object", [], 1);
+        AddCoreConstructor(BuiltInSystemTypes.Exception, ClassType.Class, "Exception", [], 1);
         AddCoreConstructor(
             BuiltInSystemTypes.String,
             ClassType.Class,
@@ -275,6 +278,11 @@ public sealed class SemanticBinder
                     throw new CompilationErrorException(
                         $"Cannot resolve base type '{GetTypeName(baseType)}' for " +
                         $"'{classDeclaration.FullName}'.");
+                }
+                if (namedType.ResolvedTypeFullName.ToString() == "cxcore.System.Exception")
+                {
+                    SetBaseClass(classDeclaration, baseType, null);
+                    continue;
                 }
 
                 var baseSymbol = _types.SingleOrDefault(candidate =>
@@ -1057,6 +1065,7 @@ public sealed class SemanticBinder
                     break;
 
                 case ReturnStatement returnStatement:
+                    ValidateExceptionRegionControlTransfer("return");
                     BindReturnStatement(returnStatement, function, imports, scope);
                     break;
 
@@ -1123,11 +1132,21 @@ public sealed class SemanticBinder
                     break;
 
                 case BreakStatement:
+                    ValidateExceptionRegionControlTransfer("break");
                     ValidateBreak();
                     break;
 
                 case ContinueStatement:
+                    ValidateExceptionRegionControlTransfer("continue");
                     ValidateContinue();
+                    break;
+
+                case ThrowStatement throwStatement:
+                    BindThrowStatement(throwStatement, function, imports, scope);
+                    break;
+
+                case TryStatement tryStatement:
+                    BindTryStatement(tryStatement, function, imports, scope);
                     break;
 
                 default:
@@ -1322,6 +1341,137 @@ public sealed class SemanticBinder
 
         statement.BindVariableType(variableType);
         BindLoopBody(statement.Body, function, imports, scope);
+    }
+
+    private void BindThrowStatement(
+        ThrowStatement throwStatement,
+        FunctionDeclaration function,
+        IReadOnlyList<QualifiedIdentifier> imports,
+        LocalScope parentScope)
+    {
+        if (throwStatement.Expression is null)
+        {
+            if (_catchDepth == 0)
+            {
+                throw new CompilationErrorException(
+                    "A rethrow statement can only be used inside a catch clause.");
+            }
+            return;
+        }
+
+        var exceptionType = BindExpression(
+            throwStatement.Expression,
+            function,
+            imports,
+            parentScope);
+        if (!IsExceptionType(exceptionType))
+        {
+            throw new CompilationErrorException(
+                $"Thrown expression must derive from 'System.Exception', but found " +
+                $"'{GetTypeName(exceptionType)}'.");
+        }
+    }
+
+    private void BindTryStatement(
+        TryStatement statement,
+        FunctionDeclaration function,
+        IReadOnlyList<QualifiedIdentifier> imports,
+        LocalScope parentScope)
+    {
+        _exceptionRegionDepth++;
+        try
+        {
+            BindStatement(statement.Body, function, imports, new LocalScope(parentScope));
+        }
+        finally
+        {
+            _exceptionRegionDepth--;
+        }
+
+        foreach (var clause in statement.CatchClauses)
+        {
+            ResolveTypeReference(
+                clause.ExceptionType,
+                function.ParentClassDeclaration?.Namespace ?? function.Namespace,
+                imports);
+            if (!IsExceptionType(clause.ExceptionType))
+            {
+                throw new CompilationErrorException(
+                    $"Catch type '{GetTypeName(clause.ExceptionType)}' must derive from " +
+                    "'System.Exception'.");
+            }
+
+            var catchScope = new LocalScope(parentScope);
+            if (clause.VariableName is not null &&
+                !catchScope.TryDeclare(clause.VariableName, clause.ExceptionType))
+            {
+                throw new CompilationErrorException(
+                    $"Local '{clause.VariableName}' is already declared in this scope.");
+            }
+            if (clause.Filter is not null)
+            {
+                BindCondition(clause.Filter, function, imports, catchScope);
+            }
+
+            _catchDepth++;
+            _exceptionRegionDepth++;
+            try
+            {
+                BindStatement(clause.Body, function, imports, catchScope);
+            }
+            finally
+            {
+                _catchDepth--;
+                _exceptionRegionDepth--;
+            }
+        }
+
+        if (statement.FinallyBody is not null)
+        {
+            _exceptionRegionDepth++;
+            try
+            {
+                BindStatement(
+                    statement.FinallyBody,
+                    function,
+                    imports,
+                    new LocalScope(parentScope));
+            }
+            finally
+            {
+                _exceptionRegionDepth--;
+            }
+        }
+    }
+
+    private void ValidateExceptionRegionControlTransfer(string keyword)
+    {
+        if (_exceptionRegionDepth > 0)
+        {
+            throw new CompilationErrorException(
+                $"The '{keyword}' statement inside try, catch, or finally is not supported yet.");
+        }
+    }
+
+    private bool IsExceptionType(TypeBase type)
+    {
+        type = UnwrapConst(type);
+        if (GetTypeName(type).ToString() == "cxcore.System.Exception")
+        {
+            return true;
+        }
+
+        var declaration = GetClassDeclaration(type);
+        while (declaration?.BaseClassType is { } baseType)
+        {
+            if (GetTypeName(baseType).ToString() == "cxcore.System.Exception")
+            {
+                return true;
+            }
+            declaration = declaration.BaseClassDeclaration;
+        }
+
+        return false;
     }
 
     private void BindLocalDeclaration(
@@ -2742,6 +2892,12 @@ public sealed class SemanticBinder
 
         var unwrappedTarget = UnwrapConst(targetType);
         var unwrappedValue = UnwrapConst(valueType);
+        if (unwrappedTarget is NullableType nullableTarget)
+        {
+            return unwrappedValue is NullableType nullableValue
+                ? CanAssign(nullableTarget.UnderlyingType, nullableValue.UnderlyingType)
+                : CanAssign(nullableTarget.UnderlyingType, unwrappedValue);
+        }
         var valueClass = GetClassDeclaration(unwrappedValue);
         var targetClass = GetClassDeclaration(unwrappedTarget);
         if (valueClass?.ClassType is not (ClassType.Class or ClassType.Interface))

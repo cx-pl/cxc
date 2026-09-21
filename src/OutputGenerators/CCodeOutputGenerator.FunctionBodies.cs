@@ -150,41 +150,7 @@ public static partial class CCodeOutputGenerator
         FunctionDeclaration functionDeclaration,
         string moduleName)
     {
-        foreach (var creation in EnumerateDirectObjectCreations(statement))
-        {
-            var temporaryName = creation.TemporaryName ?? throw new InternalCompilerException(
-                "Object creation expression is not bound.");
-            writer.WriteLine($"{creation.RequestedType.ToCIdentifier(false)} {temporaryName};");
-        }
-        foreach (var assignment in EnumerateDirectPropertyAssignments(statement))
-        {
-            var temporaryName = assignment.TemporaryName ?? throw new InternalCompilerException(
-                "Property assignment expression is not bound.");
-            writer.WriteLine(
-                $"{assignment.TargetProperty!.Type.ToCIdentifier(false)} {temporaryName};");
-        }
-        foreach (var invocation in EnumerateDirectInterfaceInvocations(statement))
-        {
-            var temporaryName = invocation.ReceiverTemporaryName!;
-            var receiverType = invocation.Receiver?.InferredType ??
-                throw new InternalCompilerException("Interface invocation receiver is not bound.");
-            var temporaryType = receiverType is ConstType constType
-                ? constType.UnderlyingType
-                : receiverType;
-            writer.WriteLine($"{temporaryType.ToCIdentifier(false)} {temporaryName};");
-        }
-        foreach (var propertyExpression in EnumerateDirectInterfacePropertyReceivers(statement))
-        {
-            var receiver = GetPropertyReceiver(propertyExpression) ??
-                throw new InternalCompilerException("Interface property receiver is not bound.");
-            var receiverType = receiver.InferredType ??
-                throw new InternalCompilerException("Interface property receiver type is not bound.");
-            var temporaryType = receiverType is ConstType constType
-                ? constType.UnderlyingType
-                : receiverType;
-            writer.WriteLine(
-                $"{temporaryType.ToCIdentifier(false)} {GetInterfacePropertyTemporaryName(propertyExpression)};");
-        }
+        WriteExpressionTemporaries(writer, GetDirectExpressions(statement));
 
         switch (statement)
         {
@@ -300,6 +266,16 @@ public static partial class CCodeOutputGenerator
                     moduleName);
                 break;
 
+            case ThrowStatement throwStatement:
+                writer.WriteLine(throwStatement.Expression is null
+                    ? "CX_RETHROW();"
+                    : $"CX_THROW({ToCExpression(throwStatement.Expression, functionDeclaration, moduleName)});");
+                break;
+
+            case TryStatement tryStatement:
+                WriteTryStatement(writer, tryStatement, functionDeclaration, moduleName);
+                break;
+
             case EmptyStatement:
                 writer.WriteLine(";");
                 break;
@@ -316,6 +292,166 @@ public static partial class CCodeOutputGenerator
                 throw new InternalCompilerException(
                     $"Statement '{statement.GetType().Name}' is not yet supported by the C generator.");
         }
+    }
+
+    private static void WriteExpressionTemporaries(
+        IndentingWriter writer,
+        IEnumerable<ExpressionBase> expressions)
+    {
+        var expressionList = expressions.ToArray();
+        foreach (var creation in expressionList.SelectMany(EnumerateObjectCreations))
+        {
+            var temporaryName = creation.TemporaryName ?? throw new InternalCompilerException(
+                "Object creation expression is not bound.");
+            writer.WriteLine($"{creation.RequestedType.ToCIdentifier(false)} {temporaryName};");
+        }
+        foreach (var assignment in expressionList.SelectMany(EnumeratePropertyAssignments))
+        {
+            var temporaryName = assignment.TemporaryName ?? throw new InternalCompilerException(
+                "Property assignment expression is not bound.");
+            writer.WriteLine(
+                $"{assignment.TargetProperty!.Type.ToCIdentifier(false)} {temporaryName};");
+        }
+        foreach (var invocation in expressionList.SelectMany(EnumerateInterfaceInvocations))
+        {
+            var temporaryName = invocation.ReceiverTemporaryName!;
+            var receiverType = invocation.Receiver?.InferredType ??
+                throw new InternalCompilerException("Interface invocation receiver is not bound.");
+            var temporaryType = receiverType is ConstType constType
+                ? constType.UnderlyingType
+                : receiverType;
+            writer.WriteLine($"{temporaryType.ToCIdentifier(false)} {temporaryName};");
+        }
+        foreach (var propertyExpression in expressionList.SelectMany(EnumerateInterfacePropertyReceivers))
+        {
+            var receiver = GetPropertyReceiver(propertyExpression) ??
+                throw new InternalCompilerException("Interface property receiver is not bound.");
+            var receiverType = receiver.InferredType ??
+                throw new InternalCompilerException("Interface property receiver type is not bound.");
+            var temporaryType = receiverType is ConstType constType
+                ? constType.UnderlyingType
+                : receiverType;
+            writer.WriteLine(
+                $"{temporaryType.ToCIdentifier(false)} {GetInterfacePropertyTemporaryName(propertyExpression)};");
+        }
+
+    }
+
+    private static void WriteTryStatement(
+        IndentingWriter writer,
+        TryStatement statement,
+        FunctionDeclaration functionDeclaration,
+        string moduleName)
+    {
+        writer.WriteLine("{");
+        writer.IncreaseIndent();
+
+        if (statement.FinallyBody is not null)
+        {
+            writer.WriteLine("struct cx_exception_frame __cx_finally_frame;");
+            writer.WriteLine("cx_exception_push(&__cx_finally_frame);");
+            writer.WriteLine("if (setjmp(__cx_finally_frame.environment) == 0)");
+            writer.WriteLine("{");
+            writer.IncreaseIndent();
+            WriteTryAndCatches(writer, statement, functionDeclaration, moduleName);
+            writer.WriteLine("cx_exception_pop(&__cx_finally_frame);");
+            writer.DecreaseIndent();
+            writer.WriteLine("}");
+            writer.WriteLine("else");
+            writer.WriteLine("{");
+            writer.IncreaseIndent();
+            writer.WriteLine("cx_exception_pop(&__cx_finally_frame);");
+            writer.DecreaseIndent();
+            writer.WriteLine("}");
+            WriteControlledStatement(
+                writer,
+                statement.FinallyBody,
+                functionDeclaration,
+                moduleName);
+            writer.WriteLine("if (cx_exception_pending())");
+            writer.WriteLine("{");
+            writer.IncreaseIndent();
+            writer.WriteLine("CX_RETHROW();");
+            writer.DecreaseIndent();
+            writer.WriteLine("}");
+        }
+        else
+        {
+            WriteTryAndCatches(writer, statement, functionDeclaration, moduleName);
+        }
+
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+    }
+
+    private static void WriteTryAndCatches(
+        IndentingWriter writer,
+        TryStatement statement,
+        FunctionDeclaration functionDeclaration,
+        string moduleName)
+    {
+        writer.WriteLine("struct cx_exception_frame __cx_exception_frame;");
+        writer.WriteLine("cx_exception_push(&__cx_exception_frame);");
+        writer.WriteLine("if (setjmp(__cx_exception_frame.environment) == 0)");
+        writer.WriteLine("{");
+        writer.IncreaseIndent();
+        WriteStatement(writer, statement.Body, functionDeclaration, moduleName);
+        writer.WriteLine("cx_exception_pop(&__cx_exception_frame);");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+        writer.WriteLine("else");
+        writer.WriteLine("{");
+        writer.IncreaseIndent();
+        writer.WriteLine("cx_exception_pop(&__cx_exception_frame);");
+
+        foreach (var clause in statement.CatchClauses)
+        {
+            var typeInfo = clause.ExceptionType is NamedType namedType
+                ? new QualifiedIdentifier(namedType.ResolvedTypeFullName, "__typeinfo").ToCIdentifier()
+                : throw new InternalCompilerException("A catch clause has a non-class type.");
+            writer.WriteLine($"if (cx_exception_pending() && cx_exception_matches(&{typeInfo}))");
+            writer.WriteLine("{");
+            writer.IncreaseIndent();
+            if (clause.VariableName is not null)
+            {
+                writer.WriteLine(
+                    $"{clause.ExceptionType.ToCIdentifier(false)} {clause.VariableName} = " +
+                    $"({clause.ExceptionType.ToCIdentifier(false)})cx_exception_current();");
+            }
+
+            if (clause.Filter is not null)
+            {
+                WriteExpressionTemporaries(writer, [clause.Filter]);
+            }
+
+            if (clause.Filter is not null)
+            {
+                writer.WriteLine(
+                    $"if ({ToCExpression(clause.Filter, functionDeclaration, moduleName)})");
+                writer.WriteLine("{");
+                writer.IncreaseIndent();
+            }
+
+            WriteStatement(writer, clause.Body, functionDeclaration, moduleName);
+            writer.WriteLine("cx_exception_clear();");
+
+            if (clause.Filter is not null)
+            {
+                writer.DecreaseIndent();
+                writer.WriteLine("}");
+            }
+            writer.DecreaseIndent();
+            writer.WriteLine("}");
+        }
+
+        writer.WriteLine("if (cx_exception_pending())");
+        writer.WriteLine("{");
+        writer.IncreaseIndent();
+        writer.WriteLine("CX_RETHROW();");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
     }
 
     private static void WriteControlledStatement(
@@ -826,6 +962,21 @@ public static partial class CCodeOutputGenerator
         var unwrappedSource = sourceType is ConstType sourceConst
             ? sourceConst.UnderlyingType
             : sourceType;
+        if (unwrappedTarget is NullableType nullableTarget &&
+            unwrappedSource is not NullableType &&
+            unwrappedSource is not NullType)
+        {
+            var nullableType = nullableTarget.ToCIdentifier(false);
+            if (IsCReferenceType(nullableTarget.UnderlyingType))
+            {
+                return $"({nullableType}){{ (cx_ptr)({value}) }}";
+            }
+
+            var valueType = nullableTarget.UnderlyingType.ToCIdentifier(false);
+            return $"({nullableType}){{ cx_nullable_new(" +
+                $"(cx_ptr)&(({valueType}[]){{ {value} }})[0], " +
+                $"(cx_uint)sizeof({valueType})) }}";
+        }
         if (unwrappedTarget is NamedType { ClassType: ClassType.Interface } targetInterface &&
             unwrappedSource is NamedType { ClassType: ClassType.Class } sourceClass)
         {
@@ -874,7 +1025,7 @@ public static partial class CCodeOutputGenerator
         {
             var cType = expression.RequestedType.ToCIdentifier(false);
             var storageType = cType.TrimEnd().TrimEnd('*').TrimEnd();
-            receiver = $"{temporaryName} = ({cType})cx_object_new(" +
+            receiver = $"{temporaryName} = ({cType})CX_ID_4(cxcore, System, Memory, Alloc)(" +
                 $"(cx_uint)sizeof({storageType}))";
         }
         else
@@ -973,6 +1124,10 @@ public static partial class CCodeOutputGenerator
         if (leftType is NullableType nullableType)
         {
             var valueType = nullableType.UnderlyingType.ToCIdentifier(false);
+            if (IsCReferenceType(nullableType.UnderlyingType))
+            {
+                return $"(({left})._obj != CX_NULL ? ({valueType})({left})._obj : {right})";
+            }
             return $"(({left})._obj != CX_NULL ? *({valueType}*)({left})._obj : {right})";
         }
         if (leftType is NamedType { ClassType: ClassType.Interface })
@@ -1338,6 +1493,7 @@ public static partial class CCodeOutputGenerator
                     .Where(declarator => declarator.Initializer is not null)
                     .Select(declarator => declarator.Initializer!) ?? []],
             ForeachStatement foreachStatement => [foreachStatement.Collection],
+            ThrowStatement { Expression: not null } throwStatement => [throwStatement.Expression],
             _ => [],
         };
     }
@@ -1364,6 +1520,20 @@ public static partial class CCodeOutputGenerator
         if (statement is BlockStatement block)
         {
             return block.Statements.SelectMany(EnumerateStringLiterals);
+        }
+        if (statement is ThrowStatement { Expression: not null } throwStatement)
+        {
+            return EnumerateStringLiterals(throwStatement.Expression);
+        }
+        if (statement is TryStatement tryStatement)
+        {
+            return EnumerateStringLiterals(tryStatement.Body)
+                .Concat(tryStatement.CatchClauses.SelectMany(clause =>
+                    (clause.Filter is null ? [] : EnumerateStringLiterals(clause.Filter))
+                    .Concat(EnumerateStringLiterals(clause.Body))))
+                .Concat(tryStatement.FinallyBody is null
+                    ? []
+                    : EnumerateStringLiterals(tryStatement.FinallyBody));
         }
         if (statement is IfStatement conditional)
         {

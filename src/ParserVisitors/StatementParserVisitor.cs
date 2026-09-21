@@ -114,6 +114,37 @@ public sealed class StatementParserVisitor : CxParserBaseVisitor<StatementBase>
             Visit(context.embeddedStatement()));
     }
 
+    public override StatementBase VisitThrowStatement([NotNull] CxParser.ThrowStatementContext context)
+    {
+        return new ThrowStatement(context.expression() is { } expression
+            ? ParseExpression(expression)
+            : null);
+    }
+
+    public override StatementBase VisitTryStatement([NotNull] CxParser.TryStatementContext context)
+    {
+        var catchClauses = context.catchClauses()?.catchClause()
+            .Select(ParseCatchClause)
+            .ToArray() ?? [];
+        return new TryStatement(
+            Visit(context.embeddedStatement()),
+            catchClauses,
+            context.finallyClause()?.embeddedStatement() is { } finallyBody
+                ? Visit(finallyBody)
+                : null);
+    }
+
+    private CatchClause ParseCatchClause(CxParser.CatchClauseContext context)
+    {
+        return new CatchClause(
+            new TypeNameContextVisitor().Visit(context.typeName()),
+            context.Identifier()?.GetText(),
+            context.exceptionFilter()?.expression() is { } filter
+                ? ParseExpression(filter)
+                : null,
+            Visit(context.embeddedStatement()));
+    }
+
     private static LocalVariableDeclarationStatement ParseLocalVariableDeclaration(
         CxParser.LocalVariableDeclarationContext declaration)
     {

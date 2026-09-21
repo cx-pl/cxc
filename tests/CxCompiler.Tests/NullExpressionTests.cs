@@ -115,6 +115,34 @@ public sealed class NullExpressionTests
     }
 
     [Fact]
+    public void AllowsLiftingValuesIntoNullableTypes()
+    {
+        var project = CreateProject("""
+            void Main() {
+                int? number = 42;
+                string? text = "value";
+            }
+            """);
+
+        new SemanticBinder().Bind(project);
+    }
+
+    [Fact]
+    public void EmitsNullableValueAndReferenceLifts()
+    {
+        var generatedSource = GenerateSource("""
+            void Main() {
+                int? number = 42;
+                string? text = "value";
+            }
+            """);
+
+        Assert.Contains("cx_nullable_new(", generatedSource);
+        Assert.Contains("(cx_uint)sizeof(cx_int)", generatedSource);
+        Assert.Contains("(cx_ptr)(&CX_ID_2(unnamed, __string_", generatedSource);
+    }
+
+    [Fact]
     public void EmitsReferenceAndNullableCoalescing()
     {
         var project = CreateProject("""
@@ -172,6 +200,31 @@ public sealed class NullExpressionTests
         var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse(source));
         return project;
+    }
+
+    private static string GenerateSource(string source)
+    {
+        var project = CreateProject(source);
+        new SemanticBinder().Bind(project);
+        var outputDirectory = Path.Combine(
+            Path.GetTempPath(),
+            $"cxc-nullable-lift-tests-{Guid.NewGuid():N}");
+
+        try
+        {
+            Directory.CreateDirectory(outputDirectory);
+            CCodeOutputGenerator.GenerateOutput(
+                project,
+                Path.Combine(outputDirectory, "NullableLifts.cx"));
+            return File.ReadAllText(Path.Combine(outputDirectory, "unnamed.c"));
+        }
+        finally
+        {
+            if (Directory.Exists(outputDirectory))
+            {
+                Directory.Delete(outputDirectory, recursive: true);
+            }
+        }
     }
 
     private static FunctionDeclaration GetFunction(CxProject project)

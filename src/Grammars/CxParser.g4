@@ -321,7 +321,11 @@ tryStatement
 	;
 
 catchClauses
-	: Catch LeftParen typeName Identifier? RightParen exceptionFilter? statements
+	: catchClause+
+	;
+
+catchClause
+	: Catch LeftParen typeName Identifier? RightParen exceptionFilter? embeddedStatement
 	;
 
 exceptionFilter
@@ -329,7 +333,7 @@ exceptionFilter
 	;
 
 finallyClause
-	: Finally statements
+	: Finally embeddedStatement
 	;
 
 usingStatement

@@ -26,6 +26,7 @@ public static class BuiltInSystemTypes
 
     public static readonly ObjectType Object = new ObjectType(SystemNamespace);
     public static readonly StringType String = new StringType(SystemNamespace);
+    public static readonly NamedType Exception = new NamedType("Exception", []);
     public static readonly PtrType Ptr = new PtrType(SystemNamespace);
 
     public static readonly FunctionType Function = new FunctionType(SystemNamespace);

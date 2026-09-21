@@ -144,7 +144,7 @@ public sealed class ObjectCreationTests
         var generatedSource = GenerateSource(project);
 
         Assert.Contains("CX_INIT_VTABLE(__this, CX_ID_2(unnamed, Widget));", generatedSource);
-        Assert.Contains("cx_object_new((cx_uint)sizeof( struct CX_ID_2(unnamed, Widget)))", generatedSource);
+        Assert.Contains("CX_ID_4(cxcore, System, Memory, Alloc)((cx_uint)sizeof( struct CX_ID_2(unnamed, Widget)))", generatedSource);
         Assert.Contains("CX_ID_3(unnamed, Widget, __constructor)(__cx_new_0 =", generatedSource);
         Assert.Contains("CX_ID_3(unnamed, Number, __constructor)(&__cx_new_0, 7)", generatedSource);
     }
