@@ -50,7 +50,31 @@ public sealed class CCodeOutputGeneratorTests
         Assert.Contains("return value;", generatedSource);
     }
 
+    [Fact]
+    public void EmitsGenericFunctionParametersAndReturnStorageAsPointers()
+    {
+        const string source = """
+            public struct Optional<T> {
+                public static extern Optional<T> Box(T value);
+            }
+            """;
+
+        var generatedHeader = GenerateOutput(source, "unnamed.h");
+
+        Assert.Contains(
+            "extern CX_EXPORT void CX_ID_3(unnamed, Optional, Box)(",
+            generatedHeader);
+        Assert.Contains("void* value,", generatedHeader);
+        Assert.Contains("void* __returnValue", generatedHeader);
+        Assert.DoesNotContain("struct void*", generatedHeader);
+    }
+
     private static string GenerateSource(string source)
+    {
+        return GenerateOutput(source, "unnamed.c");
+    }
+
+    private static string GenerateOutput(string source, string outputFileName)
     {
         var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse(source));
@@ -67,7 +91,7 @@ public sealed class CCodeOutputGeneratorTests
                 Path.Combine(outputDirectory, "HelloWorld.cx"));
 
             return File.ReadAllText(
-                Path.Combine(outputDirectory, "unnamed.c"));
+                Path.Combine(outputDirectory, outputFileName));
         }
         finally
         {

@@ -271,6 +271,7 @@ public static partial class CCodeOutputGenerator
                         isFirstParameter = false;
                     }
 
+                    var hasGenericReturn = IsGenericValueType(functionDeclaration.ReturnType);
                     if (functionDeclaration.Parameters.Count > 0)
                     {
                         if (!isFirstParameter)
@@ -285,9 +286,9 @@ public static partial class CCodeOutputGenerator
                             FunctionParameter? parameter = functionDeclaration.Parameters[i];
 
                             writer.WriteIndent();
-                            writer.Write($"{parameter.ParameterType.ToCIdentifier(@const: false)} {parameter.Name}");
+                            writer.Write($"{ToCParameterType(parameter.ParameterType)} {parameter.Name}");
 
-                            if (i != functionDeclaration.Parameters.Count - 1)
+                            if (i != functionDeclaration.Parameters.Count - 1 || hasGenericReturn)
                             {
                                 writer.Write(",");
                             }
@@ -295,7 +296,22 @@ public static partial class CCodeOutputGenerator
                             writer.WriteNewLine();
                         }
                     }
-                    else if (!isFirstParameter)
+
+                    if (hasGenericReturn)
+                    {
+                        if (functionDeclaration.Parameters.Count == 0)
+                        {
+                            if (!isFirstParameter)
+                            {
+                                writer.Write(",");
+                            }
+                            writer.WriteNewLine();
+                        }
+                        writer.WriteIndent();
+                        writer.Write("void* __returnValue");
+                        writer.WriteNewLine();
+                    }
+                    else if (functionDeclaration.Parameters.Count == 0 && !isFirstParameter)
                     {
                         writer.WriteLine();
                     }
@@ -1140,6 +1156,13 @@ public static partial class CCodeOutputGenerator
         }
 
         return typeBase.ToCIdentifier(@const);
+    }
+
+    private static string ToCParameterType(TypeBase typeBase)
+    {
+        return IsGenericValueType(typeBase)
+            ? "void*"
+            : typeBase.ToCIdentifier(@const: false);
     }
 
     private static bool IsGenericValueType(TypeBase typeBase)

@@ -19,7 +19,8 @@ public class FunctionDeclarationParserVisitor : CxParserBaseVisitor<FunctionDecl
 
     public override FunctionDeclaration VisitFunctionDeclaration([NotNull] CxParser.FunctionDeclarationContext context)
     {
-        var returnType = new TypeNameContextVisitor().Visit(context.returnType);
+        var returnType = ResolveGenericType(
+            new TypeNameContextVisitor().Visit(context.returnType));
         var memberModifiers = new MemberModifiersParserVisitor().Visit(context.memberModifiers());
 
         _functionDeclaration = new FunctionDeclaration(
@@ -43,7 +44,8 @@ public class FunctionDeclarationParserVisitor : CxParserBaseVisitor<FunctionDecl
 
     public override FunctionDeclaration VisitFunctionParameter([NotNull] CxParser.FunctionParameterContext context)
     {
-        var type = new TypeNameContextVisitor().Visit(context.typeName());
+        var type = ResolveGenericType(
+            new TypeNameContextVisitor().Visit(context.typeName()));
 
         var funtionParameter = new FunctionParameter(
             context.name.Text,
@@ -53,6 +55,25 @@ public class FunctionDeclarationParserVisitor : CxParserBaseVisitor<FunctionDecl
         _functionDeclaration.AddParameter(funtionParameter);
 
         return base.VisitFunctionParameter(context);
+    }
+
+    private TypeBase ResolveGenericType(TypeBase type)
+    {
+        if (_parentClassDeclaration is null)
+        {
+            return type;
+        }
+
+        var constType = type as ConstType;
+        var effectiveType = constType?.UnderlyingType ?? type;
+        if (effectiveType is not NamedType namedType ||
+            !_parentClassDeclaration.GenericTypeNames.Contains(namedType.Name))
+        {
+            return type;
+        }
+
+        var genericType = new GenericType(namedType.Name);
+        return constType is null ? genericType : new ConstType(genericType);
     }
 
 }

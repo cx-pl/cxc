@@ -981,6 +981,10 @@ public sealed class SemanticBinder
                     candidate.Constructor.ParameterTypes,
                     argumentTypes))
             .ToArray();
+        candidates = SelectBestConversionCandidates(
+            candidates,
+            argumentTypes,
+            candidate => candidate.Constructor.ParameterTypes);
         if (candidates.Length == 0)
         {
             var targetName = initializer.Kind == ConstructorInitializerKind.This
@@ -2140,6 +2144,10 @@ public sealed class SemanticBinder
             candidates = candidates
                 .Where(candidate => candidate.BaseDepth == closestDepth)
                 .ToArray();
+            candidates = SelectBestConversionCandidates(
+                candidates,
+                argumentTypes,
+                candidate => candidate.Symbol.ParameterTypes);
         }
 
         if (candidates.Length == 0)
@@ -2293,6 +2301,10 @@ public sealed class SemanticBinder
                 candidate.Constructor.ParameterTypes,
                 argumentTypes))
             .ToArray();
+        matchingConstructors = SelectBestConversionCandidates(
+            matchingConstructors,
+            argumentTypes,
+            candidate => candidate.Constructor.ParameterTypes);
         if (matchingConstructors.Length == 0)
         {
             throw new CompilationErrorException(
@@ -2798,23 +2810,44 @@ public sealed class SemanticBinder
             return BuiltInSystemTypes.Bool;
         }
 
-        if (!IsType(leftType, rightType))
+        var operandType = GetCommonNumericType(leftType, rightType);
+        if (!IsType(leftType, rightType) && operandType is null)
         {
             throw new CompilationErrorException(
                 $"Operator '{@operator}' cannot combine '{GetTypeName(leftType)}' and '{GetTypeName(rightType)}'.");
         }
 
+        operandType ??= leftType;
+
         return @operator switch
         {
-            "+" or "-" or "*" or "/" or "%" when IsNumeric(leftType) => leftType,
-            "<<" or ">>" when IsInteger(leftType) => leftType,
-            "&" or "|" or "^" when IsInteger(leftType) || IsType(leftType, BuiltInSystemTypes.Bool) => leftType,
-            "&&" or "||" when IsType(leftType, BuiltInSystemTypes.Bool) => BuiltInSystemTypes.Bool,
+            "+" or "-" or "*" or "/" or "%" when IsNumeric(operandType) => operandType,
+            "<<" or ">>" when IsInteger(operandType) => operandType,
+            "&" or "|" or "^" when IsInteger(operandType) || IsType(operandType, BuiltInSystemTypes.Bool) => operandType,
+            "&&" or "||" when IsType(operandType, BuiltInSystemTypes.Bool) => BuiltInSystemTypes.Bool,
             "==" or "!=" => BuiltInSystemTypes.Bool,
-            "<" or "<=" or ">" or ">=" when IsNumeric(leftType) => BuiltInSystemTypes.Bool,
+            "<" or "<=" or ">" or ">=" when IsNumeric(operandType) => BuiltInSystemTypes.Bool,
             _ => throw new CompilationErrorException(
-                $"Operator '{@operator}' cannot be applied to '{GetTypeName(leftType)}'."),
+                $"Operator '{@operator}' cannot be applied to '{GetTypeName(operandType)}'."),
         };
+    }
+
+    private static TypeBase? GetCommonNumericType(TypeBase leftType, TypeBase rightType)
+    {
+        if (!IsNumeric(leftType) || !IsNumeric(rightType))
+        {
+            return null;
+        }
+        if (IsImplicitNumericConversion(rightType, leftType))
+        {
+            return leftType;
+        }
+        if (IsImplicitNumericConversion(leftType, rightType))
+        {
+            return rightType;
+        }
+
+        return null;
     }
 
     private static TypeBase ResolveValue(
@@ -2882,10 +2915,75 @@ public sealed class SemanticBinder
             parameterTypes.Zip(argumentTypes).All(pair => CanAssign(pair.First, pair.Second));
     }
 
+    private static T[] SelectBestConversionCandidates<T>(
+        IReadOnlyList<T> candidates,
+        IReadOnlyList<TypeBase> argumentTypes,
+        Func<T, IReadOnlyList<TypeBase>> getParameterTypes)
+    {
+        if (candidates.Count < 2)
+        {
+            return candidates.ToArray();
+        }
+
+        return candidates
+            .Select((candidate, index) => (candidate, index))
+            .Where(current => !candidates
+                .Select((candidate, index) => (candidate, index))
+                .Any(other => other.index != current.index &&
+                    IsBetterConversionTarget(
+                        argumentTypes,
+                        getParameterTypes(other.candidate),
+                        getParameterTypes(current.candidate))))
+            .Select(item => item.candidate)
+            .ToArray();
+    }
+
+    private static bool IsBetterConversionTarget(
+        IReadOnlyList<TypeBase> sourceTypes,
+        IReadOnlyList<TypeBase> firstTargetTypes,
+        IReadOnlyList<TypeBase> secondTargetTypes)
+    {
+        var foundBetterConversion = false;
+        for (var index = 0; index < sourceTypes.Count; index++)
+        {
+            var source = sourceTypes[index];
+            var first = firstTargetTypes[index];
+            var second = secondTargetTypes[index];
+            if (IsType(first, second))
+            {
+                continue;
+            }
+            if (IsType(source, first))
+            {
+                foundBetterConversion = true;
+                continue;
+            }
+            if (IsType(source, second))
+            {
+                return false;
+            }
+
+            var firstConvertsToSecond = IsImplicitNumericConversion(first, second);
+            var secondConvertsToFirst = IsImplicitNumericConversion(second, first);
+            if (firstConvertsToSecond == secondConvertsToFirst)
+            {
+                return false;
+            }
+            if (secondConvertsToFirst)
+            {
+                return false;
+            }
+            foundBetterConversion = true;
+        }
+
+        return foundBetterConversion;
+    }
+
     private bool CanAssign(TypeBase targetType, TypeBase valueType)
     {
         if (IsType(targetType, valueType) ||
-            valueType is NullType && IsNullAssignable(targetType))
+            valueType is NullType && IsNullAssignable(targetType) ||
+            IsImplicitNumericConversion(valueType, targetType))
         {
             return true;
         }
@@ -2919,6 +3017,27 @@ public sealed class SemanticBinder
             ClassType.Interface when valueClass.ClassType == ClassType.Interface =>
                 GetImplementedInterfaces(valueClass).Any(@interface =>
                     ReferenceEquals(@interface, targetClass)),
+            _ => false,
+        };
+    }
+
+    private static bool IsImplicitNumericConversion(TypeBase sourceType, TypeBase targetType)
+    {
+        sourceType = UnwrapConst(sourceType);
+        targetType = UnwrapConst(targetType);
+
+        return sourceType switch
+        {
+            SByteType => targetType is ShortType or IntType or LongType or FloatType or DoubleType,
+            ByteType => targetType is ShortType or UShortType or IntType or UIntType or LongType or ULongType or FloatType or DoubleType,
+            ShortType => targetType is IntType or LongType or FloatType or DoubleType,
+            UShortType => targetType is IntType or UIntType or LongType or ULongType or FloatType or DoubleType,
+            IntType => targetType is LongType or FloatType or DoubleType,
+            UIntType => targetType is LongType or ULongType or FloatType or DoubleType,
+            LongType => targetType is FloatType or DoubleType,
+            ULongType => targetType is FloatType or DoubleType,
+            CharType => targetType is UShortType or IntType or UIntType or LongType or ULongType or FloatType or DoubleType,
+            FloatType => targetType is DoubleType,
             _ => false,
         };
     }
