@@ -1,0 +1,23 @@
+public struct Payload {
+    public int first;
+    public int second;
+    public int third;
+}
+public struct OtherPayload {
+    public int first;
+    public int second;
+    public int third;
+    public int fourth;
+    public int fifth;
+}
+public class Box<T> {
+    public T value;
+    public constructor() {}
+}
+
+public Box<Payload> Create() { return new Box<Payload>(); }
+public Payload Read(Box<Payload> box) { return box.value; }
+public void Write(Box<Payload> box, Payload input) { box.value = input; }
+public Box<OtherPayload> CreateOther() { return new Box<OtherPayload>(); }
+public OtherPayload ReadOther(Box<OtherPayload> box) { return box.value; }
+public void WriteOther(Box<OtherPayload> box, OtherPayload input) { box.value = input; }

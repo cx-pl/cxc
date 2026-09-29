@@ -1,0 +1,11 @@
+public class Utility {
+    public constructor() {}
+    public T Identity<T>(T value) { return value; }
+    public T Copy<T>(T value) { T copy = value; return copy; }
+    public int RunImplicit() { return Identity(17); }
+}
+
+Utility Create() { return new Utility(); }
+int RunInt(Utility value) { return value.Identity(7); }
+long RunLong(Utility value) { return value.Identity(9L); }
+int RunCopy(Utility value) { return value.Copy(11); }

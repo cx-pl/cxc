@@ -2,7 +2,6 @@
 using CxCompiler.Grammar;
 using CxCompiler.Model.Common;
 using CxCompiler.Model.Types;
-using CxCompiler.Model.Types.BuiltInTypes;
 
 namespace CxCompiler.ParserVisitors;
 
@@ -50,16 +49,7 @@ public class ConstructorDeclarationParserVisitor : CxParserBaseVisitor<Construct
 
     public override ConstructorDeclaration VisitFunctionParameter([NotNull] CxParser.FunctionParameterContext context)
     {
-        TypeBase type;
-        string typeNameText = context.typeName().GetText();
-        if (_parentClassDeclaration.GenericTypeNames.Contains(typeNameText))
-        {
-            type = BuiltInSystemTypes.Ptr;
-        }
-        else
-        {
-            type = new TypeNameContextVisitor().Visit(context.typeName());
-        }
+        var type = new TypeNameContextVisitor().Visit(context.typeName());
 
         var funtionParameter = new FunctionParameter(
             context.name.Text,

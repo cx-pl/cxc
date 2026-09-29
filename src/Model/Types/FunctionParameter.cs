@@ -5,7 +5,7 @@ namespace CxCompiler.Model.Types;
 
 public class FunctionParameter : DeclarationBase
 {
-    public TypeBase ParameterType { get; }
+    public TypeBase ParameterType { get; internal set; }
     public LiteralBase? DefaultValue { get; }
 
     public FunctionParameter(string name, TypeBase parameterType, LiteralBase? defaultValue)

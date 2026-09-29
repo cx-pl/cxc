@@ -36,6 +36,10 @@ public static partial class CCodeOutputGenerator
             {
                 continue;
             }
+            if (functionDeclaration.GenericTypeNames.Length > 0)
+            {
+                continue;
+            }
 
             var nameOverrideIndex = GetNameOverrideIndex(functionDeclaration, declarations);
             writer.Write($"{functionDeclaration.ToCIdentifier(moduleName, nameOverrideIndex)}(");
@@ -48,7 +52,7 @@ public static partial class CCodeOutputGenerator
                     $"{receiverConst}{functionDeclaration.ParentClassDeclaration!.ToCIdentifier(moduleName)}* __this");
             }
             parameters.AddRange(functionDeclaration.Parameters.Select(
-                parameter => $"{parameter.ParameterType.ToCIdentifier(false)} {parameter.Name}"));
+                parameter => $"{ToCParameterType(parameter.ParameterType)} {parameter.Name}"));
 
             writer.Write(string.Join(", ", parameters));
             writer.WriteLine(") {");
@@ -111,6 +115,44 @@ public static partial class CCodeOutputGenerator
         }
     }
 
+    private static void WriteGenericFunctionDefinitions(
+        IndentingWriter writer,
+        IEnumerable<FunctionSymbol> instances)
+    {
+        foreach (var instance in instances
+            .Where(item => item.Declaration?.Body is not null)
+            .OrderBy(item => item.SpecializationName, StringComparer.Ordinal))
+        {
+            var declaration = instance.Declaration!;
+            var parameters = GetGenericFunctionParameters(instance);
+            writer.WriteLine($"{instance.ReturnType.ToCIdentifier(false)} " +
+                $"{instance.SpecializationName}({string.Join(", ", parameters)})");
+            writer.WriteLine("{");
+            writer.IncreaseIndent();
+            if (!declaration.IsStatic)
+            {
+                writer.WriteLine("(void)__this;");
+            }
+            if (declaration.Body is [LocalVariableDeclarationStatement local, ReturnStatement])
+            {
+                var declarator = local.Declarators.Single();
+                var source = (IdentifierExpression)declarator.Initializer!;
+                writer.WriteLine($"{instance.ReturnType.ToCIdentifier(false)} " +
+                    $"{declarator.Name} = {source.Identifier.Parts[0]};");
+                writer.WriteLine($"return {declarator.Name};");
+            }
+            else
+            {
+                var returnedParameter = (IdentifierExpression)
+                    ((ReturnStatement)declaration.Body![0]).Expression!;
+                writer.WriteLine($"return {returnedParameter.Identifier.Parts[0]};");
+            }
+            writer.DecreaseIndent();
+            writer.WriteLine("}");
+            writer.WriteLine();
+        }
+    }
+
     private static void WritePropertyAccessorDefinitions(
         IndentingWriter writer,
         PropertyDeclaration property,
@@ -130,7 +172,7 @@ public static partial class CCodeOutputGenerator
                     $"{receiverConst}{property.ParentClassDeclaration.ToCIdentifier(moduleName)}* __this");
             }
             parameters.AddRange(function.Parameters.Select(
-                parameter => $"{parameter.ParameterType.ToCIdentifier(false)} {parameter.Name}"));
+                parameter => $"{ToCParameterType(parameter.ParameterType)} {parameter.Name}"));
 
             writer.Write(string.Join(", ", parameters));
             writer.WriteLine(") {");
@@ -523,7 +565,10 @@ public static partial class CCodeOutputGenerator
             writer.WriteLine("(void)&__cx_transfer;");
             if (Function.ReturnType is not VoidType)
             {
-                writer.WriteLine($"{Function.ReturnType.ToCIdentifier(false)} __cx_return_value;");
+                var returnType = ReturnsGenericClassReference(Function)
+                    ? "void*"
+                    : Function.ReturnType.ToCIdentifier(false);
+                writer.WriteLine($"{returnType} __cx_return_value;");
                 writer.WriteLine("(void)&__cx_return_value;");
             }
         }
@@ -1456,6 +1501,8 @@ public static partial class CCodeOutputGenerator
         type = type is ConstType constType ? constType.UnderlyingType : type;
         var fullName = type switch
         {
+            NamedType { ConstructedIdentity: { } identity } =>
+                new QualifiedIdentifier(identity.CIdentifier),
             NamedType namedType => namedType.ResolvedTypeFullName,
             ArrayType => new QualifiedIdentifier("cxcore", "System", "Array"),
             NullableType => new QualifiedIdentifier("cxcore", "System", "Nullable"),
@@ -1500,9 +1547,21 @@ public static partial class CCodeOutputGenerator
             receiver = $"&{temporaryName}";
         }
 
-        var constructorArguments = new[] { receiver }.Concat(arguments);
-        return $"({ToCIdentifier(constructor)}({string.Join(", ", constructorArguments)}), " +
-            $"{temporaryName})";
+        var constructorReceiver = expression.RequestedType is NamedType named &&
+            RequiresClosedValueLayout(named)
+            ? $"({constructor.Declaration!.ParentClassDeclaration!.ToCIdentifier(
+                constructor.ModuleName)}*)({receiver})"
+            : receiver;
+        var constructorArguments = new[] { constructorReceiver }.Concat(arguments);
+        var constructorCall = $"{ToCIdentifier(constructor)}(" +
+            $"{string.Join(", ", constructorArguments)})";
+        if (expression.RequestedType is NamedType { ConstructedIdentity: { } identity } &&
+            expression.ClassType == ClassType.Class)
+        {
+            return $"({constructorCall}, CX_INIT_VTABLE({temporaryName}, " +
+                $"{identity.CIdentifier}), {temporaryName})";
+        }
+        return $"({constructorCall}, {temporaryName})";
     }
 
     private static string ToCNullLiteral(LiteralExpression literal)
@@ -1653,6 +1712,10 @@ public static partial class CCodeOutputGenerator
 
     private static string ToCIdentifier(FunctionSymbol symbol)
     {
+        if (symbol.SpecializationName is { } specializedName)
+        {
+            return specializedName;
+        }
         var name = symbol.OverloadIndex > 1
             ? new QualifiedIdentifier(symbol.FullName, $"_{symbol.OverloadIndex}")
             : symbol.FullName;

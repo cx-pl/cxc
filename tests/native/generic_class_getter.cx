@@ -1,0 +1,12 @@
+public class First {}
+public class Second {}
+public class Box<T> {
+    public T value;
+    public constructor(T initial) { value = initial; }
+    public T Get() { return value; }
+}
+
+Box<First> CreateFirst(First value) { return new Box<First>(value); }
+Box<Second> CreateSecond(Second value) { return new Box<Second>(value); }
+First ReadFirst(Box<First> box) { return box.Get(); }
+Second ReadSecond(Box<Second> box) { return box.Get(); }

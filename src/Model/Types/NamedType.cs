@@ -8,6 +8,8 @@ public class NamedType : TypeBase
     public QualifiedIdentifier ResolvedTypeFullName { get; private set; } = new QualifiedIdentifier("void");
     public ClassType ClassType { get; set; } = ClassType.Class;
     public string[] GenericParams { get; }
+    public IReadOnlyList<TypeBase> TypeArguments { get; private set; }
+    public GenericTypeIdentity? ConstructedIdentity { get; internal set; }
 
     public NamedType(string name, string[] genericParams)
         : base(name, QualifiedIdentifier.Empty)
@@ -81,6 +83,16 @@ public class NamedType : TypeBase
         }
 
         GenericParams = genericParams;
+        TypeArguments = genericParams.Select(name => (TypeBase)new NamedType(name, [])).ToArray();
+    }
+
+    internal void SetTypeArguments(IReadOnlyList<TypeBase> arguments)
+    {
+        if (arguments.Count != GenericParams.Length)
+        {
+            throw new ArgumentException("Generic argument count does not match source syntax.", nameof(arguments));
+        }
+        TypeArguments = arguments;
     }
 
     public void SetResolvedType(QualifiedIdentifier typeFullName, string moduleName, ClassType classType)

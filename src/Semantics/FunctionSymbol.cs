@@ -11,6 +11,7 @@ public sealed class FunctionSymbol
     public TypeBase ReturnType { get; }
     public int OverloadIndex { get; }
     public FunctionDeclaration? Declaration { get; }
+    public string? SpecializationName { get; }
 
     public FunctionSymbol(
         string moduleName,
@@ -18,7 +19,8 @@ public sealed class FunctionSymbol
         IReadOnlyList<TypeBase> parameterTypes,
         TypeBase returnType,
         int overloadIndex = 1,
-        FunctionDeclaration? declaration = null)
+        FunctionDeclaration? declaration = null,
+        string? specializationName = null)
     {
         ModuleName = moduleName;
         FullName = fullName;
@@ -26,5 +28,6 @@ public sealed class FunctionSymbol
         ReturnType = returnType;
         OverloadIndex = overloadIndex;
         Declaration = declaration;
+        SpecializationName = specializationName;
     }
 }

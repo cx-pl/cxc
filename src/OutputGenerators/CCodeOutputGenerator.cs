@@ -2,6 +2,7 @@
 using CxCompiler.Model.Common;
 using CxCompiler.Model.Expressions;
 using CxCompiler.Model.Project;
+using CxCompiler.Model.Statements;
 using CxCompiler.Model.Types;
 using CxCompiler.Model.Types.BuiltInTypes;
 using System.Security.Cryptography;
@@ -76,6 +77,11 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine("//");
         writer.WriteLine();
         WriteTypesForwardDeclarations(writer, declarations, project.Name);
+        foreach (var instance in project.GenericTypeInstances.Where(item =>
+            RequiresClosedValueLayout(item.Type)))
+        {
+            writer.WriteLine($"struct {instance.Type.ConstructedIdentity!.CIdentifier};");
+        }
         writer.WriteLine();
 
         writer.WriteLine("//");
@@ -83,6 +89,14 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine("//");
         writer.WriteLine();
         WriteTypesDeclarations(writer, declarations, project.Name);
+        WriteClosedValueTypeDeclarations(writer, project.GenericTypeInstances);
+        foreach (var instance in project.GenericTypeInstances.OrderBy(item =>
+            item.Type.ConstructedIdentity!.CanonicalName, StringComparer.Ordinal))
+        {
+            ValidateClosedReferenceLayout(instance.Type, instance.Declaration);
+            writer.WriteLine($"CX_VTABLE_DECL({instance.Type.ConstructedIdentity!.CIdentifier});");
+            writer.WriteLine($"CX_TYPEINFO_DECL({instance.Type.ConstructedIdentity.CIdentifier});");
+        }
         writer.WriteLine();
 
         writer.WriteLine("//");
@@ -90,6 +104,7 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine("//");
         writer.WriteLine();
         WriteFunctionsForwardDeclarations(writer, declarations, project.Name);
+        WriteGenericFunctionDeclarations(writer, project.GenericFunctionInstances);
         writer.WriteLine();
 
         writer.WriteLine();
@@ -186,7 +201,11 @@ public static partial class CCodeOutputGenerator
                     {
                         foreach (var fieldDeclaration in fieldMemberDeclarations)
                         {
-                            writer.WriteLine($"{fieldDeclaration.Type.ToCIdentifier(false)} {fieldDeclaration.Name};");
+                            var fieldType = fieldDeclaration.Type is GenericType &&
+                                classDeclaration.GenericTypeNames.Length > 0
+                                ? "cx_ptr"
+                                : fieldDeclaration.Type.ToCIdentifier(false);
+                            writer.WriteLine($"{fieldType} {fieldDeclaration.Name};");
                         }
                     }
 
@@ -237,6 +256,10 @@ public static partial class CCodeOutputGenerator
                     break;
 
                 case FunctionDeclaration functionDeclaration:
+                    if (functionDeclaration.GenericTypeNames.Length > 0)
+                    {
+                        break;
+                    }
                     if (functionDeclaration.ParentClassDeclaration?.ClassType == ClassType.Interface)
                     {
                         break;
@@ -272,7 +295,8 @@ public static partial class CCodeOutputGenerator
                         isFirstParameter = false;
                     }
 
-                    var hasGenericReturn = IsGenericValueType(functionDeclaration.ReturnType);
+                    var hasGenericReturn = IsGenericValueType(functionDeclaration.ReturnType) &&
+                        !ReturnsGenericClassReference(functionDeclaration);
                     if (functionDeclaration.Parameters.Count > 0)
                     {
                         if (!isFirstParameter)
@@ -398,7 +422,8 @@ public static partial class CCodeOutputGenerator
                                 : $"{propertyDeclaration.Type.ToCIdentifier(false)} value");
                             isFirstParameter = false;
                         }
-                        else if (hasGenericValue)
+                        else if (hasGenericValue &&
+                            !ReturnsGenericClassPropertyReference(propertyAccessorDeclaration))
                         {
                             if (!isFirstParameter)
                             {
@@ -424,6 +449,39 @@ public static partial class CCodeOutputGenerator
                     break;
             }
         }
+    }
+
+    private static void WriteGenericFunctionDeclarations(
+        IndentingWriter writer,
+        IEnumerable<CxCompiler.Semantics.FunctionSymbol> instances)
+    {
+        foreach (var instance in instances.OrderBy(item => item.SpecializationName, StringComparer.Ordinal))
+        {
+            var name = instance.SpecializationName!;
+            var declaration = instance.Declaration!;
+            var parameters = GetGenericFunctionParameters(instance);
+            var export = declaration.MemberModifiers.Contains(MemberModifier.Public)
+                ? "CX_EXPORT "
+                : string.Empty;
+            writer.WriteLine($"extern {export}{instance.ReturnType.ToCIdentifier(false)} " +
+                $"{name}({string.Join(", ", parameters)});");
+        }
+    }
+
+    private static IReadOnlyList<string> GetGenericFunctionParameters(
+        CxCompiler.Semantics.FunctionSymbol instance)
+    {
+        var declaration = instance.Declaration!;
+        var parameters = new List<string>();
+        if (!declaration.IsStatic)
+        {
+            var receiverConst = declaration.Const ? "const " : string.Empty;
+            parameters.Add($"{receiverConst}" +
+                $"{declaration.ParentClassDeclaration!.ToCIdentifier(instance.ModuleName)}* __this");
+        }
+        parameters.AddRange(declaration.Parameters.Zip(instance.ParameterTypes)
+            .Select(pair => $"{pair.Second.ToCIdentifier(false)} {pair.First.Name}"));
+        return parameters;
     }
 
     private static void WriteProjectSourceFile(CxProject project, string outputFilePath)
@@ -463,6 +521,7 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine("// TypeInfos");
         writer.WriteLine("//");
         WriteTypeInfos(writer, declarations, project.Name);
+        WriteClosedGenericTypeInfos(writer, project.GenericTypeInstances, project.Name);
         writer.WriteLine();
 
         writer.WriteLine("//");
@@ -470,6 +529,7 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine("//");
         writer.WriteLine();
         WriteFunctionDefinitions(writer, declarations, project.Name);
+        WriteGenericFunctionDefinitions(writer, project.GenericFunctionInstances);
 
         fileWriter.Flush();
         fileWriter.Close();
@@ -619,6 +679,327 @@ public static partial class CCodeOutputGenerator
         {
             writer.WriteLine();
             WriteEnumTypeInfoDefinition(writer, enumDeclaration, moduleName);
+        }
+    }
+
+    private static void ValidateClosedReferenceLayout(
+        NamedType type,
+        ClassDeclaration declaration)
+    {
+        if (RequiresClosedValueLayout(type))
+        {
+            ValidateClosedValueLayout(declaration);
+            return;
+        }
+        var members = declaration.MemberDeclarations.Declarations;
+        var constructors = members.OfType<ConstructorDeclaration>().ToArray();
+        var fields = members.OfType<FieldDeclaration>().ToArray();
+        var methods = members.OfType<FunctionDeclaration>()
+            .Where(function => function is not ConstructorDeclaration).ToArray();
+        var properties = members.OfType<PropertyDeclaration>().ToArray();
+        var supportedConstructor = constructors.Length == 0 ||
+            constructors.Length == 1 && constructors[0] is { } constructor &&
+            (constructor.Body is { Count: 0 } && constructor.Parameters.Count == 0 ||
+                IsReferenceFieldAssignments(constructor, fields)) &&
+            (constructor.Initializer is null ||
+                constructor.Initializer is
+                {
+                    Kind: ConstructorInitializerKind.Base,
+                    Arguments.Count: 0,
+                });
+        var supportedFields = fields.All(field =>
+        {
+            if (field.IsStatic || field.Initializer is not null)
+            {
+                return false;
+            }
+            if (field.Type is ArrayType { ElementType: GenericType arrayParameter })
+            {
+                return declaration.GenericTypeNames.Contains(arrayParameter.Name);
+            }
+            if (field.Type is GenericType parameter)
+            {
+                var index = Array.IndexOf(declaration.GenericTypeNames, parameter.Name);
+                return index >= 0 &&
+                    type.TypeArguments[index] is NamedType { ClassType: ClassType.Class };
+            }
+            return false;
+        });
+        var supportedMethods = methods.All(method =>
+            !method.IsStatic && method.GenericTypeNames.Length == 0 &&
+            method.VirtualSlotIndex is null &&
+            (method.ReturnType is VoidType && IsReferenceFieldSetter(method, fields) ||
+                IsReferenceFieldGetter(method, fields)));
+        var supportedProperties = properties.All(property =>
+            !property.IsStatic && property.Type is GenericType &&
+            property.PropertyAccessorDeclarations.Count is >= 1 and <= 2 &&
+            property.PropertyAccessorDeclarations.Select(accessor => accessor.Name)
+                .Distinct().Count() == property.PropertyAccessorDeclarations.Count &&
+            property.PropertyAccessorDeclarations.All(accessor =>
+                IsReferenceFieldPropertyAccessor(property, accessor, fields)));
+        if (declaration.ClassType != ClassType.Class || declaration.IsStatic ||
+            members.Count != constructors.Length + fields.Length + methods.Length + properties.Length ||
+            !supportedConstructor || !supportedFields || !supportedMethods ||
+            !supportedProperties ||
+            declaration.BaseTypes.Count != 0 ||
+            declaration.VirtualMethodSlots.Count != 0 ||
+            declaration.InterfaceDispatchTables.Count != 0)
+        {
+            throw new CxCompiler.Model.Errors.CompilationErrorException(
+                $"Closed runtime metadata for generic type '{declaration.FullName}' " +
+                "currently requires an empty class, T[] fields, or T fields with " +
+                "class-reference arguments; it also requires at most an empty " +
+                "parameterless constructor, or one assignment per reference " +
+                "constructor parameter, or a void method with a " +
+                "single-field assignment, or a T getter returning a T field, " +
+                "or a T property reading and writing a T field, and no explicit bases.");
+        }
+    }
+
+    private static bool RequiresClosedValueLayout(NamedType type) =>
+        type.ConstructedIdentity is not null &&
+        type.TypeArguments is [NamedType { ClassType: ClassType.Struct,
+            TypeArguments.Count: 0 }];
+
+    private static void ValidateClosedValueLayout(ClassDeclaration declaration)
+    {
+        var members = declaration.MemberDeclarations.Declarations;
+        var fields = members.OfType<FieldDeclaration>().ToArray();
+        var constructors = members.OfType<ConstructorDeclaration>().ToArray();
+        if (declaration.ClassType != ClassType.Class || declaration.IsStatic ||
+            declaration.GenericTypeNames.Length != 1 ||
+            members.Count != fields.Length + constructors.Length ||
+            fields.Length > 1 || constructors.Length > 1 ||
+            fields.Length == 1 &&
+                (constructors.Length != 1 || fields[0].IsStatic ||
+                 fields[0].Initializer is not null ||
+                 fields[0].Type is not GenericType parameter ||
+                 parameter.Name != declaration.GenericTypeNames[0]) ||
+            constructors.Length == 1 &&
+                (constructors[0].Parameters.Count != 0 ||
+                 constructors[0].Body is not { Count: 0 } ||
+                 constructors[0].Initializer is not null and not
+                    { Kind: ConstructorInitializerKind.Base, Arguments.Count: 0 }) ||
+            declaration.BaseTypes.Count != 0 ||
+            declaration.VirtualMethodSlots.Count != 0 ||
+            declaration.InterfaceDispatchTables.Count != 0)
+        {
+            throw new CxCompiler.Model.Errors.CompilationErrorException(
+                $"Closed value layout for generic type '{declaration.FullName}' " +
+                "requires an empty class or one direct T field with an " +
+                "empty parameterless constructor.");
+        }
+    }
+
+    private static void WriteClosedValueTypeDeclarations(
+        IndentingWriter writer,
+        IReadOnlyCollection<(NamedType Type, ClassDeclaration Declaration)> instances)
+    {
+        foreach (var (type, declaration) in instances.Where(item =>
+            RequiresClosedValueLayout(item.Type)).OrderBy(item =>
+                item.Type.ConstructedIdentity!.CanonicalName, StringComparer.Ordinal))
+        {
+            ValidateClosedValueLayout(declaration);
+            var field = declaration.MemberDeclarations.Declarations.OfType<FieldDeclaration>()
+                .SingleOrDefault();
+            writer.WriteLine($"struct {type.ConstructedIdentity!.CIdentifier} {{");
+            writer.IncreaseIndent();
+            writer.WriteLine($"{ToCStorageType(BuiltInSystemTypes.Object)} __base;");
+            if (field is not null)
+            {
+                writer.WriteLine($"{type.TypeArguments[0].ToCIdentifier(false)} {field.Name};");
+            }
+            writer.DecreaseIndent();
+            writer.WriteLine("};");
+        }
+    }
+
+    private static bool IsReferenceFieldPropertyAccessor(
+        PropertyDeclaration property,
+        PropertyAccessorDeclaration accessor,
+        IReadOnlyCollection<FieldDeclaration> fields)
+    {
+        if (accessor.Parameters.Count != 0 || property.Type is not GenericType propertyType)
+        {
+            return false;
+        }
+        FieldDeclaration? field = accessor.BodyFunction?.Body switch
+        {
+            [ReturnStatement
+            {
+                Expression: IdentifierExpression { TargetField: { } targetField },
+            }] when accessor.Name == "get" => targetField.Declaration,
+            [ExpressionStatement
+            {
+                Expression: AssignmentExpression
+                {
+                    Operator: "=",
+                    Target: IdentifierExpression { TargetField: { } targetField },
+                    Value: IdentifierExpression input,
+                },
+            }] when accessor.Name == "set" && input.Identifier.ToString() == "value" =>
+                targetField.Declaration,
+            _ => null,
+        };
+        return field is not null && fields.Contains(field) &&
+            field.Type is GenericType fieldType && fieldType.Name == propertyType.Name;
+    }
+
+    private static bool IsReferenceFieldSetter(
+        FunctionDeclaration function,
+        IReadOnlyCollection<FieldDeclaration> fields) =>
+        function.Parameters.Count == 1 && IsReferenceFieldAssignments(function, fields);
+
+    private static bool IsReferenceFieldAssignments(
+        FunctionDeclaration function,
+        IReadOnlyCollection<FieldDeclaration> fields)
+    {
+        if (function.Parameters.Count == 0 ||
+            function.Body is null || function.Body.Count != function.Parameters.Count)
+        {
+            return false;
+        }
+        var assignedFields = new HashSet<FieldDeclaration>();
+        for (var index = 0; index < function.Parameters.Count; index++)
+        {
+            var parameter = function.Parameters[index];
+            if (parameter.ParameterType is not GenericType parameterType ||
+                function.Body[index] is not ExpressionStatement
+                {
+                    Expression: AssignmentExpression
+                    {
+                        Operator: "=",
+                        Target: IdentifierExpression { TargetField: { } targetField },
+                        Value: IdentifierExpression initialValue,
+                    },
+                } ||
+                !fields.Contains(targetField.Declaration) ||
+                !assignedFields.Add(targetField.Declaration) ||
+                targetField.Declaration.Type is not GenericType fieldType ||
+                fieldType.Name != parameterType.Name ||
+                initialValue.Identifier.ToString() != parameter.Name)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool IsReferenceFieldGetter(
+        FunctionDeclaration function,
+        IReadOnlyCollection<FieldDeclaration> fields) =>
+        function.Parameters.Count == 0 &&
+        function.ReturnType is GenericType returnType &&
+        function.Body is
+        [ReturnStatement
+        {
+            Expression: IdentifierExpression { TargetField: { } targetField },
+        }] &&
+        fields.Contains(targetField.Declaration) &&
+        targetField.Declaration.Type is GenericType fieldType &&
+        fieldType.Name == returnType.Name;
+
+    private static void WriteClosedGenericTypeInfos(
+        IndentingWriter writer,
+        IReadOnlyCollection<(NamedType Type, ClassDeclaration Declaration)> instances,
+        string moduleName)
+    {
+        foreach (var (type, declaration) in instances.OrderBy(item =>
+            item.Type.ConstructedIdentity!.CanonicalName, StringComparer.Ordinal))
+        {
+            ValidateClosedReferenceLayout(type, declaration);
+            var identity = type.ConstructedIdentity!;
+            var fields = declaration.MemberDeclarations.Declarations.OfType<FieldDeclaration>().ToArray();
+            var closedFields = $"CX_ID_2({identity.CIdentifier}, __reflection_fields)";
+            var arguments = declaration.GenericTypeNames
+                .Zip(type.TypeArguments)
+                .ToDictionary(pair => pair.First, pair => pair.Second);
+            var functions = GetReflectionFunctions(declaration).ToArray();
+            string? closedFunctions = null;
+            if (functions.Length != 0)
+            {
+                closedFunctions = $"CX_ID_2({identity.CIdentifier}, __reflection_functions)";
+                for (var index = 0; index < functions.Length; index++)
+                {
+                    if (functions[index].Parameters.Count == 0)
+                    {
+                        continue;
+                    }
+                    var closedParameters =
+                        $"CX_ID_2({identity.CIdentifier}, __reflection_parameters_{index})";
+                    writer.WriteLine();
+                    writer.WriteLine($"static const struct cx_reflection_parameter {closedParameters}[] = {{");
+                    writer.IncreaseIndent();
+                    foreach (var parameter in functions[index].Parameters)
+                    {
+                        writer.WriteLine($"{{ 0, {ToTypeInfoPointer(GenericTypeSubstitution.Substitute(
+                            parameter.ParameterType, arguments))}, " +
+                            $"\"{parameter.Name}\", CX_NULL }},");
+                    }
+                    writer.DecreaseIndent();
+                    writer.WriteLine("};");
+                }
+                writer.WriteLine($"static const struct cx_reflection_function {closedFunctions}[] = {{");
+                writer.IncreaseIndent();
+                for (var index = 0; index < functions.Length; index++)
+                {
+                    var function = functions[index];
+                    var closedParameters = function.Parameters.Count == 0
+                        ? "CX_NULL"
+                        : $"CX_ID_2({identity.CIdentifier}, __reflection_parameters_{index})";
+                    writer.WriteLine($"{{ {GetFunctionFlags(function)}, CX_REFLECTION_NO_SLOT, " +
+                        $"{ToTypeInfoPointer(GenericTypeSubstitution.Substitute(function.ReturnType, arguments))}, " +
+                        $"\"{function.Name}\", {closedParameters}, {function.Parameters.Count} }},");
+                }
+                writer.DecreaseIndent();
+                writer.WriteLine("};");
+            }
+            if (fields.Length != 0)
+            {
+                writer.WriteLine();
+                writer.WriteLine($"static const struct cx_reflection_field {closedFields}[] = {{");
+                writer.IncreaseIndent();
+                foreach (var field in fields)
+                {
+                    var fieldType = GenericTypeSubstitution.Substitute(field.Type, arguments);
+                    writer.WriteLine(
+                        $"{{ {GetMemberFlags(field.MemberModifiers)}, " +
+                        $"(cx_uint)offsetof({(RequiresClosedValueLayout(type)
+                            ? $"struct {identity.CIdentifier}"
+                            : declaration.ToCIdentifier(moduleName))}, {field.Name}), " +
+                        $"{ToTypeInfoPointer(fieldType)}, \"{field.Name}\" }},");
+                }
+                writer.DecreaseIndent();
+                writer.WriteLine("};");
+            }
+            writer.WriteLine();
+            writer.WriteLine($"CX_BEGIN_VTABLE_DEF({identity.CIdentifier})");
+            writer.WriteLine("CX_END_VTABLE_DEF;");
+            writer.WriteLine($"struct CX_ID_4(cxcore, System, Reflection, TypeInfo) " +
+                $"CX_TYPEINFO_NAME({identity.CIdentifier}) = {{");
+            writer.IncreaseIndent();
+            writer.WriteLine($".Hash = 0x{identity.RuntimeHash:X}ULL,");
+            writer.WriteLine($".Flags = {string.Join(" | ", GetTypeInfoFlags(declaration))},");
+            writer.WriteLine($".Size = sizeof({(RequiresClosedValueLayout(type)
+                ? $"struct {identity.CIdentifier}"
+                : declaration.ToCIdentifier(moduleName))}),");
+            writer.WriteLine($".Name = &{new QualifiedIdentifier("__name", declaration.FullName).ToCIdentifier()},");
+            writer.WriteLine($".Namespace = &{new QualifiedIdentifier("__namespace", declaration.Namespace).ToCIdentifier()},");
+            writer.WriteLine(".BaseType = { ._obj = &CX_ID_4(cxcore, System, Object, __typeinfo) },");
+            if (fields.Length != 0)
+            {
+                writer.WriteLine($".RuntimeFields = (cx_ptr){closedFields},");
+                writer.WriteLine($".RuntimeFieldCount = {fields.Length},");
+            }
+            if (GetReflectionFunctionCount(declaration) != 0)
+            {
+                writer.WriteLine($".RuntimeFunctions = (cx_ptr)" +
+                    $"{closedFunctions ?? GetReflectionFunctionsIdentifier(declaration, moduleName).ToCIdentifier()},");
+                writer.WriteLine($".RuntimeFunctionCount = {GetReflectionFunctionCount(declaration)},");
+            }
+            writer.WriteLine($".GenericArity = {declaration.GenericTypeNames.Length},");
+            writer.DecreaseIndent();
+            writer.WriteLine("};");
         }
     }
 
@@ -1342,8 +1723,15 @@ public static partial class CCodeOutputGenerator
             ? new QualifiedIdentifier(functionDeclaration.FullName, $"_{nameOverrideIndex}")
             : functionDeclaration.FullName;
         var fullName = new QualifiedIdentifier(moduleName, name);
-        return $"{functionDeclaration.ReturnType.ToCReturnType(@const: false)} {fullName.ToCIdentifier()}";
+        var returnType = ReturnsGenericClassReference(functionDeclaration)
+            ? "void*"
+            : functionDeclaration.ReturnType.ToCReturnType(@const: false);
+        return $"{returnType} {fullName.ToCIdentifier()}";
     }
+
+    private static bool ReturnsGenericClassReference(FunctionDeclaration function) =>
+        function.ParentClassDeclaration is { GenericTypeNames.Length: > 0 } &&
+        function.ReturnType is GenericType;
 
     private static string ToCFunctionName(
         FunctionDeclaration functionDeclaration,
@@ -1364,8 +1752,17 @@ public static partial class CCodeOutputGenerator
         var returnType = propertyAccessorDeclaration.Name == "set"
             ? BuiltInSystemTypes.Void
             : propertyAccessorDeclaration.ParentPropertyDeclaration.Type;
-        return $"{returnType.ToCReturnType(false)} {ToCPropertyAccessorName(propertyAccessorDeclaration, moduleName)}";
+        var cReturnType = ReturnsGenericClassPropertyReference(propertyAccessorDeclaration)
+            ? "void*"
+            : returnType.ToCReturnType(false);
+        return $"{cReturnType} {ToCPropertyAccessorName(propertyAccessorDeclaration, moduleName)}";
     }
+
+    private static bool ReturnsGenericClassPropertyReference(PropertyAccessorDeclaration accessor) =>
+        accessor.Name == "get" &&
+        accessor.BodyFunction is not null && accessor.Parameters.Count == 0 &&
+        accessor.ParentPropertyDeclaration.ParentClassDeclaration.GenericTypeNames.Length > 0 &&
+        accessor.ParentPropertyDeclaration.Type is GenericType;
 
     private static string ToCPropertyAccessorName(
         PropertyAccessorDeclaration propertyAccessorDeclaration,
@@ -1412,6 +1809,9 @@ public static partial class CCodeOutputGenerator
             NullableType => $"{constString}struct CX_ID_3(cxcore, System, Nullable)",
 
             NamedType namedType when namedType.ClassType == ClassType.Struct => $"{constString}struct {namedType.ResolvedTypeFullName.ToCIdentifier()}",
+            NamedType namedType when namedType.ClassType == ClassType.Class &&
+                RequiresClosedValueLayout(namedType) =>
+                $"{constString}struct {namedType.ConstructedIdentity!.CIdentifier}*",
             NamedType namedType when namedType.ClassType == ClassType.Class => $"{constString}struct {namedType.ResolvedTypeFullName.ToCIdentifier()}*",
             NamedType { ClassType: ClassType.Interface } => $"{constString}struct cx_iface_ref",
             NamedType namedType when namedType.ClassType == ClassType.Enum => $"{constString}{namedType.ResolvedTypeFullName.ToCIdentifier()}",
@@ -1459,7 +1859,11 @@ public static partial class CCodeOutputGenerator
             ? constType.UnderlyingType
             : typeBase;
         return effectiveType is GenericType ||
-            effectiveType is NamedType namedType && namedType.GenericParams.Length > 0;
+            effectiveType is NamedType
+            {
+                ClassType: ClassType.Struct,
+                GenericParams.Length: > 0,
+            };
     }
 
     private static ulong GetTypeNameHash(

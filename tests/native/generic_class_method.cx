@@ -1,0 +1,12 @@
+public class First {}
+public class Second {}
+public class Box<T> {
+    public T value;
+    public constructor() {}
+    public void Set(T initial) { value = initial; }
+}
+
+Box<First> CreateFirst() { return new Box<First>(); }
+Box<Second> CreateSecond() { return new Box<Second>(); }
+void SetFirst(Box<First> box, First value) { box.Set(value); }
+void SetSecond(Box<Second> box, Second value) { box.Set(value); }

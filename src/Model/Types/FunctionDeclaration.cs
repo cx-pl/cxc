@@ -6,7 +6,8 @@ namespace CxCompiler.Model.Types;
 
 public class FunctionDeclaration : DeclarationBase
 {
-    public TypeBase ReturnType { get; }
+    public TypeBase ReturnType { get; internal set; }
+    public string[] GenericTypeNames { get; }
 
     private List<FunctionParameter> _parameters = new();
     public IReadOnlyList<FunctionParameter> Parameters => _parameters.AsReadOnly();
@@ -27,13 +28,15 @@ public class FunctionDeclaration : DeclarationBase
     public FunctionDeclaration(
         string name, QualifiedIdentifier @namespace, TypeBase returnType, 
         MemberModifier[] memberModifiers, ClassDeclaration? parentClassDeclaration,
-        bool @const = false)
+        bool @const = false,
+        string[]? genericTypeNames = null)
         : base("function", @namespace, name)
     {
         ReturnType = returnType;
         MemberModifiers = memberModifiers;
         ParentClassDeclaration = parentClassDeclaration;
         Const = @const;
+        GenericTypeNames = genericTypeNames ?? [];
     }
 
     public void AddParameter(FunctionParameter parameter)

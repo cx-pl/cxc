@@ -1,0 +1,14 @@
+public class First {}
+public class Second {}
+public class Pair<T, U> {
+    public T first;
+    public U second;
+    public constructor(T left, U right) { first = left; second = right; }
+}
+
+Pair<First, Second> CreateForward(First left, Second right) {
+    return new Pair<First, Second>(left, right);
+}
+Pair<Second, First> CreateReverse(Second left, First right) {
+    return new Pair<Second, First>(left, right);
+}

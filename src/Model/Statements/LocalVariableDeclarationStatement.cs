@@ -5,7 +5,7 @@ namespace CxCompiler.Model.Statements;
 
 public sealed class LocalVariableDeclarationStatement : StatementBase
 {
-    public TypeBase DeclaredType { get; }
+    public TypeBase DeclaredType { get; internal set; }
     public IReadOnlyList<LocalVariableDeclarator> Declarators { get; }
 
     public LocalVariableDeclarationStatement(

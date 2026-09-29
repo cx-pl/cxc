@@ -4,7 +4,7 @@ namespace CxCompiler.Model.Types;
 
 public class FieldDeclaration : DeclarationBase
 {
-    public TypeBase Type { get; }
+    public TypeBase Type { get; internal set; }
     public MemberModifier[] MemberModifiers { get; }
     public bool IsStatic => MemberModifiers.Contains(MemberModifier.Static);
     public ClassDeclaration ParentClassDeclaration { get; }

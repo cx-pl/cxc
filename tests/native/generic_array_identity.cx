@@ -1,0 +1,6 @@
+public class First {}
+public class Second {}
+
+public T[] IdentityArray<T>(T[] value) { return value; }
+public First[] RunFirst(First[] input) { return IdentityArray(input); }
+public Second[] RunSecond(Second[] input) { return IdentityArray(input); }

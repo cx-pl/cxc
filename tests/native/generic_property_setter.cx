@@ -1,0 +1,17 @@
+public class First {}
+public class Second {}
+public class Box<T> {
+    public T stored;
+    public constructor() {}
+    public T Value {
+        get { return stored; }
+        set { stored = value; }
+    }
+}
+
+Box<First> CreateFirst() { return new Box<First>(); }
+Box<Second> CreateSecond() { return new Box<Second>(); }
+void WriteFirst(Box<First> box, First value) { box.Value = value; }
+void WriteSecond(Box<Second> box, Second value) { box.Value = value; }
+First ReadFirst(Box<First> box) { return box.Value; }
+Second ReadSecond(Box<Second> box) { return box.Value; }

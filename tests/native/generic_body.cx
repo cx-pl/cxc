@@ -1,0 +1,4 @@
+public T Identity<T>(T value) { return value; }
+public int RunInt() { return Identity(7); }
+public long RunLong() { return Identity(9L); }
+public int RunIntAgain() { return Identity(11); }

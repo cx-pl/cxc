@@ -1,0 +1,6 @@
+public class First {}
+public class Second {}
+public class Marker<T> { public constructor() {} }
+
+Marker<First> CreateFirst() { return new Marker<First>(); }
+Marker<Second> CreateSecond() { return new Marker<Second>(); }

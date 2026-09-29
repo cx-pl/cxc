@@ -1,0 +1,9 @@
+public class First {}
+public class Second {}
+public class Box<T> {
+    public T value;
+    public constructor(T initial) { value = initial; }
+}
+
+Box<First> CreateFirst(First value) { return new Box<First>(value); }
+Box<Second> CreateSecond(Second value) { return new Box<Second>(value); }

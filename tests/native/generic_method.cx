@@ -1,0 +1,8 @@
+public class Utility {
+    public static T Identity<T>(T value) { return value; }
+    public static T Copy<T>(T value) { T copy = value; return copy; }
+}
+
+public int RunInt() { return Utility.Identity(7); }
+public long RunLong() { return Utility.Identity(9L); }
+public int RunCopy() { return Utility.Copy(13); }

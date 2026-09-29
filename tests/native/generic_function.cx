@@ -1,0 +1,4 @@
+public extern T Echo<T>(T value);
+public int RunInt() { return Echo(41); }
+public int RunIntAgain() { return Echo(40); }
+public long RunLong() { return Echo(41L); }

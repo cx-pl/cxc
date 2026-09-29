@@ -1,0 +1,9 @@
+public T Copy<T>(T value) { T copy = value; return copy; }
+
+public int RunInt() { return Copy(7); }
+public long RunLong() { return Copy(9L); }
+public int RunIntAgain() { return Copy(11); }
+
+public T Pick<T, U>(T first, U second) { T copy = first; return copy; }
+public int RunPairInt() { return Pick(13, true); }
+public long RunPairLong() { return Pick(15L, false); }

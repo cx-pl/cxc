@@ -12,6 +12,35 @@ public class CxProject
 
     private List<CompilationContext> _compilationContexts = new List<CompilationContext>();
     public IReadOnlyList<CompilationContext> CompilationContexts => _compilationContexts.AsReadOnly();
+    private readonly Dictionary<string, CxCompiler.Semantics.FunctionSymbol> _genericFunctionInstances = [];
+    public IReadOnlyCollection<CxCompiler.Semantics.FunctionSymbol> GenericFunctionInstances =>
+        _genericFunctionInstances.Values;
+    private readonly Dictionary<string, (CxCompiler.Model.Types.NamedType Type,
+        CxCompiler.Model.Types.ClassDeclaration Declaration)> _genericTypeInstances = [];
+    public IReadOnlyCollection<(CxCompiler.Model.Types.NamedType Type,
+        CxCompiler.Model.Types.ClassDeclaration Declaration)> GenericTypeInstances =>
+        _genericTypeInstances.Values;
+
+    internal void ClearGenericTypeInstances() => _genericTypeInstances.Clear();
+
+    internal void AddGenericTypeInstance(CxCompiler.Model.Types.NamedType type,
+        CxCompiler.Model.Types.ClassDeclaration declaration)
+    {
+        if (type.ConstructedIdentity is { } identity)
+        {
+            _genericTypeInstances.TryAdd(identity.CanonicalName, (type, declaration));
+        }
+    }
+
+    internal void ClearGenericFunctionInstances() => _genericFunctionInstances.Clear();
+
+    internal void AddGenericFunctionInstance(CxCompiler.Semantics.FunctionSymbol symbol)
+    {
+        if (symbol.SpecializationName is { } name)
+        {
+            _genericFunctionInstances.TryAdd(name, symbol);
+        }
+    }
 
     public static CxProject CreateDefaultApplicationProject(string name = "unnamed") => new()
     {

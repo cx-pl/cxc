@@ -1,0 +1,5 @@
+public class Payload {}
+public class Box<T> {}
+public class Holder {
+    public Box<Payload> value;
+}

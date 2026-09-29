@@ -1,0 +1,7 @@
+public class First {}
+public class Second {}
+public class Marker<T> {}
+public class Holder {
+    public Marker<First> first;
+    public Marker<Second> second;
+}
