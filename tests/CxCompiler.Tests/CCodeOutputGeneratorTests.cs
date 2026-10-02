@@ -97,6 +97,53 @@ public sealed class CCodeOutputGeneratorTests
         }
     }
 
+    [Fact]
+    public void SeparatesPublicApiHeaderFromInternalCompilationHeader()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("public_api_filter");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            class ApiDependency {}
+            class PrivateType {}
+            void HiddenFunction() {}
+            public int Exported(ApiDependency dependency) { return 1; }
+            public class PublicType {
+                private int HiddenMethod() { return 2; }
+                public int VisibleMethod() { return 3; }
+            }
+            """));
+        new SemanticBinder().Bind(project);
+
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-public-api-filter-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+
+            var publicHeader = File.ReadAllText(Path.Combine(directory, "public_api_filter.h"));
+            var internalHeader = File.ReadAllText(
+                Path.Combine(directory, "public_api_filter.internal.h"));
+            var source = File.ReadAllText(Path.Combine(directory, "public_api_filter.c"));
+
+            Assert.Contains("CX_ID_2(public_api_filter, Exported)", publicHeader);
+            Assert.Contains("CX_ID_2(public_api_filter, ApiDependency)", publicHeader);
+            Assert.Contains("CX_ID_3(public_api_filter, PublicType, VisibleMethod)", publicHeader);
+            Assert.Contains("#include \"public_api_filter.internal.h\"", publicHeader);
+            Assert.DoesNotContain("CX_ID_2(public_api_filter, HiddenFunction)", publicHeader);
+            Assert.DoesNotContain("CX_ID_2(public_api_filter, PrivateType)", publicHeader);
+            Assert.DoesNotContain("CX_ID_3(public_api_filter, PublicType, HiddenMethod)", publicHeader);
+
+            Assert.Contains("CX_ID_2(public_api_filter, HiddenFunction)", internalHeader);
+            Assert.Contains("CX_ID_2(public_api_filter, PrivateType)", internalHeader);
+            Assert.Contains("CX_ID_3(public_api_filter, PublicType, HiddenMethod)", internalHeader);
+            Assert.Contains("#include \"public_api_filter.internal.h\"", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static string GenerateSource(string source)
     {
         return GenerateOutput(source, "unnamed.c");

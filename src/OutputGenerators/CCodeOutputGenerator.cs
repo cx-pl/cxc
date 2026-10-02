@@ -5,6 +5,7 @@ using CxCompiler.Model.Project;
 using CxCompiler.Model.Statements;
 using CxCompiler.Model.Types;
 using CxCompiler.Model.Types.BuiltInTypes;
+using CxCompiler.Semantics;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -35,7 +36,14 @@ public static partial class CCodeOutputGenerator
             Path.Combine(outputDirectory, "CMakeLists.txt"),
             outputDirectory,
             projectDirectory);
-        WriteProjectHeaderFile(project, Path.Combine(outputDirectory, $"{project.Name}.h"));
+        WriteProjectHeaderFile(
+            project,
+            Path.Combine(outputDirectory, $"{project.Name}.h"),
+            publicApi: true);
+        WriteProjectHeaderFile(
+            project,
+            Path.Combine(outputDirectory, $"{project.Name}.internal.h"),
+            publicApi: false);
         WriteProjectSourceFile(project, Path.Combine(outputDirectory, $"{project.Name}.c"));
     }
 
@@ -73,11 +81,26 @@ public static partial class CCodeOutputGenerator
         fileWriter.WriteLine("set(CMAKE_LIBRARY_OUTPUT_DIRECTORY \"${CX_BIN_DIRECTORY}\")");
         fileWriter.WriteLine("set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY \"${CMAKE_CURRENT_LIST_DIR}\")");
         fileWriter.WriteLine();
+        fileWriter.WriteLine("option(CX_STATIC_LINK \"Link CX runtime and project references statically\" ON)");
+        fileWriter.WriteLine("if(DEFINED CXCORE_SOURCE_DIR AND NOT TARGET cxcore)");
+        fileWriter.WriteLine("    if(CX_STATIC_LINK)");
+        fileWriter.WriteLine("        set(CX_BUILD_STATIC ON CACHE BOOL \"\" FORCE)");
+        fileWriter.WriteLine("    else()");
+        fileWriter.WriteLine("        set(CX_BUILD_STATIC OFF CACHE BOOL \"\" FORCE)");
+        fileWriter.WriteLine("    endif()");
+        fileWriter.WriteLine("    set(BUILD_TESTING OFF CACHE BOOL \"\" FORCE)");
+        fileWriter.WriteLine("    add_subdirectory(\"${CXCORE_SOURCE_DIR}\" \"${CMAKE_CURRENT_BINARY_DIR}/cxcore\")");
+        fileWriter.WriteLine("endif()");
+        fileWriter.WriteLine();
 
         switch (project.Type)
         {
             case CxProjectType.Library:
-                fileWriter.WriteLine($"add_library({project.Name} SHARED ${{CX_PROJECT_SOURCES}})");
+                fileWriter.WriteLine($"if(CX_BUILDING_DEPENDENCY AND CX_STATIC_LINK)");
+                fileWriter.WriteLine($"    add_library({project.Name} STATIC ${{CX_PROJECT_SOURCES}})");
+                fileWriter.WriteLine("else()");
+                fileWriter.WriteLine($"    add_library({project.Name} SHARED ${{CX_PROJECT_SOURCES}})");
+                fileWriter.WriteLine("endif()");
                 break;
 
             case CxProjectType.Executable:
@@ -90,9 +113,44 @@ public static partial class CCodeOutputGenerator
 
         fileWriter.WriteLine(
             $"target_compile_definitions({project.Name} PRIVATE {GetModuleExportDefine(project.Name)})");
+        fileWriter.WriteLine($"target_compile_features({project.Name} PRIVATE c_std_11)");
+        fileWriter.WriteLine($"if(MSVC)");
+        fileWriter.WriteLine($"    target_compile_options({project.Name} PRIVATE /experimental:c11atomics)");
+        fileWriter.WriteLine($"endif()");
+        fileWriter.WriteLine($"if(CX_STATIC_LINK)");
+        fileWriter.WriteLine($"    target_compile_definitions({project.Name} PRIVATE CX_STATIC_LINK)");
+        fileWriter.WriteLine("else()");
+        fileWriter.WriteLine($"    target_compile_definitions({project.Name} PRIVATE CX_DYNAMIC_MODULE)");
+        fileWriter.WriteLine("endif()");
         var includeDirectory = Path.GetRelativePath(outputDirectory, projectDirectory);
         fileWriter.WriteLine(
             $"target_include_directories({project.Name} PRIVATE \"${{CMAKE_CURRENT_LIST_DIR}}/{EscapeCMakePath(includeDirectory)}\")");
+        fileWriter.WriteLine(
+            $"target_include_directories({project.Name} PRIVATE \"${{CMAKE_CURRENT_LIST_DIR}}/{EscapeCMakePath(Path.GetRelativePath(outputDirectory, Path.Combine(projectDirectory, ".obj")))}\")");
+        fileWriter.WriteLine($"if(TARGET cxcore)");
+        fileWriter.WriteLine($"    target_link_libraries({project.Name} PRIVATE cxcore)");
+        fileWriter.WriteLine($"endif()");
+        var dependencyLinkVisibility = project.Type == CxProjectType.Library ? "PUBLIC" : "PRIVATE";
+        foreach (var (directory, name) in project.ResolvedProjectDirectories
+            .Zip(project.ResolvedProjectNames))
+        {
+            var dependencyOutput = Path.GetRelativePath(outputDirectory, Path.Combine(directory, ".obj"));
+            var dependencyBinaryDir = $"${{CMAKE_CURRENT_BINARY_DIR}}/dep_{GetModuleToken(name)}";
+            fileWriter.WriteLine($"if(NOT TARGET {name})");
+            fileWriter.WriteLine("    set(CX_BUILDING_DEPENDENCY ON)");
+            fileWriter.WriteLine(
+                $"    add_subdirectory(\"${{CMAKE_CURRENT_LIST_DIR}}/{EscapeCMakePath(dependencyOutput)}\" \"{dependencyBinaryDir}\")");
+            fileWriter.WriteLine("    unset(CX_BUILDING_DEPENDENCY)");
+            fileWriter.WriteLine("endif()");
+            fileWriter.WriteLine(
+                $"target_link_libraries({project.Name} {dependencyLinkVisibility} {name})");
+            fileWriter.WriteLine(
+                $"target_include_directories({project.Name} PRIVATE \"${{CMAKE_CURRENT_LIST_DIR}}/{EscapeCMakePath(dependencyOutput)}\")");
+            fileWriter.WriteLine("if(NOT CX_STATIC_LINK)");
+            fileWriter.WriteLine(
+                $"    add_custom_command(TARGET {project.Name} POST_BUILD COMMAND ${{CMAKE_COMMAND}} -E copy_if_different \"$<TARGET_FILE:{name}>\" \"$<TARGET_FILE_DIR:{project.Name}>\")");
+            fileWriter.WriteLine("endif()");
+        }
 
         fileWriter.Flush();
         fileWriter.Close();
@@ -125,7 +183,10 @@ public static partial class CCodeOutputGenerator
         path.Replace('\\', '/').Replace("\"", "\\\"").Replace(";", "\\;");
 
 
-    private static void WriteProjectHeaderFile(CxProject project, string outputFilePath)
+    private static void WriteProjectHeaderFile(
+        CxProject project,
+        string outputFilePath,
+        bool publicApi)
     {
         using var fileWriter = new StreamWriter(outputFilePath);
         var writer = new IndentingWriter(fileWriter);
@@ -133,30 +194,70 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine($"// This is an autogenerated C header file for project '{project.Name}'");
         writer.WriteLine();
 
-        string headerGuardName = project.Name.ToUpperInvariant().Replace('.', '_');
+        string headerGuardName = project.Name.ToUpperInvariant().Replace('.', '_') +
+            (publicApi ? string.Empty : "_INTERNAL");
         writer.WriteLine($"#ifndef _{headerGuardName}_H_");
         writer.WriteLine($"#define _{headerGuardName}_H_");
         writer.WriteLine();
+        if (publicApi)
+        {
+            writer.WriteLine($"#if defined({GetModuleExportDefine(project.Name)})");
+            writer.WriteLine($"#include \"{project.Name}.internal.h\"");
+            writer.WriteLine("#else");
+            writer.WriteLine();
+        }
         writer.WriteLine(project.Name == "cxcore"
             ? "#include <cx.h>"
             : "#include <cxcore.h>");
         writer.WriteLine();
 
+        foreach (var dependencyName in project.ResolvedProjectNames)
+        {
+            writer.WriteLine($"#include \"{dependencyName}.h\"");
+        }
+        if (project.ResolvedProjectNames.Count != 0)
+        {
+            writer.WriteLine();
+        }
+
         writer.WriteLine($"#if defined({GetModuleExportDefine(project.Name)})");
         writer.WriteLine($"#define {GetModuleApiName(project.Name)} CX_EXPORT");
+        writer.WriteLine("#elif defined(CX_STATIC_LINK)");
+        writer.WriteLine($"#define {GetModuleApiName(project.Name)}");
         writer.WriteLine("#else");
         writer.WriteLine($"#define {GetModuleApiName(project.Name)} CX_IMPORT");
         writer.WriteLine("#endif");
+        writer.WriteLine($"#if defined({GetModuleExportDefine(project.Name)})");
+        writer.WriteLine($"#define {GetModuleDataApiName(project.Name)} CX_EXPORT");
+        writer.WriteLine("#elif defined(CX_STATIC_LINK)");
+        writer.WriteLine($"#define {GetModuleDataApiName(project.Name)}");
+        writer.WriteLine("#else");
+        writer.WriteLine($"#define {GetModuleDataApiName(project.Name)} CX_IMPORT");
+        writer.WriteLine("#endif");
+        writer.WriteLine("#undef CX_CURRENT_TYPE_API");
+        writer.WriteLine($"#define CX_CURRENT_TYPE_API {GetModuleDataApiName(project.Name)}");
         writer.WriteLine();
 
-        var declarations = GetDeclarations(project);
+        var allDeclarations = GetDeclarations(project);
+        var publicTypeNames = publicApi
+            ? GetPublicApiTypeNames(allDeclarations)
+            : null;
+        var declarations = publicApi
+            ? GetPublicApiDeclarations(allDeclarations, publicTypeNames!)
+            : allDeclarations;
+        var genericTypeInstances = publicApi
+            ? GetPublicApiGenericTypeInstances(project, publicTypeNames!)
+            : project.GenericTypeInstances;
+        var genericFunctionInstances = publicApi
+            ? project.GenericFunctionInstances.Where(IsPublicApiGenericFunction).ToArray()
+            : project.GenericFunctionInstances;
 
         writer.WriteLine("//");
         writer.WriteLine("// Forward type declarations");
         writer.WriteLine("//");
         writer.WriteLine();
-        WriteTypesForwardDeclarations(writer, declarations, project.Name);
-        foreach (var instance in project.GenericTypeInstances.Where(item =>
+        WriteTypesForwardDeclarations(writer, declarations, project.Name, publicApi, publicTypeNames);
+        foreach (var instance in genericTypeInstances.Where(item =>
             RequiresClosedValueLayout(item.Type)))
         {
             writer.WriteLine($"struct {instance.Type.ConstructedIdentity!.CIdentifier};");
@@ -167,9 +268,9 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine("// Type declarations");
         writer.WriteLine("//");
         writer.WriteLine();
-        WriteTypesDeclarations(writer, declarations, project.Name);
-        WriteClosedValueTypeDeclarations(writer, project.GenericTypeInstances);
-        foreach (var instance in project.GenericTypeInstances.OrderBy(item =>
+        WriteTypesDeclarations(writer, declarations, project.Name, publicApi, publicTypeNames);
+        WriteClosedValueTypeDeclarations(writer, genericTypeInstances);
+        foreach (var instance in genericTypeInstances.OrderBy(item =>
             item.Type.ConstructedIdentity!.CanonicalName, StringComparer.Ordinal))
         {
             ValidateClosedReferenceLayout(instance.Type, instance.Declaration);
@@ -182,11 +283,23 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine("// Function and property declarations");
         writer.WriteLine("//");
         writer.WriteLine();
-        WriteFunctionsForwardDeclarations(writer, declarations, project.Name);
-        WriteGenericFunctionDeclarations(writer, project.GenericFunctionInstances);
+        writer.WriteLine($"extern {GetModuleApiName(project.Name)} void __cx_module_init_{GetModuleToken(project.Name)}(void);");
+        if (publicApi)
+        {
+            foreach (var dependencyName in project.ResolvedProjectNames)
+            {
+                writer.WriteLine($"extern {GetModuleApiName(dependencyName)} void __cx_module_init_{GetModuleToken(dependencyName)}(void);");
+            }
+        }
+        WriteFunctionsForwardDeclarations(writer, declarations, project.Name, publicApi, publicTypeNames);
+        WriteGenericFunctionDeclarations(writer, genericFunctionInstances);
         writer.WriteLine();
 
         writer.WriteLine();
+        if (publicApi)
+        {
+            writer.WriteLine("#endif");
+        }
         writer.WriteLine($"#endif // _{headerGuardName}_H_");
 
         fileWriter.Flush();
@@ -204,10 +317,15 @@ public static partial class CCodeOutputGenerator
     private static string GetModuleApiName(string moduleName) =>
         $"CX_{GetModuleToken(moduleName)}_API";
 
+    private static string GetModuleDataApiName(string moduleName) =>
+        $"CX_{GetModuleToken(moduleName)}_DATA_API";
+
     private static void WriteTypesForwardDeclarations(
         IndentingWriter writer,
         IReadOnlyCollection<DeclarationBase> declarations,
-        string moduleName)
+        string moduleName,
+        bool publicApi,
+        IReadOnlySet<QualifiedIdentifier>? publicTypeNames)
     {
         foreach (var declaration in declarations)
         {
@@ -235,10 +353,12 @@ public static partial class CCodeOutputGenerator
 
                 var memberDeclarations = classDeclaration.MemberDeclarations.Declarations
                     .Where(x => x is ClassDeclaration or EnumDeclaration)
+                    .Where(member => !publicApi || IsPublicApiType(member, publicTypeNames!))
                     .ToArray();
                 if (memberDeclarations.Length != 0)
                 {
-                    WriteTypesForwardDeclarations(writer, memberDeclarations, moduleName);
+                    WriteTypesForwardDeclarations(
+                        writer, memberDeclarations, moduleName, publicApi, publicTypeNames);
                 }
             }
         }
@@ -247,7 +367,9 @@ public static partial class CCodeOutputGenerator
     private static void WriteTypesDeclarations(
         IndentingWriter writer,
         IReadOnlyCollection<DeclarationBase> declarations,
-        string moduleName)
+        string moduleName,
+        bool publicApi,
+        IReadOnlySet<QualifiedIdentifier>? publicTypeNames)
     {
         foreach (var declaration in declarations)
         {
@@ -306,7 +428,8 @@ public static partial class CCodeOutputGenerator
 
                 foreach (var staticField in classDeclaration.MemberDeclarations.Declarations
                     .OfType<FieldDeclaration>()
-                    .Where(field => field.IsStatic))
+                    .Where(field => field.IsStatic &&
+                        (!publicApi || field.MemberModifiers.Contains(MemberModifier.Public))))
                 {
                     writer.WriteLine(
                         $"extern {staticField.Type.ToCIdentifier(false)} " +
@@ -315,10 +438,12 @@ public static partial class CCodeOutputGenerator
 
                 var classMemberDeclarations = classDeclaration.MemberDeclarations.Declarations
                     .OfType<ClassDeclaration>()
+                    .Where(member => !publicApi || IsPublicApiType(member, publicTypeNames!))
                     .ToArray();
                 if (classMemberDeclarations.Length != 0)
                 {
-                    WriteTypesDeclarations(writer, classMemberDeclarations, moduleName);
+                    WriteTypesDeclarations(
+                        writer, classMemberDeclarations, moduleName, publicApi, publicTypeNames);
                 }
             }
         }
@@ -327,7 +452,9 @@ public static partial class CCodeOutputGenerator
     private static void WriteFunctionsForwardDeclarations(
         IndentingWriter writer,
         IReadOnlyCollection<DeclarationBase> declarations,
-        string moduleName)
+        string moduleName,
+        bool publicApi,
+        IReadOnlySet<QualifiedIdentifier>? publicTypeNames)
     {
         bool exportable;
         bool isFirstParameter;
@@ -337,15 +464,22 @@ public static partial class CCodeOutputGenerator
             switch (declaration)
             {
                 case ClassDeclaration classDeclaration:
-                    var memberDeclarations = classDeclaration.MemberDeclarations.Declarations.ToArray();
+                    var memberDeclarations = classDeclaration.MemberDeclarations.Declarations
+                        .Where(member => !publicApi || IsPublicApiMember(member, classDeclaration))
+                        .ToArray();
                     if (memberDeclarations.Length != 0)
                     {
-                        WriteFunctionsForwardDeclarations(writer, memberDeclarations, moduleName);
+                        WriteFunctionsForwardDeclarations(
+                            writer, memberDeclarations, moduleName, publicApi, publicTypeNames);
                     }
 
                     break;
 
                 case FunctionDeclaration functionDeclaration:
+                    if (publicApi && !IsPublicApiFunction(functionDeclaration))
+                    {
+                        break;
+                    }
                     if (functionDeclaration.GenericTypeNames.Length > 0)
                     {
                         break;
@@ -436,6 +570,11 @@ public static partial class CCodeOutputGenerator
                     break;
 
                 case PropertyDeclaration propertyDeclaration:
+                    if (publicApi &&
+                        !IsPublicApiMember(propertyDeclaration, propertyDeclaration.ParentClassDeclaration))
+                    {
+                        break;
+                    }
                     if (propertyDeclaration.ParentClassDeclaration.ClassType == ClassType.Interface)
                     {
                         break;
@@ -586,7 +725,10 @@ public static partial class CCodeOutputGenerator
 
         writer.WriteLine($"// This is an autogenerated C source file for project '{project.Name}'");
         writer.WriteLine();
-        writer.WriteLine($"#include \"{project.Name}.h\"");
+        writer.WriteLine($"#include \"{project.Name}.internal.h\"");
+        writer.WriteLine("#if !defined(CX_STATIC_LINK)");
+        writer.WriteLine("#include <stdatomic.h>");
+        writer.WriteLine("#endif");
         writer.WriteLine();
 
         var declarations = GetDeclarations(project);
@@ -617,6 +759,7 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine("//");
         WriteTypeInfos(writer, declarations, project.Name);
         WriteClosedGenericTypeInfos(writer, project.GenericTypeInstances, project.Name);
+        WriteModuleInitializationFunction(writer, project);
         writer.WriteLine();
 
         writer.WriteLine("//");
@@ -678,6 +821,239 @@ public static partial class CCodeOutputGenerator
         {
             writer.WriteLine(
                 $"CX_STRING_DEF({GetStringIdentifier(literal, moduleName).ToCIdentifier()}, {literal.SourceText});");
+        }
+    }
+
+    private static void WriteModuleInitializationFunction(
+        IndentingWriter writer,
+        CxProject project)
+    {
+        var token = GetModuleToken(project.Name);
+        writer.WriteLine("#if !defined(CX_STATIC_LINK)");
+        writer.WriteLine($"static atomic_flag __cx_module_init_lock_{token} = ATOMIC_FLAG_INIT;");
+        writer.WriteLine($"static cx_bool __cx_module_initialized_{token};");
+        writer.WriteLine($"void {GetModuleApiName(project.Name)} __cx_module_init_{token}(void)");
+        writer.WriteLine("{");
+        writer.IncreaseIndent();
+        writer.WriteLine($"while (atomic_flag_test_and_set_explicit(&__cx_module_init_lock_{token}, memory_order_acquire)) {{ }}");
+        writer.WriteLine($"if (!__cx_module_initialized_{token})");
+        writer.WriteLine("{");
+        writer.IncreaseIndent();
+        foreach (var dependencyName in project.ResolvedProjectNames)
+        {
+            writer.WriteLine($"__cx_module_init_{GetModuleToken(dependencyName)}();");
+        }
+        var declarations = GetDeclarations(project);
+        foreach (var stringIdentifier in GetProjectStringIdentifiers(declarations, project.Name))
+        {
+            writer.WriteLine($"{stringIdentifier}.__base.__vtable = " +
+                "CX_ID_4(cxcore, System, String, __vtable);");
+        }
+        foreach (var classDeclaration in EnumerateClasses(declarations))
+        {
+            WriteDynamicTypeInfoInitialization(writer, classDeclaration, project.Name);
+            WriteDynamicReflectionMetadataInitialization(writer, classDeclaration, project.Name);
+        }
+        foreach (var instance in project.GenericTypeInstances)
+        {
+            var identity = instance.Type.ConstructedIdentity!;
+            foreach (var stringIdentifier in new[]
+            {
+                $"CX_ID_2({identity.CIdentifier}, __name)",
+                $"CX_ID_2({identity.CIdentifier}, __namespace)",
+            })
+            {
+                writer.WriteLine($"{stringIdentifier}.__base.__vtable = " +
+                    "CX_ID_4(cxcore, System, String, __vtable);");
+            }
+            WriteDynamicClosedGenericMetadataInitialization(
+                writer, instance.Type, instance.Declaration, project.Name);
+        }
+        writer.WriteLine($"__cx_module_initialized_{token} = CX_TRUE;");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+        writer.WriteLine($"atomic_flag_clear_explicit(&__cx_module_init_lock_{token}, memory_order_release);");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+        writer.WriteLine("#endif");
+    }
+
+    private static IEnumerable<string> GetProjectStringIdentifiers(
+        IReadOnlyCollection<DeclarationBase> declarations,
+        string moduleName)
+    {
+        var identifiers = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var declaration in EnumerateClasses(declarations))
+        {
+            identifiers.Add(new QualifiedIdentifier("__name", declaration.FullName).ToCIdentifier());
+        }
+        foreach (var declaration in EnumerateEnums(declarations))
+        {
+            identifiers.Add(new QualifiedIdentifier("__name", declaration.FullName).ToCIdentifier());
+        }
+        foreach (var @namespace in EnumerateClasses(declarations).Select(item => item.Namespace)
+            .Concat(EnumerateEnums(declarations).Select(item => item.Namespace)).Distinct())
+        {
+            identifiers.Add(new QualifiedIdentifier("__namespace", @namespace).ToCIdentifier());
+        }
+        var functionLiterals = EnumerateFunctions(declarations)
+            .Where(function => function.Body is not null)
+            .SelectMany(function => function.Body!)
+            .SelectMany(EnumerateStringLiterals);
+        var fieldLiterals = EnumerateFields(declarations)
+            .Where(field => field.Initializer is LiteralExpression { IsString: true })
+            .Select(field => (LiteralExpression)field.Initializer!);
+        foreach (var literal in functionLiterals.Concat(fieldLiterals)
+            .DistinctBy(literal => literal.SourceText))
+        {
+            identifiers.Add(GetStringIdentifier(literal, moduleName).ToCIdentifier());
+        }
+        return identifiers.Order(StringComparer.Ordinal);
+    }
+
+    private static void WriteDynamicTypeInfoInitialization(
+        IndentingWriter writer,
+        ClassDeclaration declaration,
+        string moduleName)
+    {
+        if (declaration.ClassType != ClassType.Class || declaration.IsStatic ||
+            (moduleName == "cxcore" && declaration.Name == "Object"))
+        {
+            return;
+        }
+        var baseTypeInfo = declaration.BaseClassType is NamedType named
+            ? new QualifiedIdentifier(named.ResolvedTypeFullName, "__typeinfo").ToCIdentifier()
+            : "CX_ID_4(cxcore, System, Object, __typeinfo)";
+        var typeInfo = new QualifiedIdentifier(
+            moduleName, declaration.FullName, "__typeinfo").ToCIdentifier();
+        writer.WriteLine($"{typeInfo}.BaseType._obj = &{baseTypeInfo};");
+    }
+
+    private static void WriteDynamicReflectionMetadataInitialization(
+        IndentingWriter writer,
+        ClassDeclaration declaration,
+        string moduleName)
+    {
+        var fields = declaration.MemberDeclarations.Declarations.OfType<FieldDeclaration>().ToArray();
+        var fieldArray = GetReflectionFieldsIdentifier(declaration, moduleName).ToCIdentifier();
+        for (var index = 0; index < fields.Length; index++)
+        {
+            var field = fields[index];
+            var offset = field.IsStatic
+                ? "CX_REFLECTION_NO_OFFSET"
+                : $"(cx_uint)offsetof({declaration.ToCIdentifier(moduleName)}, {field.Name})";
+            writer.WriteLine($"{fieldArray}[{index}] = (struct cx_reflection_field){{ " +
+                $"{GetMemberFlags(field.MemberModifiers)}, {offset}, " +
+                $"{ToTypeInfoPointer(field.Type)}, \"{field.Name}\" }};");
+        }
+
+        var functions = GetReflectionFunctions(declaration).ToArray();
+        for (var index = 0; index < functions.Length; index++)
+        {
+            var function = functions[index];
+            var parameterArray = GetReflectionParametersIdentifier(
+                declaration, moduleName, index).ToCIdentifier();
+            for (var parameterIndex = 0; parameterIndex < function.Parameters.Count; parameterIndex++)
+            {
+                var parameter = function.Parameters[parameterIndex];
+                writer.WriteLine($"{parameterArray}[{parameterIndex}] = " +
+                    $"(struct cx_reflection_parameter){{ 0, " +
+                    $"{ToTypeInfoPointer(parameter.ParameterType)}, " +
+                    $"\"{parameter.Name}\", CX_NULL }};");
+            }
+            var parameters = function.Parameters.Count == 0
+                ? "CX_NULL"
+                : parameterArray;
+            var slot = function.VirtualSlotIndex is { } virtualSlot
+                ? virtualSlot.ToString()
+                : "CX_REFLECTION_NO_SLOT";
+            var functionArray = GetReflectionFunctionsIdentifier(
+                declaration, moduleName).ToCIdentifier();
+            writer.WriteLine($"{functionArray}[{index}] = (struct cx_reflection_function){{ " +
+                $"{GetFunctionFlags(function)}, {slot}, " +
+                $"{ToTypeInfoPointer(function.ReturnType)}, \"{function.Name}\", " +
+                $"{parameters}, {function.Parameters.Count} }};");
+        }
+
+        var interfaces = GetReflectedInterfaces(declaration).ToArray();
+        var interfaceArray = GetInterfaceRuntimeMapIdentifier(
+            declaration, moduleName).ToCIdentifier();
+        for (var index = 0; index < interfaces.Length; index++)
+        {
+            var interfaceDeclaration = interfaces[index];
+            var interfaceTypeInfo = new QualifiedIdentifier(
+                interfaceDeclaration.ProjectName ?? moduleName,
+                interfaceDeclaration.FullName,
+                "__typeinfo").ToCIdentifier();
+            var vtable = declaration.ClassType == ClassType.Class
+                ? GetInterfaceVTableIdentifier(
+                    declaration, interfaceDeclaration, moduleName).ToCIdentifier()
+                : "CX_NULL";
+            writer.WriteLine($"{interfaceArray}[{index}] = (struct cx_interface_impl){{ " +
+                $"&{interfaceTypeInfo}, {vtable} }};");
+        }
+    }
+
+    private static void WriteDynamicClosedGenericMetadataInitialization(
+        IndentingWriter writer,
+        NamedType type,
+        ClassDeclaration declaration,
+        string moduleName)
+    {
+        var identity = type.ConstructedIdentity!;
+        var arguments = declaration.GenericTypeNames.Zip(type.TypeArguments)
+            .ToDictionary(pair => pair.First, pair => pair.Second);
+        var typeInfo = $"CX_TYPEINFO_NAME({identity.CIdentifier})";
+        if (declaration.ClassType == ClassType.Class && !declaration.IsStatic)
+        {
+            writer.WriteLine($"{typeInfo}.BaseType._obj = " +
+                "&CX_ID_4(cxcore, System, Object, __typeinfo);");
+        }
+
+        var fields = declaration.MemberDeclarations.Declarations
+            .OfType<FieldDeclaration>().ToArray();
+        var fieldArray = $"CX_ID_2({identity.CIdentifier}, __reflection_fields)";
+        for (var index = 0; index < fields.Length; index++)
+        {
+            var field = fields[index];
+            var offset = field.IsStatic
+                ? "CX_REFLECTION_NO_OFFSET"
+                : $"(cx_uint)offsetof({(RequiresClosedValueLayout(type)
+                    ? $"struct {identity.CIdentifier}"
+                    : declaration.ToCIdentifier(moduleName))}, {field.Name})";
+            var fieldType = GenericTypeSubstitution.Substitute(field.Type, arguments);
+            writer.WriteLine($"{fieldArray}[{index}] = (struct cx_reflection_field){{ " +
+                $"{GetMemberFlags(field.MemberModifiers)}, {offset}, " +
+                $"{ToTypeInfoPointer(fieldType)}, \"{field.Name}\" }};");
+        }
+
+        var functions = GetReflectionFunctions(declaration).ToArray();
+        for (var index = 0; index < functions.Length; index++)
+        {
+            var function = functions[index];
+            var parameterArray =
+                $"CX_ID_2({identity.CIdentifier}, __reflection_parameters_{index})";
+            for (var parameterIndex = 0; parameterIndex < function.Parameters.Count; parameterIndex++)
+            {
+                var parameter = function.Parameters[parameterIndex];
+                var parameterType = GenericTypeSubstitution.Substitute(
+                    parameter.ParameterType, arguments);
+                writer.WriteLine($"{parameterArray}[{parameterIndex}] = " +
+                    $"(struct cx_reflection_parameter){{ 0, " +
+                    $"{ToTypeInfoPointer(parameterType)}, " +
+                    $"\"{parameter.Name}\", CX_NULL }};");
+            }
+            var parameters = function.Parameters.Count == 0
+                ? "CX_NULL"
+                : parameterArray;
+            var returnType = GenericTypeSubstitution.Substitute(
+                function.ReturnType, arguments);
+            writer.WriteLine(
+                $"CX_ID_2({identity.CIdentifier}, __reflection_functions)[{index}] = " +
+                "(struct cx_reflection_function){" +
+                $"{GetFunctionFlags(function)}, CX_REFLECTION_NO_SLOT, " +
+                $"{ToTypeInfoPointer(returnType)}, \"{function.Name}\", " +
+                $"{parameters}, {function.Parameters.Count} }};");
         }
     }
 
@@ -1090,6 +1466,8 @@ public static partial class CCodeOutputGenerator
         {
             ValidateClosedReferenceLayout(type, declaration);
             var identity = type.ConstructedIdentity!;
+            var closedNameIdentifier = $"CX_ID_2({identity.CIdentifier}, __name)";
+            var closedNamespaceIdentifier = $"CX_ID_2({identity.CIdentifier}, __namespace)";
             var fields = declaration.MemberDeclarations.Declarations.OfType<FieldDeclaration>().ToArray();
             var closedFields = $"CX_ID_2({identity.CIdentifier}, __reflection_fields)";
             var arguments = declaration.GenericTypeNames
@@ -1109,6 +1487,7 @@ public static partial class CCodeOutputGenerator
                     var closedParameters =
                         $"CX_ID_2({identity.CIdentifier}, __reflection_parameters_{index})";
                     writer.WriteLine();
+                    writer.WriteLine("#if !defined(CX_DYNAMIC_MODULE)");
                     writer.WriteLine($"static const struct cx_reflection_parameter {closedParameters}[] = {{");
                     writer.IncreaseIndent();
                     foreach (var parameter in functions[index].Parameters)
@@ -1119,7 +1498,11 @@ public static partial class CCodeOutputGenerator
                     }
                     writer.DecreaseIndent();
                     writer.WriteLine("};");
+                    writer.WriteLine("#else");
+                    writer.WriteLine($"static struct cx_reflection_parameter {closedParameters}[{functions[index].Parameters.Count}];");
+                    writer.WriteLine("#endif");
                 }
+                writer.WriteLine("#if !defined(CX_DYNAMIC_MODULE)");
                 writer.WriteLine($"static const struct cx_reflection_function {closedFunctions}[] = {{");
                 writer.IncreaseIndent();
                 for (var index = 0; index < functions.Length; index++)
@@ -1134,10 +1517,14 @@ public static partial class CCodeOutputGenerator
                 }
                 writer.DecreaseIndent();
                 writer.WriteLine("};");
+                writer.WriteLine("#else");
+                writer.WriteLine($"static struct cx_reflection_function {closedFunctions}[{functions.Length}];");
+                writer.WriteLine("#endif");
             }
             if (fields.Length != 0)
             {
                 writer.WriteLine();
+                writer.WriteLine("#if !defined(CX_DYNAMIC_MODULE)");
                 writer.WriteLine($"static const struct cx_reflection_field {closedFields}[] = {{");
                 writer.IncreaseIndent();
                 foreach (var field in fields)
@@ -1152,10 +1539,16 @@ public static partial class CCodeOutputGenerator
                 }
                 writer.DecreaseIndent();
                 writer.WriteLine("};");
+                writer.WriteLine("#else");
+                writer.WriteLine($"static struct cx_reflection_field {closedFields}[{fields.Length}];");
+                writer.WriteLine("#endif");
             }
+            writer.WriteLine($"CX_STRING_DEF({closedNameIdentifier}, \"{declaration.Name}\");");
+            writer.WriteLine($"CX_STRING_DEF({closedNamespaceIdentifier}, \"{declaration.Namespace}\");");
             writer.WriteLine();
             writer.WriteLine($"CX_BEGIN_VTABLE_DEF({identity.CIdentifier})");
             writer.WriteLine("CX_END_VTABLE_DEF;");
+            writer.WriteLine("#if !defined(CX_DYNAMIC_MODULE)");
             writer.WriteLine($"struct CX_ID_4(cxcore, System, Reflection, TypeInfo) " +
                 $"CX_TYPEINFO_NAME({identity.CIdentifier}) = {{");
             writer.IncreaseIndent();
@@ -1164,8 +1557,8 @@ public static partial class CCodeOutputGenerator
             writer.WriteLine($".Size = sizeof({(RequiresClosedValueLayout(type)
                 ? $"struct {identity.CIdentifier}"
                 : declaration.ToCIdentifier(moduleName))}),");
-            writer.WriteLine($".Name = &{new QualifiedIdentifier("__name", declaration.FullName).ToCIdentifier()},");
-            writer.WriteLine($".Namespace = &{new QualifiedIdentifier("__namespace", declaration.Namespace).ToCIdentifier()},");
+            writer.WriteLine($".Name = &{closedNameIdentifier},");
+            writer.WriteLine($".Namespace = &{closedNamespaceIdentifier},");
             writer.WriteLine(".BaseType = { ._obj = &CX_ID_4(cxcore, System, Object, __typeinfo) },");
             if (fields.Length != 0)
             {
@@ -1181,6 +1574,33 @@ public static partial class CCodeOutputGenerator
             writer.WriteLine($".GenericArity = {declaration.GenericTypeNames.Length},");
             writer.DecreaseIndent();
             writer.WriteLine("};");
+            writer.WriteLine("#else");
+            writer.WriteLine($"struct CX_ID_4(cxcore, System, Reflection, TypeInfo) " +
+                $"CX_TYPEINFO_NAME({identity.CIdentifier}) = {{");
+            writer.IncreaseIndent();
+            writer.WriteLine($".Hash = 0x{identity.RuntimeHash:X}ULL,");
+            writer.WriteLine($".Flags = {string.Join(" | ", GetTypeInfoFlags(declaration))},");
+            writer.WriteLine($".Size = sizeof({(RequiresClosedValueLayout(type)
+                ? $"struct {identity.CIdentifier}"
+                : declaration.ToCIdentifier(moduleName))}),");
+            writer.WriteLine($".Name = &{closedNameIdentifier},");
+            writer.WriteLine($".Namespace = &{closedNamespaceIdentifier},");
+            writer.WriteLine(".BaseType = { ._obj = CX_NULL },");
+            if (fields.Length != 0)
+            {
+                writer.WriteLine($".RuntimeFields = (cx_ptr){closedFields},");
+                writer.WriteLine($".RuntimeFieldCount = {fields.Length},");
+            }
+            if (GetReflectionFunctionCount(declaration) != 0)
+            {
+                writer.WriteLine($".RuntimeFunctions = (cx_ptr)" +
+                    $"{closedFunctions ?? GetReflectionFunctionsIdentifier(declaration, moduleName).ToCIdentifier()},");
+                writer.WriteLine($".RuntimeFunctionCount = {GetReflectionFunctionCount(declaration)},");
+            }
+            writer.WriteLine($".GenericArity = {declaration.GenericTypeNames.Length},");
+            writer.DecreaseIndent();
+            writer.WriteLine("};");
+            writer.WriteLine("#endif");
         }
     }
 
@@ -1251,6 +1671,7 @@ public static partial class CCodeOutputGenerator
             ? "CX_NULL"
             : $"(cx_ptr){GetReflectionFunctionsIdentifier(classDeclaration, moduleName).ToCIdentifier()}";
 
+        writer.WriteLine("#if !defined(CX_DYNAMIC_MODULE)");
         writer.WriteLine($"struct CX_ID_4(cxcore, System, Reflection, TypeInfo) {new QualifiedIdentifier(moduleName, classDeclaration.FullName, "__typeinfo").ToCIdentifier()} = {{");
         writer.IncreaseIndent();
         writer.WriteLine($".Hash = 0x{GetTypeNameHash(classDeclaration.FullName, moduleName, classDeclaration.GenericTypeNames.Length):X},");
@@ -1268,6 +1689,25 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine($".GenericArity = {classDeclaration.GenericTypeNames.Length},");
         writer.DecreaseIndent();
         writer.WriteLine("};");
+        writer.WriteLine("#else");
+        writer.WriteLine($"struct CX_ID_4(cxcore, System, Reflection, TypeInfo) {new QualifiedIdentifier(moduleName, classDeclaration.FullName, "__typeinfo").ToCIdentifier()} = {{");
+        writer.IncreaseIndent();
+        writer.WriteLine($".Hash = 0x{GetTypeNameHash(classDeclaration.FullName, moduleName, classDeclaration.GenericTypeNames.Length):X},");
+        writer.WriteLine($".Flags = {flagsString},");
+        writer.WriteLine($".Size = {size},");
+        writer.WriteLine($".Name = &{nameIdentifier.ToCIdentifier()},");
+        writer.WriteLine($".Namespace = &{namespaceIdentifier.ToCIdentifier()},");
+        writer.WriteLine(".BaseType = { ._obj = CX_NULL },");
+        writer.WriteLine($".RuntimeInterfaces = {interfaceMap},");
+        writer.WriteLine($".RuntimeInterfaceCount = {reflectedInterfaces.Length},");
+        writer.WriteLine($".RuntimeFields = {fieldMap},");
+        writer.WriteLine($".RuntimeFieldCount = {fields.Length},");
+        writer.WriteLine($".RuntimeFunctions = {functionMap},");
+        writer.WriteLine($".RuntimeFunctionCount = {functionCount},");
+        writer.WriteLine($".GenericArity = {classDeclaration.GenericTypeNames.Length},");
+        writer.DecreaseIndent();
+        writer.WriteLine("};");
+        writer.WriteLine("#endif");
     }
 
     private static IEnumerable<string> GetTypeInfoFlags(ClassDeclaration classDeclaration)
@@ -1383,12 +1823,13 @@ public static partial class CCodeOutputGenerator
             return;
         }
 
+        writer.WriteLine("#if !defined(CX_DYNAMIC_MODULE)");
         writer.WriteLine($"static const struct cx_interface_impl {GetInterfaceRuntimeMapIdentifier(classDeclaration, moduleName).ToCIdentifier()}[] = {{");
         writer.IncreaseIndent();
         foreach (var @interface in interfaces)
         {
             var interfaceTypeInfo = new QualifiedIdentifier(
-                moduleName,
+                @interface.ProjectName ?? moduleName,
                 @interface.FullName,
                 "__typeinfo").ToCIdentifier();
             var vtable = classDeclaration.ClassType == ClassType.Class
@@ -1398,6 +1839,9 @@ public static partial class CCodeOutputGenerator
         }
         writer.DecreaseIndent();
         writer.WriteLine("};");
+        writer.WriteLine("#else");
+        writer.WriteLine($"static struct cx_interface_impl {GetInterfaceRuntimeMapIdentifier(classDeclaration, moduleName).ToCIdentifier()}[{interfaces.Length}];");
+        writer.WriteLine("#endif");
     }
 
     private static IEnumerable<ClassDeclaration> GetReflectedInterfaces(ClassDeclaration declaration)
@@ -1415,6 +1859,7 @@ public static partial class CCodeOutputGenerator
         var fields = declaration.MemberDeclarations.Declarations.OfType<FieldDeclaration>().ToArray();
         if (fields.Length > 0)
         {
+            writer.WriteLine("#if !defined(CX_DYNAMIC_MODULE)");
             writer.WriteLine($"static const struct cx_reflection_field {GetReflectionFieldsIdentifier(declaration, moduleName).ToCIdentifier()}[] = {{");
             writer.IncreaseIndent();
             foreach (var field in fields)
@@ -1428,6 +1873,9 @@ public static partial class CCodeOutputGenerator
             }
             writer.DecreaseIndent();
             writer.WriteLine("};");
+            writer.WriteLine("#else");
+            writer.WriteLine($"static struct cx_reflection_field {GetReflectionFieldsIdentifier(declaration, moduleName).ToCIdentifier()}[{fields.Length}];");
+            writer.WriteLine("#endif");
         }
 
         var functions = GetReflectionFunctions(declaration).ToArray();
@@ -1438,6 +1886,7 @@ public static partial class CCodeOutputGenerator
             {
                 continue;
             }
+            writer.WriteLine("#if !defined(CX_DYNAMIC_MODULE)");
             writer.WriteLine($"static const struct cx_reflection_parameter {GetReflectionParametersIdentifier(declaration, moduleName, index).ToCIdentifier()}[] = {{");
             writer.IncreaseIndent();
             foreach (var parameter in function.Parameters)
@@ -1448,12 +1897,16 @@ public static partial class CCodeOutputGenerator
             }
             writer.DecreaseIndent();
             writer.WriteLine("};");
+            writer.WriteLine("#else");
+            writer.WriteLine($"static struct cx_reflection_parameter {GetReflectionParametersIdentifier(declaration, moduleName, index).ToCIdentifier()}[{function.Parameters.Count}];");
+            writer.WriteLine("#endif");
         }
 
         if (functions.Length == 0)
         {
             return;
         }
+        writer.WriteLine("#if !defined(CX_DYNAMIC_MODULE)");
         writer.WriteLine($"static const struct cx_reflection_function {GetReflectionFunctionsIdentifier(declaration, moduleName).ToCIdentifier()}[] = {{");
         writer.IncreaseIndent();
         for (var index = 0; index < functions.Length; index++)
@@ -1472,6 +1925,9 @@ public static partial class CCodeOutputGenerator
         }
         writer.DecreaseIndent();
         writer.WriteLine("};");
+        writer.WriteLine("#else");
+        writer.WriteLine($"static struct cx_reflection_function {GetReflectionFunctionsIdentifier(declaration, moduleName).ToCIdentifier()}[{functions.Length}];");
+        writer.WriteLine("#endif");
     }
 
     private static IEnumerable<ReflectionFunctionSource> GetReflectionFunctions(
@@ -1644,6 +2100,9 @@ public static partial class CCodeOutputGenerator
             $"static {slot.ReturnType.ToCReturnType(false)} {thunkName}(" +
             $"{string.Join(", ", parameters)}) {{");
         writer.IncreaseIndent();
+        writer.WriteLine("#if !defined(CX_STATIC_LINK)");
+        writer.WriteLine($"__cx_module_init_{GetModuleToken(moduleName)}();");
+        writer.WriteLine("#endif");
 
         var argumentNames = slot.Parameters.Select(parameter => parameter.Name).ToArray();
         string call;
@@ -1694,8 +2153,8 @@ public static partial class CCodeOutputGenerator
         string moduleName)
     {
         return GetInterfaceVTableIdentifier(
-            new QualifiedIdentifier(moduleName, classDeclaration.FullName),
-            new QualifiedIdentifier(moduleName, interfaceDeclaration.FullName));
+            new QualifiedIdentifier(classDeclaration.ProjectName ?? moduleName, classDeclaration.FullName),
+            new QualifiedIdentifier(interfaceDeclaration.ProjectName ?? moduleName, interfaceDeclaration.FullName));
     }
 
     private static QualifiedIdentifier GetInterfaceVTableIdentifier(
@@ -1762,7 +2221,8 @@ public static partial class CCodeOutputGenerator
     {
         List<DeclarationBase> declarations = [];
 
-        foreach (var compilationContext in project.CompilationContexts)
+        foreach (var compilationContext in project.CompilationContexts
+            .Where(context => !context.IsProjectReference))
         {
             foreach (var declaration in compilationContext.DeclarationScope.Declarations)
             {
@@ -1858,6 +2318,300 @@ public static partial class CCodeOutputGenerator
                 declaration = baseClass;
             }
             return depth;
+        }
+    }
+
+    private static List<DeclarationBase> GetPublicApiDeclarations(
+        IReadOnlyCollection<DeclarationBase> declarations,
+        IReadOnlySet<QualifiedIdentifier> publicTypeNames) =>
+        declarations.Where(declaration => declaration switch
+        {
+            FunctionDeclaration function => IsPublicApiFunction(function),
+            ClassDeclaration or EnumDeclaration =>
+                publicTypeNames.Contains(declaration.FullName),
+            _ => false,
+        }).ToList();
+
+    private static HashSet<QualifiedIdentifier> GetPublicApiTypeNames(
+        IReadOnlyCollection<DeclarationBase> declarations)
+    {
+        var allTypes = EnumerateTypes(declarations).ToArray();
+        var publicTypeNames = allTypes
+            .Where(type => type switch
+            {
+                ClassDeclaration classType => classType.Visibility == Visibility.Public,
+                EnumDeclaration enumType => enumType.Visibility == Visibility.Public,
+                _ => false,
+            })
+            .Select(type => type.FullName)
+            .ToHashSet();
+        var referencedTypes = new HashSet<QualifiedIdentifier>();
+        var publicFunctions = declarations.OfType<FunctionDeclaration>()
+            .Where(IsPublicApiFunction);
+        foreach (var function in publicFunctions)
+        {
+            AddTypeReferences(function.ReturnType, referencedTypes);
+            foreach (var parameter in function.Parameters)
+            {
+                AddTypeReferences(parameter.ParameterType, referencedTypes);
+            }
+        }
+
+        var pendingTypes = new Queue<DeclarationBase>();
+        foreach (var type in allTypes.Where(type => publicTypeNames.Contains(type.FullName)))
+        {
+            pendingTypes.Enqueue(type);
+        }
+
+        void EnqueueReferencedTypes()
+        {
+            foreach (var referencedName in referencedTypes)
+            {
+                if (publicTypeNames.Add(referencedName) &&
+                    allTypes.FirstOrDefault(candidate => candidate.FullName == referencedName) is { } referenced)
+                {
+                    pendingTypes.Enqueue(referenced);
+                }
+            }
+        }
+
+        EnqueueReferencedTypes();
+
+        var visitedTypes = new HashSet<QualifiedIdentifier>();
+        while (pendingTypes.Count > 0)
+        {
+            var type = pendingTypes.Dequeue();
+            if (!visitedTypes.Add(type.FullName))
+            {
+                continue;
+            }
+            if (type is not ClassDeclaration classType)
+            {
+                continue;
+            }
+
+            foreach (var baseType in classType.BaseTypes)
+            {
+                AddTypeReferences(baseType, referencedTypes);
+            }
+            foreach (var field in classType.MemberDeclarations.Declarations.OfType<FieldDeclaration>()
+                .Where(field => !field.IsStatic ||
+                    field.MemberModifiers.Contains(MemberModifier.Public)))
+            {
+                AddTypeReferences(field.Type, referencedTypes);
+            }
+            if (classType.Visibility == Visibility.Public)
+            {
+                foreach (var member in classType.MemberDeclarations.Declarations)
+                {
+                    if (!IsPublicApiMember(member, classType))
+                    {
+                        continue;
+                    }
+                    switch (member)
+                    {
+                        case FunctionDeclaration function:
+                            AddTypeReferences(function.ReturnType, referencedTypes);
+                            foreach (var parameter in function.Parameters)
+                            {
+                                AddTypeReferences(parameter.ParameterType, referencedTypes);
+                            }
+                            break;
+                        case PropertyDeclaration property:
+                            AddTypeReferences(property.Type, referencedTypes);
+                            foreach (var accessor in property.PropertyAccessorDeclarations)
+                            {
+                                foreach (var parameter in accessor.Parameters)
+                                {
+                                    AddTypeReferences(parameter.ParameterType, referencedTypes);
+                                }
+                            }
+                            break;
+                        case ClassDeclaration nested when nested.Visibility == Visibility.Public:
+                            referencedTypes.Add(nested.FullName);
+                            break;
+                    }
+                }
+            }
+
+            EnqueueReferencedTypes();
+        }
+
+        return publicTypeNames;
+    }
+
+    private static void AddTypeReferences(
+        TypeBase type,
+        ISet<QualifiedIdentifier> referencedTypes)
+    {
+        switch (type)
+        {
+            case ConstType constant:
+                AddTypeReferences(constant.UnderlyingType, referencedTypes);
+                break;
+            case ArrayType array:
+                AddTypeReferences(array.ElementType, referencedTypes);
+                break;
+            case NullableType nullable:
+                AddTypeReferences(nullable.UnderlyingType, referencedTypes);
+                break;
+            case NamedType named:
+                if (named.ResolvedTypeFullName.Parts.Length > 1)
+                {
+                    referencedTypes.Add(new QualifiedIdentifier(
+                        named.ResolvedTypeFullName.Parts.Skip(1).ToArray()));
+                }
+                foreach (var argument in named.TypeArguments)
+                {
+                    AddTypeReferences(argument, referencedTypes);
+                }
+                break;
+        }
+    }
+
+    private static IEnumerable<DeclarationBase> EnumerateTypes(
+        IEnumerable<DeclarationBase> declarations)
+    {
+        foreach (var declaration in declarations)
+        {
+            if (declaration is ClassDeclaration classType)
+            {
+                yield return classType;
+                foreach (var nestedType in EnumerateTypes(classType.MemberDeclarations.Declarations))
+                {
+                    yield return nestedType;
+                }
+            }
+            else if (declaration is EnumDeclaration enumType)
+            {
+                yield return enumType;
+            }
+        }
+    }
+
+    private static bool IsPublicApiType(
+        DeclarationBase declaration,
+        IReadOnlySet<QualifiedIdentifier> publicTypeNames) =>
+        publicTypeNames.Contains(declaration.FullName);
+
+    private static bool IsPublicApiFunction(FunctionDeclaration function) =>
+        function.MemberModifiers.Contains(MemberModifier.Public) &&
+        (function.ParentClassDeclaration is null ||
+            function.ParentClassDeclaration.Visibility == Visibility.Public);
+
+    private static bool IsPublicApiMember(
+        DeclarationBase declaration,
+        ClassDeclaration parent) =>
+        parent.Visibility == Visibility.Public && declaration switch
+        {
+            FunctionDeclaration function =>
+                function.MemberModifiers.Contains(MemberModifier.Public),
+            PropertyDeclaration property =>
+                property.MemberModifiers.Contains(MemberModifier.Public),
+            ClassDeclaration nested => nested.Visibility == Visibility.Public,
+            _ => false,
+        };
+
+    private static bool IsPublicApiGenericFunction(FunctionSymbol function) =>
+        function.Declaration is { } declaration && IsPublicApiFunction(declaration);
+
+    internal static IReadOnlyCollection<(NamedType Type, ClassDeclaration Declaration)>
+        GetPublicApiGenericTypeInstances(CxProject project)
+    {
+        var publicTypeNames = GetPublicApiTypeNames(GetDeclarations(project));
+        return GetPublicApiGenericTypeInstances(project, publicTypeNames);
+    }
+
+    internal static IReadOnlyCollection<FunctionSymbol> GetPublicApiGenericFunctionInstances(
+        CxProject project) =>
+        project.GenericFunctionInstances.Where(IsPublicApiGenericFunction).ToArray();
+
+    private static IReadOnlyCollection<(NamedType Type, ClassDeclaration Declaration)>
+        GetPublicApiGenericTypeInstances(
+            CxProject project,
+            IReadOnlySet<QualifiedIdentifier> publicTypeNames)
+    {
+        var publicConstructedTypes = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var declaration in GetPublicApiDeclarations(GetDeclarations(project), publicTypeNames))
+        {
+            switch (declaration)
+            {
+                case FunctionDeclaration function:
+                    AddConstructedTypeIdentities(function.ReturnType, publicConstructedTypes);
+                    foreach (var parameter in function.Parameters)
+                    {
+                        AddConstructedTypeIdentities(parameter.ParameterType, publicConstructedTypes);
+                    }
+                    break;
+                case ClassDeclaration classType:
+                    foreach (var field in classType.MemberDeclarations.Declarations.OfType<FieldDeclaration>())
+                    {
+                        AddConstructedTypeIdentities(field.Type, publicConstructedTypes);
+                    }
+                    foreach (var functionMember in classType.MemberDeclarations.Declarations
+                        .OfType<FunctionDeclaration>().Where(IsPublicApiFunction))
+                    {
+                        AddConstructedTypeIdentities(functionMember.ReturnType, publicConstructedTypes);
+                        foreach (var parameter in functionMember.Parameters)
+                        {
+                            AddConstructedTypeIdentities(parameter.ParameterType, publicConstructedTypes);
+                        }
+                    }
+                    foreach (var property in classType.MemberDeclarations.Declarations
+                        .OfType<PropertyDeclaration>()
+                        .Where(property => IsPublicApiMember(property, classType)))
+                    {
+                        AddConstructedTypeIdentities(property.Type, publicConstructedTypes);
+                    }
+                    break;
+            }
+        }
+
+        foreach (var function in project.GenericFunctionInstances
+            .Where(IsPublicApiGenericFunction))
+        {
+            AddConstructedTypeIdentities(function.ReturnType, publicConstructedTypes);
+            foreach (var parameter in function.ParameterTypes)
+            {
+                AddConstructedTypeIdentities(parameter, publicConstructedTypes);
+            }
+            if (function.ClosedContainingType is { } containingType)
+            {
+                AddConstructedTypeIdentities(containingType, publicConstructedTypes);
+            }
+        }
+
+        return project.GenericTypeInstances.Where(instance =>
+            publicTypeNames.Contains(instance.Declaration.FullName) &&
+            instance.Type.ConstructedIdentity is { } identity &&
+            publicConstructedTypes.Contains(identity.CanonicalName)).ToArray();
+    }
+
+    private static void AddConstructedTypeIdentities(
+        TypeBase type,
+        ISet<string> identities)
+    {
+        switch (type)
+        {
+            case ConstType constant:
+                AddConstructedTypeIdentities(constant.UnderlyingType, identities);
+                break;
+            case ArrayType array:
+                AddConstructedTypeIdentities(array.ElementType, identities);
+                break;
+            case NullableType nullable:
+                AddConstructedTypeIdentities(nullable.UnderlyingType, identities);
+                break;
+            case NamedType named:
+                if (named.ConstructedIdentity is { } identity)
+                {
+                    identities.Add(identity.CanonicalName);
+                }
+                foreach (var argument in named.TypeArguments)
+                {
+                    AddConstructedTypeIdentities(argument, identities);
+                }
+                break;
         }
     }
 

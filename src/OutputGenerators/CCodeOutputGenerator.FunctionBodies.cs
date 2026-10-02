@@ -57,6 +57,9 @@ public static partial class CCodeOutputGenerator
             writer.Write(string.Join(", ", parameters));
             writer.WriteLine(") {");
             writer.IncreaseIndent();
+            writer.WriteLine("#if !defined(CX_STATIC_LINK)");
+            writer.WriteLine($"__cx_module_init_{GetModuleToken(moduleName)}();");
+            writer.WriteLine("#endif");
             var context = new StatementWriteContext(functionDeclaration);
             context.WriteDeclarations(writer);
 
@@ -130,6 +133,9 @@ public static partial class CCodeOutputGenerator
                 $"{instance.SpecializationName}({string.Join(", ", parameters)})");
             writer.WriteLine("{");
             writer.IncreaseIndent();
+            writer.WriteLine("#if !defined(CX_STATIC_LINK)");
+            writer.WriteLine($"__cx_module_init_{GetModuleToken(moduleName)}();");
+            writer.WriteLine("#endif");
             if (!declaration.IsStatic && declaration is not ConstructorDeclaration)
             {
                 writer.WriteLine("(void)__this;");
@@ -261,6 +267,9 @@ public static partial class CCodeOutputGenerator
             writer.Write(string.Join(", ", parameters));
             writer.WriteLine(") {");
             writer.IncreaseIndent();
+            writer.WriteLine("#if !defined(CX_STATIC_LINK)");
+            writer.WriteLine($"__cx_module_init_{GetModuleToken(moduleName)}();");
+            writer.WriteLine("#endif");
             var context = new StatementWriteContext(function);
             context.WriteDeclarations(writer);
 

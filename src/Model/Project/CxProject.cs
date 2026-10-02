@@ -12,14 +12,27 @@ public class CxProject
     public List<string> Targets { get; set; } = [];
     public CxPackageSection Package { get; set; } = new();
     public List<string> Dependencies { get; set; } = [];
+    public List<string> ProjectReferences { get; set; } = [];
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    [YamlDotNet.Serialization.YamlIgnore]
+    public List<string> ResolvedProjectDirectories { get; } = [];
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    [YamlDotNet.Serialization.YamlIgnore]
+    public List<string> ResolvedProjectNames { get; } = [];
 
     private List<CompilationContext> _compilationContexts = new List<CompilationContext>();
     public IReadOnlyList<CompilationContext> CompilationContexts => _compilationContexts.AsReadOnly();
     private readonly Dictionary<string, CxCompiler.Semantics.FunctionSymbol> _genericFunctionInstances = [];
+    private readonly HashSet<string> _referencedGenericFunctionSpecializations =
+        new(StringComparer.Ordinal);
     public IReadOnlyCollection<CxCompiler.Semantics.FunctionSymbol> GenericFunctionInstances =>
         _genericFunctionInstances.Values;
     private readonly Dictionary<string, (CxCompiler.Model.Types.NamedType Type,
         CxCompiler.Model.Types.ClassDeclaration Declaration)> _genericTypeInstances = [];
+    private readonly HashSet<string> _referencedGenericTypeIdentities = new(StringComparer.Ordinal);
+    internal IReadOnlySet<string> ReferencedGenericTypeIdentities => _referencedGenericTypeIdentities;
     public IReadOnlyCollection<(CxCompiler.Model.Types.NamedType Type,
         CxCompiler.Model.Types.ClassDeclaration Declaration)> GenericTypeInstances =>
         _genericTypeInstances.Values;
@@ -35,15 +48,25 @@ public class CxProject
         }
     }
 
+    internal void AddReferencedGenericTypeIdentity(string canonicalName) =>
+        _referencedGenericTypeIdentities.Add(canonicalName);
+
     internal void ClearGenericFunctionInstances() => _genericFunctionInstances.Clear();
 
     internal void AddGenericFunctionInstance(CxCompiler.Semantics.FunctionSymbol symbol)
     {
-        if (symbol.SpecializationName is { } name)
+        if (symbol.SpecializationName is { } name &&
+            !_referencedGenericFunctionSpecializations.Contains(name))
         {
             _genericFunctionInstances.TryAdd(name, symbol);
         }
     }
+
+    internal void AddReferencedGenericFunctionSpecialization(string name) =>
+        _referencedGenericFunctionSpecializations.Add(name);
+
+    internal bool HasReferencedGenericFunctionSpecialization(string name) =>
+        _referencedGenericFunctionSpecializations.Contains(name);
 
     public static CxProject CreateDefaultApplicationProject(string name = "unnamed") => new()
     {
@@ -59,6 +82,14 @@ public class CxProject
             throw new InternalCompilerException("Compilation context cannot be null");
         }
 
+        context.ProjectName ??= Name;
+        _compilationContexts.Add(context);
+    }
+
+    internal void AddReferencedCompilationContext(CompilationContext context, string projectName)
+    {
+        context.ProjectName = projectName;
+        context.IsProjectReference = true;
         _compilationContexts.Add(context);
     }
 }

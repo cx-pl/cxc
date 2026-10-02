@@ -1,0 +1,26 @@
+import Math;
+namespace App;
+public class Implementation : IValue {
+    public constructor() {}
+    public int Get() {
+        return 41;
+    }
+}
+public int Run() {
+    Implementation value = new Implementation();
+    if (!(value is IValue)) {
+        return 0;
+    }
+    IValue reference = value;
+    IValue returned = Echo(reference);
+    if (!(returned is IValue)) {
+        return 0;
+    }
+    Value number;
+    Box<int> box = new Box<int>();
+    Crate<int> crate = new Crate<int>();
+    box.Value = Identity(ReadInterface(returned));
+    crate.Value = box.Value;
+    number.number = crate.Value;
+    return AddOne(ReadBox(box) + LibraryBox() - 1);
+}

@@ -39,6 +39,7 @@ public sealed class SemanticBinder
         AddCoreSymbols();
 
         ValidatePartialTypeDeclarations(project.CompilationContexts);
+        ValidateProjectReferenceTypeConflicts(project.CompilationContexts);
 
         foreach (var context in project.CompilationContexts)
         {
@@ -47,13 +48,13 @@ public sealed class SemanticBinder
 
         foreach (var context in project.CompilationContexts)
         {
-            AddProjectTypes(project.Name, context.DeclarationScope.Declarations);
+            AddProjectTypes(context.ProjectName ?? project.Name, context.DeclarationScope.Declarations);
         }
 
         foreach (var context in project.CompilationContexts)
         {
             ResolveBaseTypes(
-                project.Name,
+                context.ProjectName ?? project.Name,
                 context.DeclarationScope.Declarations,
                 context.Imports);
         }
@@ -64,8 +65,9 @@ public sealed class SemanticBinder
             ResolveDeclarationTypes(
                 context.DeclarationScope.Declarations,
                 context.Namespace,
-                context.Imports);
-            AddProjectSymbols(project.Name, context.DeclarationScope.Declarations);
+                context.Imports,
+                context.IsProjectReference);
+            AddProjectSymbols(context.ProjectName ?? project.Name, context.DeclarationScope.Declarations);
         }
 
         BindVirtualMethods();
@@ -75,6 +77,10 @@ public sealed class SemanticBinder
 
         foreach (var context in project.CompilationContexts)
         {
+            if (context.IsProjectReference)
+            {
+                continue;
+            }
             foreach (var function in EnumerateFunctions(context.DeclarationScope.Declarations))
             {
                 BindFunction(function, context.Imports);
@@ -92,17 +98,18 @@ public sealed class SemanticBinder
         IReadOnlyList<CompilationContext> contexts)
     {
         var duplicateTypes = contexts
-            .SelectMany(context => EnumerateClasses(context.DeclarationScope.Declarations))
-            .GroupBy(declaration => declaration.FullName)
+            .SelectMany(context => EnumerateClasses(context.DeclarationScope.Declarations)
+                .Select(declaration => (Module: context.ProjectName, Declaration: declaration)))
+            .GroupBy(item => (item.Module, item.Declaration.FullName))
             .Where(group => group.Count() > 1);
 
         foreach (var group in duplicateTypes)
         {
-            var declarations = group.ToArray();
+            var declarations = group.Select(item => item.Declaration).ToArray();
             if (declarations.Any(declaration => !declaration.IsPartial))
             {
                 throw new CompilationErrorException(
-                    $"Type '{group.Key}' is declared more than once; every declaration " +
+                    $"Type '{group.Key.FullName}' is declared more than once; every declaration " +
                     "must be partial to share a type name.");
             }
 
@@ -112,13 +119,51 @@ public sealed class SemanticBinder
                     first.GenericTypeNames, StringComparer.Ordinal)))
             {
                 throw new CompilationErrorException(
-                    $"Partial declarations of type '{group.Key}' have conflicting " +
+                    $"Partial declarations of type '{group.Key.FullName}' have conflicting " +
                     "kind or generic parameters.");
             }
 
             throw new CompilationErrorException(
-                $"Partial declarations of type '{group.Key}' cannot yet be merged; " +
+                $"Partial declarations of type '{group.Key.FullName}' cannot yet be merged; " +
                 "declare the type once.");
+        }
+    }
+
+    private static void ValidateProjectReferenceTypeConflicts(
+        IReadOnlyList<CompilationContext> contexts)
+    {
+        var duplicate = contexts
+            .SelectMany(context => EnumerateProjectTypes(context.DeclarationScope.Declarations)
+                .Select(type => (Context: context, Type: type)))
+            .GroupBy(item => item.Type.FullName)
+            .FirstOrDefault(group => group.Select(item => item.Context.ProjectName)
+                .Distinct(StringComparer.Ordinal).Skip(1).Any());
+        if (duplicate is not null)
+        {
+            var owners = duplicate.Select(item => item.Context.ProjectName)
+                .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal);
+            throw new CompilationErrorException(
+                $"Type '{duplicate.Key}' is declared by multiple CX projects: " +
+                string.Join(", ", owners) + ".");
+        }
+    }
+
+    private static IEnumerable<DeclarationBase> EnumerateProjectTypes(
+        IEnumerable<DeclarationBase> declarations)
+    {
+        foreach (var declaration in declarations)
+        {
+            if (declaration is ClassDeclaration classDeclaration)
+            {
+                yield return classDeclaration;
+                foreach (var nested in EnumerateProjectTypes(
+                    classDeclaration.MemberDeclarations.Declarations))
+                    yield return nested;
+            }
+            else if (declaration is EnumDeclaration enumDeclaration)
+            {
+                yield return enumDeclaration;
+            }
         }
     }
 
@@ -430,7 +475,9 @@ public sealed class SemanticBinder
         string moduleName,
         IEnumerable<DeclarationBase> declarations)
     {
-        foreach (var enumDeclaration in declarations.OfType<EnumDeclaration>())
+        foreach (var enumDeclaration in declarations.OfType<EnumDeclaration>()
+            .Where(declaration => !IsReferencedModule(moduleName) ||
+                declaration.Visibility == Visibility.Public))
         {
             var type = new NamedType(enumDeclaration.FullName.ToString(), []);
             type.SetResolvedType(
@@ -440,15 +487,20 @@ public sealed class SemanticBinder
             _enums.Add(new EnumTypeSymbol(moduleName, enumDeclaration, type));
         }
 
-        foreach (var classDeclaration in declarations.OfType<ClassDeclaration>())
+        foreach (var classDeclaration in declarations.OfType<ClassDeclaration>()
+            .Where(declaration => !IsReferencedModule(moduleName) ||
+                declaration.Visibility == Visibility.Public))
         {
+            classDeclaration.ProjectName = moduleName;
             var type = new NamedType(classDeclaration.FullName.ToString(), []);
             type.SetResolvedType(
                 classDeclaration.FullName,
                 moduleName,
                 classDeclaration.ClassType);
             _types.Add(new TypeSymbol(moduleName, classDeclaration, type));
-            foreach (var field in classDeclaration.MemberDeclarations.Declarations.OfType<FieldDeclaration>())
+            foreach (var field in classDeclaration.MemberDeclarations.Declarations.OfType<FieldDeclaration>()
+                .Where(field => !IsReferencedModule(moduleName) ||
+                    field.MemberModifiers.Contains(MemberModifier.Public)))
             {
                 _fields.Add(new FieldSymbol(
                     moduleName,
@@ -456,7 +508,9 @@ public sealed class SemanticBinder
                     classDeclaration.ClassType,
                     field));
             }
-            foreach (var property in classDeclaration.MemberDeclarations.Declarations.OfType<PropertyDeclaration>())
+            foreach (var property in classDeclaration.MemberDeclarations.Declarations.OfType<PropertyDeclaration>()
+                .Where(property => !IsReferencedModule(moduleName) ||
+                    property.MemberModifiers.Contains(MemberModifier.Public)))
             {
                 _properties.Add(new PropertySymbol(
                     moduleName,
@@ -483,18 +537,25 @@ public sealed class SemanticBinder
     private void ResolveDeclarationTypes(
         IEnumerable<DeclarationBase> declarations,
         QualifiedIdentifier currentNamespace,
-        IReadOnlyList<QualifiedIdentifier> imports)
+        IReadOnlyList<QualifiedIdentifier> imports,
+        bool publicApiOnly = false)
     {
         foreach (var declaration in declarations)
         {
             switch (declaration)
             {
                 case ClassDeclaration classDeclaration:
-                    foreach (var field in classDeclaration.MemberDeclarations.Declarations.OfType<FieldDeclaration>())
+                    if (publicApiOnly && classDeclaration.Visibility != Visibility.Public)
+                    {
+                        break;
+                    }
+                    foreach (var field in classDeclaration.MemberDeclarations.Declarations.OfType<FieldDeclaration>()
+                        .Where(field => !publicApiOnly || field.MemberModifiers.Contains(MemberModifier.Public)))
                     {
                         ResolveTypeReference(field.Type, currentNamespace, imports);
                     }
-                    foreach (var property in classDeclaration.MemberDeclarations.Declarations.OfType<PropertyDeclaration>())
+                    foreach (var property in classDeclaration.MemberDeclarations.Declarations.OfType<PropertyDeclaration>()
+                        .Where(property => !publicApiOnly || property.MemberModifiers.Contains(MemberModifier.Public)))
                     {
                         ResolveTypeReference(property.Type, currentNamespace, imports);
                         foreach (var parameter in property.PropertyAccessorDeclarations
@@ -506,10 +567,15 @@ public sealed class SemanticBinder
                     ResolveDeclarationTypes(
                         classDeclaration.MemberDeclarations.Declarations,
                         classDeclaration.Namespace,
-                        imports);
+                        imports,
+                        publicApiOnly);
                     break;
 
                 case FunctionDeclaration function:
+                    if (publicApiOnly && !IsPublicApiFunction(function))
+                    {
+                        break;
+                    }
                     ResolveTypeReference(function.ReturnType, currentNamespace, imports);
                     foreach (var parameter in function.Parameters)
                     {
@@ -525,7 +591,9 @@ public sealed class SemanticBinder
         IEnumerable<DeclarationBase> declarations,
         IReadOnlyList<QualifiedIdentifier> imports)
     {
-        foreach (var classDeclaration in declarations.OfType<ClassDeclaration>())
+        foreach (var classDeclaration in declarations.OfType<ClassDeclaration>()
+            .Where(declaration => !IsReferencedModule(moduleName) ||
+                declaration.Visibility == Visibility.Public))
         {
             if (classDeclaration.IsStatic && classDeclaration.BaseTypes.Count > 0)
             {
@@ -667,7 +735,8 @@ public sealed class SemanticBinder
         IEnumerable<DeclarationBase> declarations)
     {
         var overloadIndexes = new Dictionary<QualifiedIdentifier, int>();
-        foreach (var function in EnumerateFunctions(declarations))
+        foreach (var function in EnumerateFunctions(declarations)
+            .Where(function => !IsReferencedModule(moduleName) || IsPublicApiFunction(function)))
         {
             overloadIndexes.TryGetValue(function.FullName, out var overloadIndex);
             overloadIndex++;
@@ -693,6 +762,17 @@ public sealed class SemanticBinder
             }
         }
     }
+
+    private bool IsReferencedModule(string moduleName) =>
+        _project?.CompilationContexts.Any(context => context.IsProjectReference &&
+            context.ProjectName == moduleName) == true;
+
+    private static bool IsPublicApiFunction(FunctionDeclaration function) =>
+        function.ParentClassDeclaration is { } parent
+            ? parent.Visibility == Visibility.Public &&
+                (parent.ClassType == ClassType.Interface ||
+                 function.MemberModifiers.Contains(MemberModifier.Public))
+            : function.MemberModifiers.Contains(MemberModifier.Public);
 
     private void BindVirtualMethods()
     {
@@ -2509,7 +2589,7 @@ public sealed class SemanticBinder
         return target.Symbol.ReturnType;
     }
 
-    private static FunctionSymbol? CloseGenericFunction(
+    private FunctionSymbol? CloseGenericFunction(
         FunctionSymbol symbol,
         IReadOnlyList<TypeBase> argumentTypes,
         IReadOnlyList<TypeBase> explicitTypeArguments)
@@ -2560,8 +2640,11 @@ public sealed class SemanticBinder
         {
             return null;
         }
+        var specializationModule = IsReferencedModule(symbol.ModuleName)
+            ? _project!.Name
+            : symbol.ModuleName;
         var identity = GenericTypeIdentity.CreateFunction(
-            symbol.ModuleName,
+            specializationModule,
             symbol.FullName.ToString() +
                 (declaration.IsStatic ? string.Empty : "#instance") +
                 (symbol.ClosedContainingType?.ConstructedIdentity is { } containingIdentity
@@ -2571,7 +2654,7 @@ public sealed class SemanticBinder
             parameterTypes,
             returnType);
         return new FunctionSymbol(
-            symbol.ModuleName,
+            specializationModule,
             symbol.FullName,
             parameterTypes,
             returnType,
@@ -2581,7 +2664,7 @@ public sealed class SemanticBinder
             symbol.ClosedContainingType);
     }
 
-    private static FunctionSymbol CloseContainingClassFunction(
+    private FunctionSymbol CloseContainingClassFunction(
         FunctionSymbol symbol,
         TypeBase? receiverType)
     {
@@ -2603,19 +2686,28 @@ public sealed class SemanticBinder
             GenericTypeSubstitution.Substitute(parameter, arguments)).ToArray();
         var returnType = GenericTypeSubstitution.Substitute(symbol.ReturnType, arguments);
         var specializationName = symbol.SpecializationName;
+        var specializationModule = symbol.ModuleName;
         if (closedType.TypeArguments.Any(IsValueTypeGenericArgument) &&
             symbol.Declaration is { GenericTypeNames.Length: 0 } declaration)
         {
-            var identity = GenericTypeIdentity.CreateFunction(
-                symbol.ModuleName,
-                symbol.FullName.ToString() + "@" + closedType.ConstructedIdentity!.CanonicalName,
-                closedType.TypeArguments,
-                parameterTypes,
-                returnType);
-            specializationName = identity.CIdentifier;
+            string GetSpecializationName(string moduleName) =>
+                GenericTypeIdentity.CreateFunction(
+                    moduleName,
+                    symbol.FullName.ToString() + "@" + closedType.ConstructedIdentity!.CanonicalName,
+                    closedType.TypeArguments,
+                    parameterTypes,
+                    returnType).CIdentifier;
+
+            specializationName = GetSpecializationName(symbol.ModuleName);
+            if (IsReferencedModule(symbol.ModuleName) &&
+                !_project!.HasReferencedGenericFunctionSpecialization(specializationName))
+            {
+                specializationModule = _project.Name;
+                specializationName = GetSpecializationName(specializationModule);
+            }
         }
         return new FunctionSymbol(
-            symbol.ModuleName,
+            specializationModule,
             symbol.FullName,
             parameterTypes,
             returnType,
@@ -2840,20 +2932,30 @@ public sealed class SemanticBinder
         {
             var declarationName = constructor.FullName.ToString() +
                 $"#constructor@{closedIdentity.CanonicalName}";
-            var identity = GenericTypeIdentity.CreateFunction(
-                constructor.ModuleName,
-                declarationName,
-                closedType.TypeArguments,
-                constructor.ParameterTypes,
-                constructor.ReturnType);
+            string GetSpecializationName(string moduleName) =>
+                GenericTypeIdentity.CreateFunction(
+                    moduleName,
+                    declarationName,
+                    closedType.TypeArguments,
+                    constructor.ParameterTypes,
+                    constructor.ReturnType).CIdentifier;
+
+            var specializationModule = constructor.ModuleName;
+            var specializationName = GetSpecializationName(specializationModule);
+            if (IsReferencedModule(constructor.ModuleName) &&
+                !_project!.HasReferencedGenericFunctionSpecialization(specializationName))
+            {
+                specializationModule = _project.Name;
+                specializationName = GetSpecializationName(specializationModule);
+            }
             constructor = new FunctionSymbol(
-                constructor.ModuleName,
+                specializationModule,
                 constructor.FullName,
                 constructor.ParameterTypes,
                 constructor.ReturnType,
                 constructor.OverloadIndex,
                 constructor.Declaration,
-                identity.CIdentifier,
+                specializationName,
                 closedType);
             _project!.AddGenericFunctionInstance(constructor);
         }
@@ -2987,9 +3089,10 @@ public sealed class SemanticBinder
         type.ConstructedIdentity = GenericTypeIdentity.Create(
             parts[0], string.Join('.', parts.Skip(1)), type.TypeArguments);
         if (_types.SingleOrDefault(candidate =>
-            candidate.ModuleName == _project!.Name &&
+            candidate.ModuleName == parts[0] &&
             candidate.Declaration.FullName == new QualifiedIdentifier(parts.Skip(1).ToArray()))
-            is { } localType)
+            is { } localType &&
+            !_project!.ReferencedGenericTypeIdentities.Contains(type.ConstructedIdentity.CanonicalName))
         {
             _project!.AddGenericTypeInstance(type, localType.Declaration);
         }

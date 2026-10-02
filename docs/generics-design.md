@@ -45,7 +45,7 @@ Closed descriptors carry substituted field and method types and distinct
 runtime identities. Native tests exercise concrete size and field offsets,
 field read/write, constructor assignment, specialization identity, and generic
 function results. Focused substitution and canonical-identity tests were added
-before code generation. The latest full compiler suite contains 228 passing
+before code generation. The latest full compiler suite contains 229 passing
 tests; the closed generic field getter/setter fixture also compiles under MSVC
 with `/W4 /WX /wd4100` and runs successfully.
 

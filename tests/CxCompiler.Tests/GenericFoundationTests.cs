@@ -563,7 +563,7 @@ public sealed class GenericFoundationTests
         project.AddCompilationContext(CompilerTestHelper.Parse("""
             public class First {}
             public class Marker<T> { public constructor() {} }
-            Marker<First> Create() { return new Marker<First>(); }
+            public Marker<First> Create() { return new Marker<First>(); }
             """));
         new SemanticBinder().Bind(project);
         var identity = Assert.Single(project.GenericTypeInstances).Type.ConstructedIdentity!;
@@ -587,7 +587,7 @@ public sealed class GenericFoundationTests
             Assert.Contains($"CX_INIT_VTABLE(__cx_new_0, {identity.CIdentifier})", source);
             Assert.Contains($"CX_BEGIN_VTABLE_DEF({identity.CIdentifier})", source);
             Assert.Contains(".RuntimeFunctionCount = 1", source);
-            Assert.Contains("extern struct CX_ID_2(closed_construction, Marker)* " +
+            Assert.Contains("extern CX_CLOSED_CONSTRUCTION_API struct CX_ID_2(closed_construction, Marker)* " +
                 "CX_ID_2(closed_construction, Create)()", header);
         }
         finally
@@ -651,7 +651,8 @@ public sealed class GenericFoundationTests
                 Assert.Contains($"CX_BEGIN_VTABLE_DEF({identity.CIdentifier})", source);
                 Assert.Contains($".Hash = 0x{identity.RuntimeHash:X}ULL", source);
             }
-            Assert.Equal(3, source.Split(".RuntimeFieldCount = 1").Length - 1);
+            // Each type-info has a static-link and a dynamic-link initializer.
+            Assert.Equal(6, source.Split(".RuntimeFieldCount = 1").Length - 1);
         }
         finally
         {
@@ -1261,7 +1262,8 @@ public sealed class GenericFoundationTests
             var source = File.ReadAllText(Path.Combine(directory, "generic_multi_context.c"));
             Assert.Equal(1, header.Split($"CX_TYPEINFO_DECL({identity.CIdentifier})").Length - 1);
             Assert.Equal(1, source.Split($"CX_BEGIN_VTABLE_DEF({identity.CIdentifier})").Length - 1);
-            Assert.Equal(1, source.Split($"CX_TYPEINFO_NAME({identity.CIdentifier}) =").Length - 1);
+            // One definition is selected by each mutually exclusive link-mode branch.
+            Assert.Equal(2, source.Split($"CX_TYPEINFO_NAME({identity.CIdentifier}) =").Length - 1);
         }
         finally
         {
