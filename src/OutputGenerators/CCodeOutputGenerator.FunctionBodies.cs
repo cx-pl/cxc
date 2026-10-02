@@ -905,7 +905,9 @@ public static partial class CCodeOutputGenerator
             var typeInfo = clause.ExceptionType is NamedType namedType
                 ? new QualifiedIdentifier(namedType.ResolvedTypeFullName, "__typeinfo").ToCIdentifier()
                 : throw new InternalCompilerException("A catch clause has a non-class type.");
-            writer.WriteLine($"if (cx_exception_pending() && cx_exception_matches(&{typeInfo}))");
+            writer.WriteLine(
+                $"if (cx_exception_pending() && CX_ID_4(cxcore, System, Exception, Matches)(" +
+                $"cx_exception_current(), {typeInfo}))");
             writer.WriteLine("{");
             writer.IncreaseIndent();
             if (clause.VariableName is not null)
@@ -1506,7 +1508,7 @@ public static partial class CCodeOutputGenerator
             }
 
             var valueType = nullableTarget.UnderlyingType.ToCIdentifier(false);
-            return $"({nullableType}){{ cx_nullable_new(" +
+            return $"({nullableType}){{ CX_ID_4(cxcore, System, Nullable, CreateValueStorage)(" +
                 $"(cx_ptr)&(({valueType}[]){{ {value} }})[0], " +
                 $"(cx_uint)sizeof({valueType})) }}";
         }

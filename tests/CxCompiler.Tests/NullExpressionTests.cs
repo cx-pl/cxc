@@ -137,7 +137,7 @@ public sealed class NullExpressionTests
             }
             """);
 
-        Assert.Contains("cx_nullable_new(", generatedSource);
+        Assert.Contains("CX_ID_4(cxcore, System, Nullable, CreateValueStorage)(", generatedSource);
         Assert.Contains("(cx_uint)sizeof(cx_int)", generatedSource);
         Assert.Contains("(cx_ptr)(&CX_ID_2(unnamed, __string_", generatedSource);
     }

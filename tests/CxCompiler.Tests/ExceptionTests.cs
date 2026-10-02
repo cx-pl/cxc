@@ -31,7 +31,9 @@ public sealed class ExceptionTests
         Assert.Contains("struct cx_exception_frame __cx_finally_frame_", generatedSource);
         Assert.Contains("setjmp(__cx_exception_frame_", generatedSource);
         Assert.Contains("CX_THROW(", generatedSource);
-        Assert.Contains("cx_exception_matches(&CX_ID_4(cxcore, System, Exception, __typeinfo))", generatedSource);
+        Assert.Contains(
+            "CX_ID_4(cxcore, System, Exception, Matches)(cx_exception_current(), CX_ID_4(cxcore, System, Exception, __typeinfo))",
+            generatedSource);
         Assert.Contains("CX_RETHROW();", generatedSource);
         Assert.Contains("cx_int completed = 1;", generatedSource);
         Assert.True(
@@ -190,8 +192,12 @@ public sealed class ExceptionTests
 
         var generatedSource = GenerateSource(source);
 
-        Assert.Contains("cx_exception_matches(&CX_ID_3(unnamed, CustomException, __typeinfo))", generatedSource);
-        Assert.Contains("cx_exception_matches(&CX_ID_4(cxcore, System, Exception, __typeinfo))", generatedSource);
+        Assert.Contains(
+            "CX_ID_4(cxcore, System, Exception, Matches)(cx_exception_current(), CX_ID_3(unnamed, CustomException, __typeinfo))",
+            generatedSource);
+        Assert.Contains(
+            "CX_ID_4(cxcore, System, Exception, Matches)(cx_exception_current(), CX_ID_4(cxcore, System, Exception, __typeinfo))",
+            generatedSource);
     }
 
     private static string GenerateSource(string source)
