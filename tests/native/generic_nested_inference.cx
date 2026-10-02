@@ -1,0 +1,4 @@
+public class Box<T> {}
+
+public extern T Unbox<T>(Box<T> value);
+public int Run(Box<int> value) { return Unbox(value); }

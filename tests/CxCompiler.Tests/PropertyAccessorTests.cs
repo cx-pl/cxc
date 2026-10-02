@@ -37,7 +37,7 @@ public sealed class PropertyAccessorTests
             Assert.Contains("const struct CX_ID_2(unnamed, Character)* __this", header);
             Assert.Contains("const struct CX_ID_3(cxcore, System, String)* value", header);
             Assert.Contains(
-                "extern CX_EXPORT const struct CX_ID_3(cxcore, System, String)* CX_ID_4(unnamed, Output, Empty, __const_get)()",
+                "extern CX_UNNAMED_API const struct CX_ID_3(cxcore, System, String)* CX_ID_4(unnamed, Output, Empty, __const_get)()",
                 header);
         }
         finally

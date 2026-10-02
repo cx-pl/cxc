@@ -5,6 +5,7 @@ using CxCompiler.Model.Project;
 using CxCompiler.OutputGenerators;
 using CxCompiler.ParserVisitors;
 using CxCompiler.Semantics;
+using System.Text.RegularExpressions;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -34,7 +35,15 @@ public class Compiler
         }
 
         new SemanticBinder().Bind(_project!);
-        CCodeOutputGenerator.GenerateOutput(_project!, _projectPath!);
+        var projectFilePath = Path.GetFullPath(_projectPath!);
+        var projectDirectory = Path.GetDirectoryName(projectFilePath)!;
+        var objectDirectory = Path.Combine(projectDirectory, ".obj");
+        Directory.CreateDirectory(objectDirectory);
+        IgnoreGeneratedDirectories(projectDirectory);
+        CCodeOutputGenerator.GenerateOutput(
+            _project!,
+            Path.Combine(objectDirectory, Path.GetFileName(projectFilePath)),
+            projectDirectory);
     }
 
     private void CompileCxProjectFile(string filePath)
@@ -52,6 +61,10 @@ public class Compiler
             ".json" => ParseCxProjectFromJson(reader),
             _ => throw new CompilationErrorException($"Unsupported project file format: {Path.GetExtension(filePath)}"),
         };
+        _project.Targets ??= [];
+        if (_project.Targets.Any(target => string.IsNullOrWhiteSpace(target)
+            || !Regex.IsMatch(target, "^[A-Za-z0-9][A-Za-z0-9._-]*$")))
+            throw new CompilationErrorException("Project 'targets' entries must be valid Runtime Identifiers (RIDs).");
 
         var projectDirectoryPath = Path.GetDirectoryName(filePath)
             ?? throw new InvalidOperationException("Project file path is invalid.");
@@ -117,5 +130,28 @@ public class Compiler
                 PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
             })
             ?? throw new InvalidOperationException("Failed to deserialize CxProject from JSON file.");
+    }
+
+    private static void IgnoreGeneratedDirectories(string projectDirectory)
+    {
+        var ignoreFilePath = Path.Combine(projectDirectory, ".gitignore");
+        var contents = File.Exists(ignoreFilePath)
+            ? File.ReadAllText(ignoreFilePath)
+            : string.Empty;
+        var lines = contents.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+        var additions = new[] { "/.obj/", "/.bin/" }
+            .Where(entry => !lines.Any(line => string.Equals(
+                line.Trim(), entry, StringComparison.Ordinal)));
+        var missingEntries = additions.ToArray();
+        if (missingEntries.Length == 0)
+        {
+            return;
+        }
+
+        var prefix = contents.Length == 0 || contents.EndsWith('\n')
+            ? contents
+            : contents + Environment.NewLine;
+        File.WriteAllText(ignoreFilePath,
+            prefix + string.Join(Environment.NewLine, missingEntries) + Environment.NewLine);
     }
 }

@@ -38,6 +38,8 @@ public sealed class SemanticBinder
         _enums.Clear();
         AddCoreSymbols();
 
+        ValidatePartialTypeDeclarations(project.CompilationContexts);
+
         foreach (var context in project.CompilationContexts)
         {
             BindDeclarationParameters(context.DeclarationScope.Declarations, []);
@@ -84,6 +86,40 @@ public sealed class SemanticBinder
             }
         }
         ValidateConstructorInitializerCycles();
+    }
+
+    private static void ValidatePartialTypeDeclarations(
+        IReadOnlyList<CompilationContext> contexts)
+    {
+        var duplicateTypes = contexts
+            .SelectMany(context => EnumerateClasses(context.DeclarationScope.Declarations))
+            .GroupBy(declaration => declaration.FullName)
+            .Where(group => group.Count() > 1);
+
+        foreach (var group in duplicateTypes)
+        {
+            var declarations = group.ToArray();
+            if (declarations.Any(declaration => !declaration.IsPartial))
+            {
+                throw new CompilationErrorException(
+                    $"Type '{group.Key}' is declared more than once; every declaration " +
+                    "must be partial to share a type name.");
+            }
+
+            var first = declarations[0];
+            if (declarations.Any(declaration => declaration.ClassType != first.ClassType ||
+                !declaration.GenericTypeNames.SequenceEqual(
+                    first.GenericTypeNames, StringComparer.Ordinal)))
+            {
+                throw new CompilationErrorException(
+                    $"Partial declarations of type '{group.Key}' have conflicting " +
+                    "kind or generic parameters.");
+            }
+
+            throw new CompilationErrorException(
+                $"Partial declarations of type '{group.Key}' cannot yet be merged; " +
+                "declare the type once.");
+        }
     }
 
     private static void BindDeclarationParameters(
@@ -147,13 +183,6 @@ public sealed class SemanticBinder
         {
             return;
         }
-        if (function.ParentClassDeclaration is { } parentClass &&
-            parentClass.GenericTypeNames.Length != 0)
-        {
-            throw new CompilationErrorException(
-                $"Generic method '{function.FullName}' currently requires a " +
-                "non-generic class.");
-        }
         if (function.Body is null)
         {
             if (function.MemberModifiers.Contains(MemberModifier.Extern))
@@ -174,17 +203,48 @@ public sealed class SemanticBinder
         {
             return;
         }
+        else if (!function.MemberModifiers.Contains(MemberModifier.Extern) &&
+            IsGenericLocalCopyAssignmentBody(function))
+        {
+            return;
+        }
+        else if (!function.MemberModifiers.Contains(MemberModifier.Extern) &&
+            IsGenericConditionalReturnBody(function))
+        {
+            return;
+        }
         throw new CompilationErrorException(
             $"Generic function '{function.FullName}' currently supports only an extern " +
-            "declaration, a direct type-parameter return, or one local copy.");
+            "declaration, a direct type-parameter return, one local copy, or a " +
+            "single assignment to a local copy, or a boolean conditional that " +
+            "returns matching type-parameter values or arrays.");
     }
 
-    private static bool IsDirectGenericIdentityType(TypeBase returnType, TypeBase parameterType) =>
-        returnType is GenericType returned && parameterType is GenericType argument &&
-            returned.Name == argument.Name ||
-        returnType is ArrayType { ElementType: GenericType returnedElement } &&
-            parameterType is ArrayType { ElementType: GenericType argumentElement } &&
-            returnedElement.Name == argumentElement.Name;
+    private static bool IsDirectGenericIdentityType(TypeBase returnType, TypeBase parameterType)
+    {
+        if (returnType is GenericType returned && parameterType is GenericType argument)
+        {
+            return returned.Name == argument.Name;
+        }
+        if (returnType is ArrayType returnArray && parameterType is ArrayType parameterArray)
+        {
+            return IsDirectGenericIdentityType(returnArray.ElementType, parameterArray.ElementType);
+        }
+        if (returnType is NullableType returnNullable &&
+            parameterType is NullableType parameterNullable)
+        {
+            return IsDirectGenericIdentityType(
+                returnNullable.UnderlyingType, parameterNullable.UnderlyingType);
+        }
+        if (returnType is NamedType returnNamed && parameterType is NamedType parameterNamed)
+        {
+            return returnNamed.ResolvedTypeFullName == parameterNamed.ResolvedTypeFullName &&
+                returnNamed.TypeArguments.Count == parameterNamed.TypeArguments.Count &&
+                returnNamed.TypeArguments.Zip(parameterNamed.TypeArguments)
+                    .All(pair => IsDirectGenericIdentityType(pair.First, pair.Second));
+        }
+        return returnType.FullName == parameterType.FullName;
+    }
 
     private static bool IsGenericLocalCopyBody(FunctionDeclaration function)
     {
@@ -207,6 +267,85 @@ public sealed class SemanticBinder
             parameter.ParameterType is GenericType argumentParameter &&
             argumentParameter.Name == declared.Name);
     }
+
+    private static bool IsGenericLocalCopyAssignmentBody(FunctionDeclaration function)
+    {
+        if (function.Body is not
+            [LocalVariableDeclarationStatement local,
+                ExpressionStatement
+                {
+                    Expression: AssignmentExpression
+                    {
+                        Target: IdentifierExpression target,
+                        Operator: "=",
+                        Value: IdentifierExpression replacement,
+                    },
+                },
+                ReturnStatement { Expression: IdentifierExpression returned }] ||
+            local.Declarators is not [var declarator] ||
+            local.DeclaredType is not NamedType declared ||
+            declared.GenericParams.Length != 0 ||
+            !function.GenericTypeNames.Contains(declared.Name) ||
+            function.ReturnType is not GenericType returnParameter ||
+            returnParameter.Name != declared.Name ||
+            declarator.Initializer is not IdentifierExpression initial ||
+            target.Identifier.ToString() != declarator.Name ||
+            returned.Identifier.ToString() != declarator.Name)
+        {
+            return false;
+        }
+
+        bool IsMatchingParameter(string name) => function.Parameters.Any(parameter =>
+            parameter.Name == name && parameter.ParameterType is GenericType parameterType &&
+            parameterType.Name == declared.Name);
+
+        return IsMatchingParameter(initial.Identifier.ToString()) &&
+            IsMatchingParameter(replacement.Identifier.ToString());
+    }
+
+    private static bool IsGenericConditionalReturnBody(FunctionDeclaration function)
+    {
+        if (function.Body is not
+            [IfStatement
+            {
+                Condition: IdentifierExpression condition,
+                ThenStatement: ReturnStatement
+                {
+                    Expression: IdentifierExpression whenTrue,
+                },
+                ElseStatement: ReturnStatement
+                {
+                    Expression: IdentifierExpression whenFalse,
+                },
+            }] || function.ReturnType is not (GenericType or ArrayType) ||
+            !ContainsFunctionTypeParameter(function.ReturnType, function.GenericTypeNames))
+        {
+            return false;
+        }
+
+        var conditionParameter = function.Parameters.SingleOrDefault(parameter =>
+            parameter.Name == condition.Identifier.ToString());
+        var trueParameter = function.Parameters.SingleOrDefault(parameter =>
+            parameter.Name == whenTrue.Identifier.ToString());
+        var falseParameter = function.Parameters.SingleOrDefault(parameter =>
+            parameter.Name == whenFalse.Identifier.ToString());
+        return conditionParameter?.ParameterType is BoolType &&
+            trueParameter is not null &&
+            IsDirectGenericIdentityType(function.ReturnType, trueParameter.ParameterType) &&
+            falseParameter is not null &&
+            IsDirectGenericIdentityType(function.ReturnType, falseParameter.ParameterType);
+    }
+
+    private static bool ContainsFunctionTypeParameter(
+        TypeBase type,
+        IReadOnlyCollection<string> genericTypeNames) =>
+        type switch
+        {
+            GenericType generic => genericTypeNames.Contains(generic.Name),
+            ArrayType { ElementType: GenericType generic } =>
+                genericTypeNames.Contains(generic.Name),
+            _ => false,
+        };
 
     private void AddCoreSymbols()
     {
@@ -2184,6 +2323,10 @@ public sealed class SemanticBinder
         }
 
         var currentNamespace = function.ParentClassDeclaration?.Namespace ?? function.Namespace;
+        foreach (var typeArgument in invocation.ExplicitTypeArguments)
+        {
+            ResolveTypeReference(typeArgument, currentNamespace, imports);
+        }
         ExpressionBase? receiver = null;
         TypeBase? receiverType = null;
         IReadOnlyList<(FunctionSymbol Symbol, int BaseDepth)> namedCandidates;
@@ -2282,7 +2425,8 @@ public sealed class SemanticBinder
             .Select(candidate => (
                 Symbol: CloseGenericFunction(
                     CloseContainingClassFunction(candidate.Symbol, receiverType),
-                    argumentTypes),
+                    argumentTypes,
+                    invocation.ExplicitTypeArguments),
                 candidate.BaseDepth))
             .Where(candidate => candidate.Symbol is not null)
             .Select(candidate => (Symbol: candidate.Symbol!, candidate.BaseDepth))
@@ -2367,12 +2511,13 @@ public sealed class SemanticBinder
 
     private static FunctionSymbol? CloseGenericFunction(
         FunctionSymbol symbol,
-        IReadOnlyList<TypeBase> argumentTypes)
+        IReadOnlyList<TypeBase> argumentTypes,
+        IReadOnlyList<TypeBase> explicitTypeArguments)
     {
         var declaration = symbol.Declaration;
         if (declaration is null || declaration.GenericTypeNames.Length == 0)
         {
-            return symbol;
+            return explicitTypeArguments.Count == 0 ? symbol : null;
         }
         if (symbol.ParameterTypes.Count != argumentTypes.Count)
         {
@@ -2380,11 +2525,25 @@ public sealed class SemanticBinder
         }
 
         var inferred = new Dictionary<string, TypeBase>(StringComparer.Ordinal);
-        foreach (var pair in symbol.ParameterTypes.Zip(argumentTypes))
+        if (explicitTypeArguments.Count > 0)
         {
-            if (!InferGenericArguments(pair.First, pair.Second, inferred))
+            if (explicitTypeArguments.Count != declaration.GenericTypeNames.Length)
             {
                 return null;
+            }
+            foreach (var pair in declaration.GenericTypeNames.Zip(explicitTypeArguments))
+            {
+                inferred.Add(pair.First, pair.Second);
+            }
+        }
+        else
+        {
+            foreach (var pair in symbol.ParameterTypes.Zip(argumentTypes))
+            {
+                if (!InferGenericArguments(pair.First, pair.Second, inferred))
+                {
+                    return null;
+                }
             }
         }
         if (declaration.GenericTypeNames.Any(name => !inferred.ContainsKey(name)))
@@ -2403,7 +2562,11 @@ public sealed class SemanticBinder
         }
         var identity = GenericTypeIdentity.CreateFunction(
             symbol.ModuleName,
-            symbol.FullName.ToString() + (declaration.IsStatic ? string.Empty : "#instance"),
+            symbol.FullName.ToString() +
+                (declaration.IsStatic ? string.Empty : "#instance") +
+                (symbol.ClosedContainingType?.ConstructedIdentity is { } containingIdentity
+                    ? $"@{containingIdentity.CanonicalName}"
+                    : string.Empty),
             typeArguments,
             parameterTypes,
             returnType);
@@ -2414,7 +2577,8 @@ public sealed class SemanticBinder
             returnType,
             symbol.OverloadIndex,
             declaration,
-            identity.CIdentifier);
+            identity.CIdentifier,
+            symbol.ClosedContainingType);
     }
 
     private static FunctionSymbol CloseContainingClassFunction(
@@ -2435,15 +2599,30 @@ public sealed class SemanticBinder
         }
         var arguments = parent.GenericTypeNames.Zip(closedType.TypeArguments)
             .ToDictionary(pair => pair.First, pair => pair.Second);
+        var parameterTypes = symbol.ParameterTypes.Select(parameter =>
+            GenericTypeSubstitution.Substitute(parameter, arguments)).ToArray();
+        var returnType = GenericTypeSubstitution.Substitute(symbol.ReturnType, arguments);
+        var specializationName = symbol.SpecializationName;
+        if (closedType.TypeArguments.Any(IsValueTypeGenericArgument) &&
+            symbol.Declaration is { GenericTypeNames.Length: 0 } declaration)
+        {
+            var identity = GenericTypeIdentity.CreateFunction(
+                symbol.ModuleName,
+                symbol.FullName.ToString() + "@" + closedType.ConstructedIdentity!.CanonicalName,
+                closedType.TypeArguments,
+                parameterTypes,
+                returnType);
+            specializationName = identity.CIdentifier;
+        }
         return new FunctionSymbol(
             symbol.ModuleName,
             symbol.FullName,
-            symbol.ParameterTypes.Select(parameter =>
-                GenericTypeSubstitution.Substitute(parameter, arguments)).ToArray(),
-            GenericTypeSubstitution.Substitute(symbol.ReturnType, arguments),
+            parameterTypes,
+            returnType,
             symbol.OverloadIndex,
             symbol.Declaration,
-            symbol.SpecializationName);
+            specializationName,
+            closedType);
     }
 
     private static bool ContainsOpenTypeParameter(TypeBase type) => type switch
@@ -2654,17 +2833,48 @@ public sealed class SemanticBinder
                 $"Constructor call for '{GetTypeName(creation.RequestedType)}' is ambiguous.");
         }
 
-        var constructor = matchingConstructors[0];
-        foreach (var pair in creation.Arguments.Zip(constructor.Constructor.ParameterTypes))
+        var constructor = matchingConstructors[0].Constructor;
+        if (creation.RequestedType is NamedType
+            { ConstructedIdentity: { } closedIdentity } closedType &&
+            closedType.TypeArguments.Any(IsValueTypeGenericArgument))
+        {
+            var declarationName = constructor.FullName.ToString() +
+                $"#constructor@{closedIdentity.CanonicalName}";
+            var identity = GenericTypeIdentity.CreateFunction(
+                constructor.ModuleName,
+                declarationName,
+                closedType.TypeArguments,
+                constructor.ParameterTypes,
+                constructor.ReturnType);
+            constructor = new FunctionSymbol(
+                constructor.ModuleName,
+                constructor.FullName,
+                constructor.ParameterTypes,
+                constructor.ReturnType,
+                constructor.OverloadIndex,
+                constructor.Declaration,
+                identity.CIdentifier,
+                closedType);
+            _project!.AddGenericFunctionInstance(constructor);
+        }
+        foreach (var pair in creation.Arguments.Zip(constructor.ParameterTypes))
         {
             ApplyContextualType(pair.First, pair.Second);
         }
         creation.BindConstructor(
-            constructor.Constructor,
-            constructor.ClassType,
+            constructor,
+            matchingConstructors[0].ClassType,
             $"__cx_new_{_objectCreationIndex++}");
         return creation.RequestedType;
     }
+
+    private static bool IsValueTypeGenericArgument(TypeBase type) => type switch
+    {
+        ConstType constant => IsValueTypeGenericArgument(constant.UnderlyingType),
+        ArrayType or NullableType or StringType or ObjectType => false,
+        NamedType named => named.ClassType is ClassType.Struct or ClassType.Enum,
+        _ => type is not GenericType,
+    };
 
     private static bool MatchesConstructedDeclaration(
         TypeSymbol candidate,
@@ -3639,6 +3849,19 @@ public sealed class SemanticBinder
                 {
                     yield return member;
                 }
+            }
+        }
+    }
+
+    private static IEnumerable<ClassDeclaration> EnumerateClasses(
+        IEnumerable<DeclarationBase> declarations)
+    {
+        foreach (var declaration in declarations.OfType<ClassDeclaration>())
+        {
+            yield return declaration;
+            foreach (var nested in EnumerateClasses(declaration.MemberDeclarations.Declarations))
+            {
+                yield return nested;
             }
         }
     }

@@ -1,0 +1,4 @@
+public class Utility<T> {
+    public static U Identity<U>(U value) { return value; }
+    public static int Run() { return Identity<int>(17); }
+}

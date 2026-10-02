@@ -1,9 +1,8 @@
-public class First {}
-public class Second {}
-public class Box<T> {
+public class Buffer<T> {
     public T[] values;
     public constructor() {}
 }
 
-Box<First> CreateFirst() { return new Box<First>(); }
-Box<Second> CreateSecond() { return new Box<Second>(); }
+public Buffer<int> Create() { return new Buffer<int>(); }
+public void Store(Buffer<int> buffer, int[] values) { buffer.values = values; }
+public int[] Load(Buffer<int> buffer) { return buffer.values; }

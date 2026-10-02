@@ -1,0 +1,4 @@
+import Lib;
+namespace App;
+
+public int Run(Token token) { return Read(token); }

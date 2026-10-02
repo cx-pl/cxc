@@ -25,7 +25,8 @@ public class ClassDeclarationParserVisitor : CxParserBaseVisitor<DeclarationBase
     {
         var classModifiers = new ClassModifiersParserVisitor().VisitClassModifiers(context.classModifiers());
         var (classType, customTypeName) = new ClassTypeParserVisitor().VisitClassType(context.classType());
-        var genericParams = new GenericParamsParserVisitor().VisitGenericParams(context.genericParams());
+        var genericParams = new GenericParamsParserVisitor()
+            .VisitGenericTypeParameters(context.genericTypeParameters());
 
         if (_classDeclaration == null)
         {

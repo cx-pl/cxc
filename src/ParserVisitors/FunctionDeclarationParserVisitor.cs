@@ -30,7 +30,8 @@ public class FunctionDeclarationParserVisitor : CxParserBaseVisitor<FunctionDecl
             memberModifiers,
             _parentClassDeclaration,
             context.Const() != null,
-            new GenericParamsParserVisitor().VisitGenericParams(context.genericParams()));
+            new GenericParamsParserVisitor().VisitGenericTypeParameters(
+                context.genericTypeParameters()));
 
         base.VisitChildren(context);
 

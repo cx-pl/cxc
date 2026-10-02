@@ -12,6 +12,131 @@ namespace CxCompiler.Tests;
 public sealed class GenericFoundationTests
 {
     [Fact]
+    public void ParsesGenericTypeArgumentsInSourceOrder()
+    {
+        var context = CompilerTestHelper.Parse("""
+            public struct First {}
+            public struct Second {}
+            public class Pair<T, U> {}
+            public Pair<First, Second> Create();
+            """);
+        var function = context.DeclarationScope.Declarations
+            .OfType<FunctionDeclaration>().Single();
+        var pair = Assert.IsType<NamedType>(function.ReturnType);
+
+        Assert.Equal(["First", "Second"], pair.TypeArguments.Select(argument => argument.Name));
+    }
+
+    [Fact]
+    public void ClosesGenericValueFieldsOverPrimitiveTypeArguments()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("generic_primitive_box");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Box<T> {
+                public T value;
+                public constructor() {}
+            }
+            public Box<int> Create() { return new Box<int>(); }
+            public void Write(Box<int> box, int value) { box.value = value; }
+            public int Read(Box<int> box) { return box.value; }
+            """));
+        new SemanticBinder().Bind(project);
+
+        var instance = Assert.Single(project.GenericTypeInstances);
+        Assert.Same(BuiltInSystemTypes.Int, Assert.Single(instance.Type.TypeArguments));
+        var directory = Path.Combine(Path.GetTempPath(), $"cxc-primitive-generic-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var header = File.ReadAllText(Path.Combine(directory, "generic_primitive_box.h"));
+            Assert.Contains($"struct {instance.Type.ConstructedIdentity!.CIdentifier} {{", header);
+            Assert.Contains("cx_int value;", header);
+            Assert.DoesNotContain("_unknowntype_", header);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ClosesGenericArrayFieldsOverPrimitiveTypeArguments()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("generic_array_field");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Buffer<T> {
+                public T[] values;
+                public constructor() {}
+            }
+            public Buffer<int> Create() { return new Buffer<int>(); }
+            public void Store(Buffer<int> buffer, int[] values) { buffer.values = values; }
+            public int[] Load(Buffer<int> buffer) { return buffer.values; }
+            """));
+        new SemanticBinder().Bind(project);
+
+        var instance = Assert.Single(project.GenericTypeInstances);
+        Assert.Same(BuiltInSystemTypes.Int, Assert.Single(instance.Type.TypeArguments));
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-array-field-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var header = File.ReadAllText(Path.Combine(directory, "generic_array_field.h"));
+            Assert.Contains($"struct {instance.Type.ConstructedIdentity!.CIdentifier} {{", header);
+            Assert.Contains("Array)* values;", header);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SpecializesConstructorForClosedMultiFieldValueLayout()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("generic_value_constructor");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Pair<T, U> {
+                public T first;
+                public U second;
+                public constructor(T firstValue, U secondValue) {
+                    first = firstValue;
+                    second = secondValue;
+                }
+            }
+            public Pair<int, long> Create() { return new Pair<int, long>(23, 41L); }
+            public int ReadFirst(Pair<int, long> pair) { return pair.first; }
+            public long ReadSecond(Pair<int, long> pair) { return pair.second; }
+            """));
+        new SemanticBinder().Bind(project);
+
+        Assert.Single(project.GenericTypeInstances);
+        var constructor = Assert.Single(project.GenericFunctionInstances);
+        Assert.IsType<ConstructorDeclaration>(constructor.Declaration);
+        Assert.NotNull(constructor.ClosedContainingType);
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-value-constructor-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var header = File.ReadAllText(Path.Combine(directory,
+                "generic_value_constructor.h"));
+            var source = File.ReadAllText(Path.Combine(directory,
+                "generic_value_constructor.c"));
+            Assert.Contains(constructor.SpecializationName!, header);
+            Assert.Contains("__this->first = firstValue;", source);
+            Assert.Contains("__this->second = secondValue;", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void BindingSubstitutesClassParametersInFieldsMethodsAndArrays()
     {
         var project = CxProject.CreateDefaultApplicationProject();
@@ -227,8 +352,7 @@ public sealed class GenericFoundationTests
             Directory.CreateDirectory(directory);
             var error = Assert.Throws<CompilationErrorException>(() =>
                 CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx")));
-            Assert.Contains("one direct T field with an empty parameterless constructor",
-                error.Message);
+            Assert.Contains("direct generic-parameter and generic-array fields", error.Message);
         }
         finally
         {
@@ -263,6 +387,34 @@ public sealed class GenericFoundationTests
     }
 
     [Fact]
+    public void SubstitutesEveryDirectValueFieldOnClosedReceiver()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("generic_value_pair");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public struct Payload { public int number; }
+            public class Box<T> {
+                public T first;
+                public T second;
+                public constructor() {}
+            }
+            public Payload ReadFirst(Box<Payload> box) { return box.first; }
+            public Payload ReadSecond(Box<Payload> box) { return box.second; }
+            """));
+        new SemanticBinder().Bind(project);
+
+        var functions = project.CompilationContexts.Single().DeclarationScope.Declarations
+            .OfType<FunctionDeclaration>().ToArray();
+        var reads = functions.Select(function => Assert.IsType<MemberAccessExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(function.Body!)).Expression)).ToArray();
+
+        Assert.Equal(["first", "second"], reads.Select(read =>
+            read.TargetField!.Declaration.Name));
+        Assert.All(reads, read => Assert.Equal("Payload", Assert.IsType<NamedType>(
+            read.InferredType).Name));
+        Assert.Single(project.GenericTypeInstances);
+    }
+
+    [Fact]
     public void GeneratedCUsesClosedValueStructLayoutAndMetadata()
     {
         var project = CxProject.CreateDefaultApplicationProject("generic_value_box");
@@ -291,6 +443,89 @@ public sealed class GenericFoundationTests
             Assert.Contains($"offsetof(struct {identity.CIdentifier}, value)", source);
             Assert.Contains($"CX_INIT_VTABLE(__cx_new_0, {identity.CIdentifier})", source);
             Assert.DoesNotContain("_unknowntype_", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void GeneratedCUsesClosedValueLayoutForMultipleFields()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("generic_value_pair");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public struct Payload { public int number; }
+            public class Box<T> {
+                public T first;
+                public T second;
+                public constructor() {}
+            }
+            public void WriteFirst(Box<Payload> box, Payload value) { box.first = value; }
+            public void WriteSecond(Box<Payload> box, Payload value) { box.second = value; }
+            public Payload ReadFirst(Box<Payload> box) { return box.first; }
+            public Payload ReadSecond(Box<Payload> box) { return box.second; }
+            """));
+        new SemanticBinder().Bind(project);
+        var identity = Assert.Single(project.GenericTypeInstances).Type.ConstructedIdentity!;
+        var directory = Path.Combine(Path.GetTempPath(), $"cxc-generic-value-pair-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var header = File.ReadAllText(Path.Combine(directory, "generic_value_pair.h"));
+            var source = File.ReadAllText(Path.Combine(directory, "generic_value_pair.c"));
+
+            Assert.Contains($"struct {identity.CIdentifier} {{", header);
+            Assert.Contains("struct CX_ID_2(generic_value_pair, Payload) first;", header);
+            Assert.Contains("struct CX_ID_2(generic_value_pair, Payload) second;", header);
+            Assert.Contains($"offsetof(struct {identity.CIdentifier}, first)", source);
+            Assert.Contains($"offsetof(struct {identity.CIdentifier}, second)", source);
+            Assert.Contains($"((struct {identity.CIdentifier}*)", source);
+            Assert.Contains("->first = value;", source);
+            Assert.Contains("return ((struct ", source);
+            Assert.Contains(".RuntimeFieldCount = 2", source);
+            Assert.DoesNotContain("_unknowntype_", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SubstitutesDistinctArgumentsAcrossTwoGenericValueParameters()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("generic_struct_pair");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public struct First { public int value; }
+            public struct Second { public long value; }
+            public class Pair<T, U> {
+                public T first;
+                public U second;
+                public constructor() {}
+            }
+            public First ReadFirst(Pair<First, Second> pair) { return pair.first; }
+            public Second ReadSecond(Pair<First, Second> pair) { return pair.second; }
+            """));
+        new SemanticBinder().Bind(project);
+
+        var pair = project.CompilationContexts.Single().DeclarationScope.Declarations
+            .OfType<ClassDeclaration>().Single(declaration => declaration.Name == "Pair");
+        var fields = pair.MemberDeclarations.Declarations.OfType<FieldDeclaration>().ToArray();
+        Assert.Equal(["T", "U"], fields.Select(field => Assert.IsType<GenericType>(field.Type).Name));
+        Assert.Equal(2, project.GenericTypeInstances.Single().Type.TypeArguments.Count);
+        var identity = Assert.Single(project.GenericTypeInstances).Type.ConstructedIdentity!;
+        var directory = Path.Combine(Path.GetTempPath(), $"cxc-generic-struct-pair-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var header = File.ReadAllText(Path.Combine(directory, "generic_struct_pair.h"));
+            Assert.Contains($"struct {identity.CIdentifier} {{", header);
+            Assert.Contains("struct CX_ID_2(generic_struct_pair, First) first;", header);
+            Assert.Contains("struct CX_ID_2(generic_struct_pair, Second) second;", header);
+            Assert.DoesNotContain("_unknowntype_", header);
         }
         finally
         {

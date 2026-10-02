@@ -1,0 +1,13 @@
+public T Select<T>(bool chooseFirst, T first, T second) {
+    if (chooseFirst) return first; else return second;
+}
+
+public int RunInt() { return Select(true, 7, 9); }
+public long RunLong() { return Select(false, 11L, 13L); }
+
+public T[] SelectArray<T>(bool chooseFirst, T[] first, T[] second) {
+    if (chooseFirst) return first; else return second;
+}
+public int[] RunIntArray(bool chooseFirst, int[] first, int[] second) {
+    return SelectArray(chooseFirst, first, second);
+}

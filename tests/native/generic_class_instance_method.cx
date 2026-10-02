@@ -1,0 +1,6 @@
+public class Box<T> {
+    public U Identity<U>(U value) { return value; }
+}
+
+public int RunInt(Box<int> box) { return box.Identity<int>(41); }
+public long RunLong(Box<long> box) { return box.Identity<long>(43L); }

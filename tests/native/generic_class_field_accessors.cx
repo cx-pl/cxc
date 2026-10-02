@@ -1,0 +1,9 @@
+public class Box<T> {
+    public T value;
+    public constructor() {}
+    public T Get() { return value; }
+    public void Set(T next) { value = next; }
+}
+
+public int Read(Box<int> box) { return box.Get(); }
+public void Write(Box<int> box, int next) { box.Set(next); }

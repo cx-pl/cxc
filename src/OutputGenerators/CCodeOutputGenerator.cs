@@ -14,43 +14,115 @@ public static partial class CCodeOutputGenerator
 {
     public static void GenerateOutput(CxProject project, string filePath)
     {
+        var outputDirectory = Path.GetDirectoryName(filePath)
+            ?? throw new ArgumentException("Output path must include a directory.", nameof(filePath));
+        GenerateOutput(project, filePath, outputDirectory);
+    }
+
+    public static void GenerateOutput(CxProject project, string filePath, string projectDirectory)
+    {
         if (project == null)
         {
             throw new InternalCompilerException("Project is null");
         }
 
-        WriteCMakeListsFile(project, Path.Combine(Path.GetDirectoryName(filePath)!, "CMakeLists.txt"));
-        WriteProjectHeaderFile(project, Path.Combine(Path.GetDirectoryName(filePath)!, $"{project.Name}.h"));
-        WriteProjectSourceFile(project, Path.Combine(Path.GetDirectoryName(filePath)!, $"{project.Name}.c"));
+        var outputDirectory = Path.GetDirectoryName(filePath)
+            ?? throw new ArgumentException("Output path must include a directory.", nameof(filePath));
+        Directory.CreateDirectory(outputDirectory);
+        projectDirectory = Path.GetFullPath(projectDirectory);
+        WriteCMakeListsFile(
+            project,
+            Path.Combine(outputDirectory, "CMakeLists.txt"),
+            outputDirectory,
+            projectDirectory);
+        WriteProjectHeaderFile(project, Path.Combine(outputDirectory, $"{project.Name}.h"));
+        WriteProjectSourceFile(project, Path.Combine(outputDirectory, $"{project.Name}.c"));
     }
 
-    private static void WriteCMakeListsFile(CxProject project, string outputFilePath)
+    private static void WriteCMakeListsFile(
+        CxProject project,
+        string outputFilePath,
+        string outputDirectory,
+        string projectDirectory)
     {
-        if (Path.Exists(outputFilePath)) return;
-
-        using var fileWriter = new StreamWriter(outputFilePath);
+        using var fileWriter = new StreamWriter(outputFilePath, append: false);
 
         fileWriter.WriteLine("cmake_minimum_required(VERSION 3.31)");
         fileWriter.WriteLine($"project({project.Name})");
         fileWriter.WriteLine();
 
+        fileWriter.WriteLine("set(CX_PROJECT_SOURCES");
+        fileWriter.WriteLine($"    \"${{CMAKE_CURRENT_LIST_DIR}}/{EscapeCMakePath(project.Name)}.c\"");
+        foreach (var nativeSource in EnumerateNativeCSourceFiles(
+            projectDirectory,
+            Path.Combine(outputDirectory, $"{project.Name}.c")))
+        {
+            var relativeSourcePath = Path.GetRelativePath(outputDirectory, nativeSource);
+            fileWriter.WriteLine(
+                $"    \"${{CMAKE_CURRENT_LIST_DIR}}/{EscapeCMakePath(relativeSourcePath)}\"");
+        }
+        fileWriter.WriteLine(")");
+        fileWriter.WriteLine();
+
+        var binaryDirectory = Path.GetRelativePath(
+            outputDirectory,
+            Path.Combine(projectDirectory, ".bin"));
+        fileWriter.WriteLine(
+            $"set(CX_BIN_DIRECTORY \"${{CMAKE_CURRENT_LIST_DIR}}/{EscapeCMakePath(binaryDirectory)}\")");
+        fileWriter.WriteLine("set(CMAKE_RUNTIME_OUTPUT_DIRECTORY \"${CX_BIN_DIRECTORY}\")");
+        fileWriter.WriteLine("set(CMAKE_LIBRARY_OUTPUT_DIRECTORY \"${CX_BIN_DIRECTORY}\")");
+        fileWriter.WriteLine("set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY \"${CMAKE_CURRENT_LIST_DIR}\")");
+        fileWriter.WriteLine();
+
         switch (project.Type)
         {
             case CxProjectType.Library:
-                fileWriter.WriteLine($"add_library({project.Name} SHARED {project.Name}.c)");
+                fileWriter.WriteLine($"add_library({project.Name} SHARED ${{CX_PROJECT_SOURCES}})");
                 break;
 
             case CxProjectType.Executable:
-                fileWriter.WriteLine($"add_executable({project.Name} {project.Name}.c)");
+                fileWriter.WriteLine($"add_executable({project.Name} ${{CX_PROJECT_SOURCES}})");
                 break;
 
             default:
                 throw new ArgumentOutOfRangeException($"Invalid CxProjectType {project.Type}");
         }
 
+        fileWriter.WriteLine(
+            $"target_compile_definitions({project.Name} PRIVATE {GetModuleExportDefine(project.Name)})");
+        var includeDirectory = Path.GetRelativePath(outputDirectory, projectDirectory);
+        fileWriter.WriteLine(
+            $"target_include_directories({project.Name} PRIVATE \"${{CMAKE_CURRENT_LIST_DIR}}/{EscapeCMakePath(includeDirectory)}\")");
+
         fileWriter.Flush();
         fileWriter.Close();
     }
+
+    private static IEnumerable<string> EnumerateNativeCSourceFiles(
+        string projectDirectory,
+        string generatedSourcePath)
+    {
+        var generatedSourceFullPath = Path.GetFullPath(generatedSourcePath);
+        var excludedDirectoryNames = new HashSet<string>(
+            [".obj", ".bin", ".git", ".vs", "CMakeFiles"],
+            StringComparer.OrdinalIgnoreCase);
+
+        return Directory.EnumerateFiles(projectDirectory, "*.c", SearchOption.AllDirectories)
+            .Where(path => !string.Equals(
+                Path.GetFullPath(path),
+                generatedSourceFullPath,
+                StringComparison.OrdinalIgnoreCase))
+            .Where(path => Path.GetRelativePath(projectDirectory, path)
+                .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                    StringSplitOptions.RemoveEmptyEntries)
+                .SkipLast(1)
+                .All(directory => !excludedDirectoryNames.Contains(directory)))
+            .OrderBy(path => Path.GetRelativePath(projectDirectory, path),
+                StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string EscapeCMakePath(string path) =>
+        path.Replace('\\', '/').Replace("\"", "\\\"").Replace(";", "\\;");
 
 
     private static void WriteProjectHeaderFile(CxProject project, string outputFilePath)
@@ -68,6 +140,13 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine(project.Name == "cxcore"
             ? "#include <cx.h>"
             : "#include <cxcore.h>");
+        writer.WriteLine();
+
+        writer.WriteLine($"#if defined({GetModuleExportDefine(project.Name)})");
+        writer.WriteLine($"#define {GetModuleApiName(project.Name)} CX_EXPORT");
+        writer.WriteLine("#else");
+        writer.WriteLine($"#define {GetModuleApiName(project.Name)} CX_IMPORT");
+        writer.WriteLine("#endif");
         writer.WriteLine();
 
         var declarations = GetDeclarations(project);
@@ -113,6 +192,17 @@ public static partial class CCodeOutputGenerator
         fileWriter.Flush();
         fileWriter.Close();
     }
+
+    private static string GetModuleToken(string moduleName) =>
+        new(moduleName.Select(character => char.IsLetterOrDigit(character)
+            ? char.ToUpperInvariant(character)
+            : '_').ToArray());
+
+    private static string GetModuleExportDefine(string moduleName) =>
+        $"CX_{GetModuleToken(moduleName)}_BUILD";
+
+    private static string GetModuleApiName(string moduleName) =>
+        $"CX_{GetModuleToken(moduleName)}_API";
 
     private static void WriteTypesForwardDeclarations(
         IndentingWriter writer,
@@ -282,7 +372,7 @@ public static partial class CCodeOutputGenerator
                     var nameOverrideIndex = GetNameOverrideIndex(functionDeclaration, declarations);
 
                     writer.WriteIndent();
-                    writer.Write($"extern {(exportable ? "CX_EXPORT " : "")}{functionDeclaration.ToCIdentifier(moduleName, nameOverrideIndex)}(");
+                    writer.Write($"extern {(exportable ? $"{GetModuleApiName(moduleName)} " : "")}{functionDeclaration.ToCIdentifier(moduleName, nameOverrideIndex)}(");
                     writer.IncreaseIndent();
 
                     isFirstParameter = true;
@@ -368,7 +458,7 @@ public static partial class CCodeOutputGenerator
                         );
 
                         writer.WriteIndent();
-                        writer.Write($"extern {(exportable ? "CX_EXPORT " : "")}{propertyAccessorDeclaration.ToCIdentifier(moduleName)}(");
+                        writer.Write($"extern {(exportable ? $"{GetModuleApiName(moduleName)} " : "")}{propertyAccessorDeclaration.ToCIdentifier(moduleName)}(");
                         writer.IncreaseIndent();
 
                         isFirstParameter = true;
@@ -461,7 +551,7 @@ public static partial class CCodeOutputGenerator
             var declaration = instance.Declaration!;
             var parameters = GetGenericFunctionParameters(instance);
             var export = declaration.MemberModifiers.Contains(MemberModifier.Public)
-                ? "CX_EXPORT "
+                ? $"{GetModuleApiName(instance.ModuleName)} "
                 : string.Empty;
             writer.WriteLine($"extern {export}{instance.ReturnType.ToCIdentifier(false)} " +
                 $"{name}({string.Join(", ", parameters)});");
@@ -476,8 +566,13 @@ public static partial class CCodeOutputGenerator
         if (!declaration.IsStatic)
         {
             var receiverConst = declaration.Const ? "const " : string.Empty;
+            var receiverType = instance.ClosedContainingType is
+                { ConstructedIdentity: not null } closedType &&
+                RequiresClosedValueLayout(closedType)
+                    ? $"struct {closedType.ConstructedIdentity.CIdentifier}"
+                    : declaration.ParentClassDeclaration!.ToCIdentifier(instance.ModuleName);
             parameters.Add($"{receiverConst}" +
-                $"{declaration.ParentClassDeclaration!.ToCIdentifier(instance.ModuleName)}* __this");
+                $"{receiverType}* __this");
         }
         parameters.AddRange(declaration.Parameters.Zip(instance.ParameterTypes)
             .Select(pair => $"{pair.Second.ToCIdentifier(false)} {pair.First.Name}"));
@@ -529,7 +624,7 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine("//");
         writer.WriteLine();
         WriteFunctionDefinitions(writer, declarations, project.Name);
-        WriteGenericFunctionDefinitions(writer, project.GenericFunctionInstances);
+        WriteGenericFunctionDefinitions(writer, project.GenericFunctionInstances, project.Name);
 
         fileWriter.Flush();
         fileWriter.Close();
@@ -758,38 +853,122 @@ public static partial class CCodeOutputGenerator
 
     private static bool RequiresClosedValueLayout(NamedType type) =>
         type.ConstructedIdentity is not null &&
-        type.TypeArguments is [NamedType { ClassType: ClassType.Struct,
-            TypeArguments.Count: 0 }];
+        type.TypeArguments.Any(IsValueTypeArgument);
+
+    private static bool IsValueTypeArgument(TypeBase type) => type switch
+    {
+        ConstType constant => IsValueTypeArgument(constant.UnderlyingType),
+        ArrayType or StringType or ObjectType => false,
+        NamedType named => named.ClassType is ClassType.Struct or ClassType.Enum,
+        _ => type is not GenericType,
+    };
 
     private static void ValidateClosedValueLayout(ClassDeclaration declaration)
     {
         var members = declaration.MemberDeclarations.Declarations;
         var fields = members.OfType<FieldDeclaration>().ToArray();
         var constructors = members.OfType<ConstructorDeclaration>().ToArray();
+        var genericMethods = members.OfType<FunctionDeclaration>()
+            .Where(function => function is not ConstructorDeclaration).ToArray();
         if (declaration.ClassType != ClassType.Class || declaration.IsStatic ||
-            declaration.GenericTypeNames.Length != 1 ||
-            members.Count != fields.Length + constructors.Length ||
-            fields.Length > 1 || constructors.Length > 1 ||
-            fields.Length == 1 &&
-                (constructors.Length != 1 || fields[0].IsStatic ||
-                 fields[0].Initializer is not null ||
-                 fields[0].Type is not GenericType parameter ||
-                 parameter.Name != declaration.GenericTypeNames[0]) ||
-            constructors.Length == 1 &&
-                (constructors[0].Parameters.Count != 0 ||
-                 constructors[0].Body is not { Count: 0 } ||
-                 constructors[0].Initializer is not null and not
-                    { Kind: ConstructorInitializerKind.Base, Arguments.Count: 0 }) ||
+            declaration.GenericTypeNames.Length == 0 ||
+            members.Count != fields.Length + constructors.Length + genericMethods.Length ||
+            genericMethods.Any(method => method.IsStatic ||
+                method.VirtualSlotIndex is not null ||
+                (method.GenericTypeNames.Length == 0 &&
+                    !IsReferenceFieldGetter(method, fields) &&
+                    !IsReferenceFieldSetter(method, fields))) ||
+            constructors.Length > 1 ||
+            fields.Any(field => field.IsStatic || field.Initializer is not null ||
+                !IsSupportedClosedValueFieldType(field.Type, declaration.GenericTypeNames)) ||
+            !IsSupportedClosedValueConstructor(declaration, fields, constructors) ||
             declaration.BaseTypes.Count != 0 ||
             declaration.VirtualMethodSlots.Count != 0 ||
             declaration.InterfaceDispatchTables.Count != 0)
         {
             throw new CxCompiler.Model.Errors.CompilationErrorException(
                 $"Closed value layout for generic type '{declaration.FullName}' " +
-                "requires an empty class or one direct T field with an " +
-                "empty parameterless constructor.");
+                "requires an empty class or direct generic-parameter and generic-array fields, plus " +
+                "non-virtual generic methods or direct generic-field getters/setters, and either " +
+                "an empty parameterless constructor or one direct assignment per " +
+                "generic field constructor parameter.");
         }
     }
+
+    private static bool IsSupportedClosedValueConstructor(
+        ClassDeclaration declaration,
+        IReadOnlyCollection<FieldDeclaration> fields,
+        IReadOnlyList<ConstructorDeclaration> constructors)
+    {
+        if (constructors.Count == 0)
+        {
+            return fields.Count == 0;
+        }
+        var constructor = constructors[0];
+        if (constructor.Initializer is not null and not
+            { Kind: ConstructorInitializerKind.Base, Arguments.Count: 0 })
+        {
+            return false;
+        }
+        if (fields.Count == 0)
+        {
+            return constructor.Parameters.Count == 0 && constructor.Body is { Count: 0 };
+        }
+        if (constructor.Parameters.Count == 0 && constructor.Body is { Count: 0 })
+        {
+            return true;
+        }
+        if (constructor.Parameters.Count != fields.Count ||
+            constructor.Body?.Count != fields.Count)
+        {
+            return false;
+        }
+
+        var fieldByName = fields.ToDictionary(field => field.Name, StringComparer.Ordinal);
+        var assignedFields = new HashSet<string>(StringComparer.Ordinal);
+        var assignedParameters = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var statement in constructor.Body)
+        {
+            if (statement is not ExpressionStatement
+                {
+                    Expression: AssignmentExpression
+                    {
+                        Operator: "=",
+                        Target: IdentifierExpression fieldIdentifier,
+                        Value: IdentifierExpression parameterIdentifier,
+                    },
+                })
+            {
+                return false;
+            }
+            var fieldName = fieldIdentifier.Identifier.Parts[^1];
+            var parameterName = parameterIdentifier.Identifier.Parts[^1];
+            var parameter = constructor.Parameters.SingleOrDefault(item =>
+                item.Name == parameterName);
+            if (!fieldByName.TryGetValue(fieldName, out var field) ||
+                parameter is null ||
+                field.Type is not GenericType fieldType ||
+                parameter.ParameterType is not GenericType parameterType ||
+                fieldType.Name != parameterType.Name ||
+                !assignedFields.Add(fieldName) || !assignedParameters.Add(parameterName))
+            {
+                return false;
+            }
+        }
+        return assignedFields.Count == fields.Count &&
+            assignedParameters.Count == constructor.Parameters.Count;
+    }
+
+    private static bool IsSupportedClosedValueFieldType(
+        TypeBase type,
+        IReadOnlyCollection<string> genericTypeNames) =>
+        type switch
+        {
+            GenericType parameter => genericTypeNames.Contains(parameter.Name),
+            ArrayType { ElementType: GenericType parameter } =>
+                genericTypeNames.Contains(parameter.Name),
+            _ => false,
+        };
 
     private static void WriteClosedValueTypeDeclarations(
         IndentingWriter writer,
@@ -800,14 +979,16 @@ public static partial class CCodeOutputGenerator
                 item.Type.ConstructedIdentity!.CanonicalName, StringComparer.Ordinal))
         {
             ValidateClosedValueLayout(declaration);
-            var field = declaration.MemberDeclarations.Declarations.OfType<FieldDeclaration>()
-                .SingleOrDefault();
+            var fields = declaration.MemberDeclarations.Declarations.OfType<FieldDeclaration>();
+            var arguments = declaration.GenericTypeNames.Zip(type.TypeArguments)
+                .ToDictionary(pair => pair.First, pair => pair.Second, StringComparer.Ordinal);
             writer.WriteLine($"struct {type.ConstructedIdentity!.CIdentifier} {{");
             writer.IncreaseIndent();
             writer.WriteLine($"{ToCStorageType(BuiltInSystemTypes.Object)} __base;");
-            if (field is not null)
+            foreach (var field in fields)
             {
-                writer.WriteLine($"{type.TypeArguments[0].ToCIdentifier(false)} {field.Name};");
+                var fieldType = GenericTypeSubstitution.Substitute(field.Type, arguments);
+                writer.WriteLine($"{fieldType.ToCIdentifier(false)} {field.Name};");
             }
             writer.DecreaseIndent();
             writer.WriteLine("};");

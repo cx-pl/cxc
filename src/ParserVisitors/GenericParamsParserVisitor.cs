@@ -7,7 +7,8 @@ public class GenericParamsParserVisitor : CxParserBaseVisitor<string[]>
 {
     private List<string> _genericParams = new();
 
-    public override string[] VisitGenericParams([NotNull] CxParser.GenericParamsContext context)
+    public override string[] VisitGenericTypeParameters(
+        [NotNull] CxParser.GenericTypeParametersContext context)
     {
         if (context == null)
         {
@@ -20,8 +21,12 @@ public class GenericParamsParserVisitor : CxParserBaseVisitor<string[]>
 
     public override string[] VisitGenericParamList([NotNull] CxParser.GenericParamListContext context)
     {
+        if (context.genericParamList() is { } previous)
+        {
+            VisitGenericParamList(previous);
+        }
         var paramName = context.Identifier().GetText();
         _genericParams.Add(paramName);
-        return base.VisitGenericParamList(context);
+        return _genericParams.ToArray();
     }
 }

@@ -1,0 +1,8 @@
+public T Replace<T>(T initial, T replacement) {
+    T copy = initial;
+    copy = replacement;
+    return copy;
+}
+
+public int RunInt() { return Replace(5, 7); }
+public long RunLong() { return Replace(11L, 13L); }

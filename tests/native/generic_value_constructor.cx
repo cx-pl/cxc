@@ -1,0 +1,12 @@
+public class Pair<T, U> {
+    public T first;
+    public U second;
+    public constructor(T firstValue, U secondValue) {
+        first = firstValue;
+        second = secondValue;
+    }
+}
+
+public Pair<int, long> Create() { return new Pair<int, long>(23, 41L); }
+public int ReadFirst(Pair<int, long> pair) { return pair.first; }
+public long ReadSecond(Pair<int, long> pair) { return pair.second; }

@@ -86,6 +86,16 @@ public class NamedType : TypeBase
         TypeArguments = genericParams.Select(name => (TypeBase)new NamedType(name, [])).ToArray();
     }
 
+    public static NamedType CreateWithTypeArguments(
+        string name,
+        IReadOnlyList<TypeBase> typeArguments)
+    {
+        var namedType = new NamedType(name,
+            typeArguments.Select(argument => argument.Name).ToArray());
+        namedType.SetTypeArguments(typeArguments);
+        return namedType;
+    }
+
     internal void SetTypeArguments(IReadOnlyList<TypeBase> arguments)
     {
         if (arguments.Count != GenericParams.Length)

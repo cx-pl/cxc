@@ -71,7 +71,7 @@ classType
 	;
 
 classDeclaration
-	: classModifiers partial = Partial? classType name = Identifier genericParams? base = classBase?
+	: classModifiers partial = Partial? classType name = Identifier genericTypeParameters? base = classBase?
 		body = classDeclarationBody
 	;
 
@@ -153,7 +153,7 @@ constructorOrBaseInvocation
 	;
 
 functionDeclaration
-	: modifiers = memberModifiers async = Async? returnType = typeNameOrVoid name = Identifier genericParams? LeftParen functionParameters? RightParen Const? functionBody
+	: modifiers = memberModifiers async = Async? returnType = typeNameOrVoid name = Identifier genericTypeParameters? LeftParen functionParameters? RightParen Const? functionBody
 	;
 
 functionParameters
@@ -448,6 +448,7 @@ primaryExpression
 		(
 			memberAccess
 			| functionInvocation
+			| genericFunctionInvocation
 			| PlusPlus
 			| MinusMinus
 		) arrayExpression*
@@ -469,7 +470,7 @@ arrayCreationExpression
 
 arrayElementType
 	: builtInType
-	| qualifiedIdentifier genericParams?
+	| qualifiedIdentifier genericTypeArguments?
 	;
 
 arrayExpression
@@ -482,6 +483,10 @@ memberAccess
 
 functionInvocation
 	: LeftParen functionInvocationArguments? RightParen
+	;
+
+genericFunctionInvocation
+	: genericTypeArguments functionInvocation
 	;
 
 functionInvocationArguments
@@ -521,7 +526,7 @@ typeNameOrVoid
 
 typeName
 	: Const? builtInType arrayDimension* Question?
-	| Const? namedType = qualifiedIdentifier namedTypeGenericParams = genericParams? arrayDimension* Question?
+	| Const? namedType = qualifiedIdentifier namedTypeGenericArguments = genericTypeArguments? arrayDimension* Question?
 	| autoVarType = Var
 	| autoConstType = Const
 	// TODO: functionType
@@ -531,7 +536,7 @@ arrayDimension
 	: LeftBracket RightBracket
 	;
 
-genericParams
+genericTypeParameters
 	: Less genericParamList Greater
 	;
 
@@ -540,12 +545,21 @@ genericParamList
 	| genericParamList Comma Identifier
 	;
 
+genericTypeArguments
+	: Less genericTypeArgumentList Greater
+	;
+
+genericTypeArgumentList
+	: typeName
+	| genericTypeArgumentList Comma typeName
+	;
+
 builtInType
 	: integerType
 	| floatingType
 	| textualType
 	| objectType = Object
-	| ptrType = Ptr genericParams?
+	| ptrType = Ptr genericTypeArguments?
 	;
 
 integerType

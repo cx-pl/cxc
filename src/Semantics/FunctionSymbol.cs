@@ -12,6 +12,7 @@ public sealed class FunctionSymbol
     public int OverloadIndex { get; }
     public FunctionDeclaration? Declaration { get; }
     public string? SpecializationName { get; }
+    public NamedType? ClosedContainingType { get; }
 
     public FunctionSymbol(
         string moduleName,
@@ -20,7 +21,8 @@ public sealed class FunctionSymbol
         TypeBase returnType,
         int overloadIndex = 1,
         FunctionDeclaration? declaration = null,
-        string? specializationName = null)
+        string? specializationName = null,
+        NamedType? closedContainingType = null)
     {
         ModuleName = moduleName;
         FullName = fullName;
@@ -29,5 +31,6 @@ public sealed class FunctionSymbol
         OverloadIndex = overloadIndex;
         Declaration = declaration;
         SpecializationName = specializationName;
+        ClosedContainingType = closedContainingType;
     }
 }

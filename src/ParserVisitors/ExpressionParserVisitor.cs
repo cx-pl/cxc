@@ -114,6 +114,12 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
                     new MemberAccessExpression(expression, memberAccess.Identifier().GetText()),
                 CxParser.FunctionInvocationContext invocation =>
                     new InvocationExpression(expression, GetArguments(invocation)),
+                CxParser.GenericFunctionInvocationContext genericInvocation =>
+                    new InvocationExpression(
+                        expression,
+                        GetArguments(genericInvocation.functionInvocation()),
+                        new GenericTypeArgumentsParserVisitor().VisitGenericTypeArguments(
+                            genericInvocation.genericTypeArguments())),
                 CxParser.ArrayExpressionContext arrayAccess =>
                     new ArrayAccessExpression(
                         expression,
@@ -157,12 +163,14 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
             var elementTypeContext = arrayCreation.arrayElementType();
             var elementType = elementTypeContext.builtInType() is { } builtInType
                 ? new TypeNameContextVisitor().Visit(builtInType)
-                : new NamedType(
+                : NamedType.CreateWithTypeArguments(
                     new QualifiedIdentifierContextVisitor()
                         .Visit(elementTypeContext.qualifiedIdentifier())
                         .ToString(),
-                    new GenericParamsParserVisitor()
-                        .VisitGenericParams(elementTypeContext.genericParams()));
+                    elementTypeContext.genericTypeArguments() is { } typeArguments
+                        ? new GenericTypeArgumentsParserVisitor()
+                            .VisitGenericTypeArguments(typeArguments)
+                        : []);
             return new ArrayCreationExpression(
                 elementType,
                 Visit(arrayCreation.expression()));

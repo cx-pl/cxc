@@ -1,0 +1,7 @@
+namespace Lib;
+
+public struct Token {
+    public int value;
+}
+
+public int Read(Token token) { return token.value; }

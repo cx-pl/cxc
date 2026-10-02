@@ -61,6 +61,170 @@ public sealed class GenericFunctionBodyTests
     }
 
     [Fact]
+    public void BindsGenericConditionalReturnForDistinctInstantiations()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("generic_select");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public T Select<T>(bool chooseFirst, T first, T second) {
+                if (chooseFirst) return first; else return second;
+            }
+            public int RunInt() { return Select(true, 7, 9); }
+            public long RunLong() { return Select(false, 11L, 13L); }
+            """));
+        new SemanticBinder().Bind(project);
+
+        var calls = project.CompilationContexts.Single().DeclarationScope.Declarations
+            .OfType<FunctionDeclaration>()
+            .Where(function => function.Name is "RunInt" or "RunLong")
+            .Select(function => Assert.IsType<InvocationExpression>(
+                Assert.IsType<ReturnStatement>(Assert.Single(function.Body!)).Expression))
+            .ToArray();
+        Assert.Same(BuiltInSystemTypes.Int, calls[0].TargetSymbol!.ReturnType);
+        Assert.Same(BuiltInSystemTypes.Long, calls[1].TargetSymbol!.ReturnType);
+        Assert.Equal(2, project.GenericFunctionInstances.Count);
+        Assert.Equal(2, project.GenericFunctionInstances
+            .Select(instance => instance.SpecializationName).Distinct().Count());
+    }
+
+    [Fact]
+    public void EmitsConcreteConditionalBranchesForEachInstantiation()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("generic_select");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public T Select<T>(bool chooseFirst, T first, T second) {
+                if (chooseFirst) return first; else return second;
+            }
+            public int RunInt() { return Select(true, 7, 9); }
+            public long RunLong() { return Select(false, 11L, 13L); }
+            """));
+        new SemanticBinder().Bind(project);
+        var directory = Path.Combine(Path.GetTempPath(), $"cxc-generic-select-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var header = File.ReadAllText(Path.Combine(directory, "generic_select.h"));
+            var source = File.ReadAllText(Path.Combine(directory, "generic_select.c"));
+
+            foreach (var instance in project.GenericFunctionInstances)
+            {
+                Assert.Contains(instance.SpecializationName!, header);
+                Assert.Contains(instance.SpecializationName!, source);
+            }
+            Assert.Equal(2, source.Split("if (chooseFirst)").Length - 1);
+            Assert.Equal(2, source.Split("return first;").Length - 1);
+            Assert.Equal(2, source.Split("return second;").Length - 1);
+            Assert.DoesNotContain("_unknowntype_", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void EmitsConditionalArrayReturnForConcreteElementTypes()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("generic_select_array");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public T[] Select<T>(bool chooseFirst, T[] first, T[] second) {
+                if (chooseFirst) return first; else return second;
+            }
+            public int[] RunInt(bool chooseFirst, int[] first, int[] second) {
+                return Select(chooseFirst, first, second);
+            }
+            public long[] RunLong(bool chooseFirst, long[] first, long[] second) {
+                return Select(chooseFirst, first, second);
+            }
+            """));
+        new SemanticBinder().Bind(project);
+
+        Assert.Equal(2, project.GenericFunctionInstances.Count);
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-select-array-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var header = File.ReadAllText(Path.Combine(directory, "generic_select_array.h"));
+            var source = File.ReadAllText(Path.Combine(directory, "generic_select_array.c"));
+            foreach (var instance in project.GenericFunctionInstances)
+            {
+                Assert.Contains(instance.SpecializationName!, header);
+            }
+            Assert.Equal(2, source.Split("if (chooseFirst)").Length - 1);
+            Assert.Equal(2, source.Split("return first;").Length - 1);
+            Assert.Equal(2, source.Split("return second;").Length - 1);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void BindsAndEmitsGenericLocalCopyWithOneAssignment()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("generic_replace");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public T Replace<T>(T initial, T replacement) {
+                T copy = initial;
+                copy = replacement;
+                return copy;
+            }
+            public int RunInt() { return Replace(5, 7); }
+            public long RunLong() { return Replace(11L, 13L); }
+            """));
+        new SemanticBinder().Bind(project);
+        Assert.Equal(2, project.GenericFunctionInstances.Count);
+
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-replace-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(directory, "generic_replace.c"));
+            Assert.Contains("copy = replacement;", source);
+            Assert.Equal(2, source.Split("return copy;").Length - 1);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void BindsAndEmitsIdentityForNestedConstructedGenericType()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("generic_identity_box");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Box<T> {}
+            public Box<T> IdentityBox<T>(Box<T> value) { return value; }
+            public Box<int> Run(Box<int> value) { return IdentityBox(value); }
+            """));
+        new SemanticBinder().Bind(project);
+        Assert.Single(project.GenericFunctionInstances);
+        Assert.Single(project.GenericTypeInstances);
+
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-identity-box-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var header = File.ReadAllText(Path.Combine(directory, "generic_identity_box.h"));
+            var source = File.ReadAllText(Path.Combine(directory, "generic_identity_box.c"));
+            Assert.Contains(project.GenericFunctionInstances.Single().SpecializationName!, header);
+            Assert.Contains("return value;", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void RejectsBodyThatNeedsPerInstantiationBinding()
     {
         var project = CxProject.CreateDefaultApplicationProject();

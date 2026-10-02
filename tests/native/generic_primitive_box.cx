@@ -1,0 +1,8 @@
+public class Box<T> {
+    public T value;
+    public constructor() {}
+}
+
+public Box<int> Create() { return new Box<int>(); }
+public void Write(Box<int> box, int value) { box.value = value; }
+public int Read(Box<int> box) { return box.value; }

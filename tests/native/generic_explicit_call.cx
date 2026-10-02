@@ -1,0 +1,4 @@
+public T Identity<T>(T value) { return value; }
+public int RunInt() { return Identity<int>(23); }
+public int RunIntInferred() { return Identity(29); }
+public long RunLong() { return Identity<long>(41L); }

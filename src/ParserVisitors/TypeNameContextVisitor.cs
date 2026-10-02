@@ -25,8 +25,11 @@ public class TypeNameContextVisitor : CxParserBaseVisitor<TypeBase>
 
         if (context.namedType != null)
         {
-            var genericParams = new GenericParamsParserVisitor().VisitGenericParams(context.genericParams());
-            underlyingType = new NamedType(context.namedType.GetText(), genericParams);
+            var genericArguments = context.genericTypeArguments() is { } typeArguments
+                ? new GenericTypeArgumentsParserVisitor().VisitGenericTypeArguments(typeArguments)
+                : [];
+            underlyingType = NamedType.CreateWithTypeArguments(
+                context.namedType.GetText(), genericArguments);
         }
         else if (context.autoVarType != null)
         {

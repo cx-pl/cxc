@@ -39,6 +39,119 @@ public sealed class GenericFunctionTests
         Assert.Equal(2, project.GenericFunctionInstances.Count);
     }
 
+    [Fact]
+    public void BindsAndEmitsExplicitPrimitiveFunctionTypeArguments()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("generic_explicit_call");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public T Identity<T>(T value) { return value; }
+            public int Run() { return Identity<int>(23); }
+            """));
+        new SemanticBinder().Bind(project);
+
+        var run = project.CompilationContexts.Single().DeclarationScope.Declarations
+            .OfType<FunctionDeclaration>().Single(function => function.Name == "Run");
+        var call = Assert.IsType<InvocationExpression>(Assert.IsType<ReturnStatement>(
+            Assert.Single(run.Body!)).Expression);
+        Assert.Same(BuiltInSystemTypes.Int, Assert.Single(call.ExplicitTypeArguments));
+        Assert.Same(BuiltInSystemTypes.Int, call.TargetSymbol!.ReturnType);
+        var directory = Path.Combine(Path.GetTempPath(), $"cxc-explicit-generic-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(directory, "generic_explicit_call.c"));
+            Assert.Contains($"return {call.TargetSymbol.SpecializationName}(23);", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ExplicitAndInferredCallsReuseOneFunctionSpecialization()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("generic_explicit_dedup");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public T Identity<T>(T value) { return value; }
+            public int RunExplicit() { return Identity<int>(31); }
+            public int RunInferred() { return Identity(37); }
+            """));
+        new SemanticBinder().Bind(project);
+
+        var calls = project.CompilationContexts.Single().DeclarationScope.Declarations
+            .OfType<FunctionDeclaration>()
+            .Where(function => function.Name is "RunExplicit" or "RunInferred")
+            .Select(function => Assert.IsType<InvocationExpression>(
+                Assert.IsType<ReturnStatement>(Assert.Single(function.Body!)).Expression))
+            .ToArray();
+        Assert.Single(project.GenericFunctionInstances);
+        Assert.Equal(calls[0].TargetSymbol!.SpecializationName,
+            calls[1].TargetSymbol!.SpecializationName);
+        var specializationName = calls[0].TargetSymbol!.SpecializationName!;
+
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-explicit-dedup-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(directory, "generic_explicit_dedup.c"));
+            Assert.Equal(1, source.Split($"cx_int {specializationName}(").Length - 1);
+            Assert.Contains($"return {specializationName}(31);", source);
+            Assert.Contains($"return {specializationName}(37);", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("public T Identity<T>(T value) { return value; } public int Run() { return Identity<int, long>(1); }")]
+    [InlineData("public T Identity<T>(T value) { return value; } public int Run() { return Identity<int>(1L); }")]
+    public void RejectsInvalidExplicitFunctionTypeArguments(string source)
+    {
+        var project = CxProject.CreateDefaultApplicationProject("generic_explicit_invalid");
+        project.AddCompilationContext(CompilerTestHelper.Parse(source));
+        Assert.Throws<CompilationErrorException>(() => new SemanticBinder().Bind(project));
+    }
+
+    [Fact]
+    public void InfersFunctionTypeArgumentsNestedInConstructedTypes()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("generic_nested_inference");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Box<T> {}
+            public extern T Unbox<T>(Box<T> value);
+            public int Run(Box<int> value) { return Unbox(value); }
+            """));
+        new SemanticBinder().Bind(project);
+
+        var run = project.CompilationContexts.Single().DeclarationScope.Declarations
+            .OfType<FunctionDeclaration>().Single(function => function.Name == "Run");
+        var call = Assert.IsType<InvocationExpression>(Assert.IsType<ReturnStatement>(
+            Assert.Single(run.Body!)).Expression);
+        Assert.Same(BuiltInSystemTypes.Int, call.TargetSymbol!.ReturnType);
+        Assert.Single(project.GenericFunctionInstances);
+
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-nested-inference-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var header = File.ReadAllText(Path.Combine(directory, "generic_nested_inference.h"));
+            Assert.Contains("cx_int", header);
+            Assert.Contains(call.TargetSymbol!.SpecializationName!, header);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData("public extern T Merge<T>(T first, T second); void Main() { Merge(1, 2L); }")]
     [InlineData("public extern T Make<T>(); void Main() { Make(); }")]

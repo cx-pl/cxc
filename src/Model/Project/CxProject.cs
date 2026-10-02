@@ -9,6 +9,9 @@ public class CxProject
     public string Website { get; set; } = string.Empty;
     public string Author { get; set; } = string.Empty;
     public CxProjectType Type { get; set; }
+    public List<string> Targets { get; set; } = [];
+    public CxPackageSection Package { get; set; } = new();
+    public List<string> Dependencies { get; set; } = [];
 
     private List<CompilationContext> _compilationContexts = new List<CompilationContext>();
     public IReadOnlyList<CompilationContext> CompilationContexts => _compilationContexts.AsReadOnly();
@@ -58,4 +61,10 @@ public class CxProject
 
         _compilationContexts.Add(context);
     }
+}
+
+public class CxPackageSection
+{
+    public List<string> Sources { get; set; } = [];
+    public List<string> Binary { get; set; } = [];
 }

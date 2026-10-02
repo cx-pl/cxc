@@ -1,0 +1,19 @@
+public struct First {
+    public int value;
+}
+
+public struct Second {
+    public long value;
+}
+
+public class Pair<T, U> {
+    public T first;
+    public U second;
+    public constructor() {}
+}
+
+public Pair<First, Second> Create() { return new Pair<First, Second>(); }
+public void WriteFirst(Pair<First, Second> pair, First value) { pair.first = value; }
+public void WriteSecond(Pair<First, Second> pair, Second value) { pair.second = value; }
+public First ReadFirst(Pair<First, Second> pair) { return pair.first; }
+public Second ReadSecond(Pair<First, Second> pair) { return pair.second; }

@@ -585,6 +585,12 @@ public interface ICxParserVisitor<Result> : IParseTreeVisitor<Result> {
 	/// <return>The visitor result.</return>
 	Result VisitFunctionInvocation([NotNull] CxParser.FunctionInvocationContext context);
 	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.genericFunctionInvocation"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitGenericFunctionInvocation([NotNull] CxParser.GenericFunctionInvocationContext context);
+	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.functionInvocationArguments"/>.
 	/// </summary>
 	/// <param name="context">The parse tree.</param>
@@ -639,17 +645,29 @@ public interface ICxParserVisitor<Result> : IParseTreeVisitor<Result> {
 	/// <return>The visitor result.</return>
 	Result VisitArrayDimension([NotNull] CxParser.ArrayDimensionContext context);
 	/// <summary>
-	/// Visit a parse tree produced by <see cref="CxParser.genericParams"/>.
+	/// Visit a parse tree produced by <see cref="CxParser.genericTypeParameters"/>.
 	/// </summary>
 	/// <param name="context">The parse tree.</param>
 	/// <return>The visitor result.</return>
-	Result VisitGenericParams([NotNull] CxParser.GenericParamsContext context);
+	Result VisitGenericTypeParameters([NotNull] CxParser.GenericTypeParametersContext context);
 	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.genericParamList"/>.
 	/// </summary>
 	/// <param name="context">The parse tree.</param>
 	/// <return>The visitor result.</return>
 	Result VisitGenericParamList([NotNull] CxParser.GenericParamListContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.genericTypeArguments"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitGenericTypeArguments([NotNull] CxParser.GenericTypeArgumentsContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.genericTypeArgumentList"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitGenericTypeArgumentList([NotNull] CxParser.GenericTypeArgumentListContext context);
 	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.builtInType"/>.
 	/// </summary>

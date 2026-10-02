@@ -1,0 +1,3 @@
+public class Box<T> {}
+public Box<T> IdentityBox<T>(Box<T> value) { return value; }
+public Box<int> Run(Box<int> value) { return IdentityBox(value); }

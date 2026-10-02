@@ -1,0 +1,4 @@
+import Lib;
+namespace App;
+
+public int Run() { return Identity(37); }

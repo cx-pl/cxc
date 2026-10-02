@@ -117,7 +117,8 @@ public static partial class CCodeOutputGenerator
 
     private static void WriteGenericFunctionDefinitions(
         IndentingWriter writer,
-        IEnumerable<FunctionSymbol> instances)
+        IEnumerable<FunctionSymbol> instances,
+        string moduleName)
     {
         foreach (var instance in instances
             .Where(item => item.Declaration?.Body is not null)
@@ -129,17 +130,100 @@ public static partial class CCodeOutputGenerator
                 $"{instance.SpecializationName}({string.Join(", ", parameters)})");
             writer.WriteLine("{");
             writer.IncreaseIndent();
-            if (!declaration.IsStatic)
+            if (!declaration.IsStatic && declaration is not ConstructorDeclaration)
             {
                 writer.WriteLine("(void)__this;");
             }
-            if (declaration.Body is [LocalVariableDeclarationStatement local, ReturnStatement])
+            if (declaration is ConstructorDeclaration closedConstructor)
+            {
+                foreach (var statement in closedConstructor.Body ?? [])
+                {
+                    if (statement is ExpressionStatement
+                        {
+                            Expression: AssignmentExpression
+                            {
+                                Target: IdentifierExpression field,
+                                Value: IdentifierExpression parameter,
+                            },
+                        })
+                    {
+                        writer.WriteLine(
+                            $"__this->{field.Identifier.Parts[^1]} = " +
+                            $"{parameter.Identifier.Parts[^1]};");
+                    }
+                }
+            }
+            else if (instance.ClosedContainingType is not null &&
+                declaration.GenericTypeNames.Length == 0 &&
+                declaration.Body is
+                [ReturnStatement { Expression: IdentifierExpression { TargetField: { } field } }])
+            {
+                writer.WriteLine($"return __this->{field.Declaration.Name};");
+            }
+            else if (instance.ClosedContainingType is not null &&
+                declaration.GenericTypeNames.Length == 0 &&
+                declaration.Body is
+                [ExpressionStatement
+                {
+                    Expression: AssignmentExpression
+                    {
+                        Target: IdentifierExpression { TargetField: { } targetField },
+                        Value: IdentifierExpression parameter,
+                    },
+                }])
+            {
+                writer.WriteLine(
+                    $"__this->{targetField.Declaration.Name} = {parameter.Identifier.Parts[^1]};");
+            }
+            else if (declaration.Body is
+                [LocalVariableDeclarationStatement local,
+                    ExpressionStatement
+                    {
+                        Expression: AssignmentExpression
+                        {
+                            Target: IdentifierExpression target,
+                            Value: IdentifierExpression replacement,
+                        },
+                    },
+                    ReturnStatement])
             {
                 var declarator = local.Declarators.Single();
+                var initial = (IdentifierExpression)declarator.Initializer!;
+                writer.WriteLine($"{instance.ReturnType.ToCIdentifier(false)} " +
+                    $"{declarator.Name} = {initial.Identifier.Parts[0]};");
+                writer.WriteLine(
+                    $"{target.Identifier.Parts[0]} = {replacement.Identifier.Parts[0]};");
+                writer.WriteLine($"return {declarator.Name};");
+            }
+            else if (declaration.Body is
+                [LocalVariableDeclarationStatement localCopy, ReturnStatement])
+            {
+                var declarator = localCopy.Declarators.Single();
                 var source = (IdentifierExpression)declarator.Initializer!;
                 writer.WriteLine($"{instance.ReturnType.ToCIdentifier(false)} " +
                     $"{declarator.Name} = {source.Identifier.Parts[0]};");
                 writer.WriteLine($"return {declarator.Name};");
+            }
+            else if (declaration.Body is
+                [IfStatement
+                {
+                    Condition: { } condition,
+                    ThenStatement: ReturnStatement { Expression: IdentifierExpression whenTrue },
+                    ElseStatement: ReturnStatement { Expression: IdentifierExpression whenFalse },
+                }])
+            {
+                writer.WriteLine($"if ({ToCExpression(condition, declaration, moduleName)})");
+                writer.WriteLine("{");
+                writer.IncreaseIndent();
+                writer.WriteLine($"return {whenTrue.Identifier.Parts[0]};");
+                writer.DecreaseIndent();
+                writer.WriteLine("}");
+                writer.WriteLine("else");
+                writer.WriteLine("{");
+                writer.IncreaseIndent();
+                writer.WriteLine($"return {whenFalse.Identifier.Parts[0]};");
+                writer.DecreaseIndent();
+                writer.WriteLine("}");
             }
             else
             {
@@ -1337,6 +1421,13 @@ public static partial class CCodeOutputGenerator
         {
             return $"{ToCBaseValue(receiverExpression, true, receiverBaseDepth)}.{field.Declaration.Name}";
         }
+        if (receiver.InferredType is NamedType { } closedType &&
+            RequiresClosedValueLayout(closedType))
+        {
+            return $"((struct {closedType.ConstructedIdentity!.CIdentifier}*)" +
+                $"({receiverExpression})){(field.ContainingClassType == ClassType.Class ? "->" : ".")}" +
+                field.Declaration.Name;
+        }
         var accessOperator = field.ContainingClassType == ClassType.Class ? "->" : ".";
         return $"({receiverExpression}){accessOperator}{field.Declaration.Name}";
     }
@@ -1548,7 +1639,7 @@ public static partial class CCodeOutputGenerator
         }
 
         var constructorReceiver = expression.RequestedType is NamedType named &&
-            RequiresClosedValueLayout(named)
+            RequiresClosedValueLayout(named) && constructor.ClosedContainingType is null
             ? $"({constructor.Declaration!.ParentClassDeclaration!.ToCIdentifier(
                 constructor.ModuleName)}*)({receiver})"
             : receiver;

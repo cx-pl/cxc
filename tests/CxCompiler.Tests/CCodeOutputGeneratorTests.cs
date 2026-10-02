@@ -62,11 +62,39 @@ public sealed class CCodeOutputGeneratorTests
         var generatedHeader = GenerateOutput(source, "unnamed.h");
 
         Assert.Contains(
-            "extern CX_EXPORT void CX_ID_3(unnamed, Optional, Box)(",
+            "extern CX_UNNAMED_API void CX_ID_3(unnamed, Optional, Box)(",
             generatedHeader);
         Assert.Contains("void* value,", generatedHeader);
         Assert.Contains("void* __returnValue", generatedHeader);
         Assert.DoesNotContain("struct void*", generatedHeader);
+    }
+
+    [Fact]
+    public void SeparatesGeneratedModuleImportsFromItsExports()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("api_split");
+        project.AddCompilationContext(CompilerTestHelper.Parse("public int Run() { return 1; }"));
+        new SemanticBinder().Bind(project);
+        var directory = Path.Combine(Path.GetTempPath(), $"cxc-api-split-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var header = File.ReadAllText(Path.Combine(directory, "api_split.h"));
+            var cmake = File.ReadAllText(Path.Combine(directory, "CMakeLists.txt"));
+
+            Assert.Contains("#if defined(CX_API_SPLIT_BUILD)", header);
+            Assert.Contains("#define CX_API_SPLIT_API CX_EXPORT", header);
+            Assert.Contains("#define CX_API_SPLIT_API CX_IMPORT", header);
+            Assert.Contains("extern CX_API_SPLIT_API cx_int CX_ID_2(api_split, Run)()", header);
+            Assert.Contains("target_compile_definitions(api_split PRIVATE CX_API_SPLIT_BUILD)", cmake);
+            Assert.True(cmake.IndexOf("add_executable(api_split", StringComparison.Ordinal) <
+                cmake.IndexOf("target_compile_definitions(api_split", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
     }
 
     private static string GenerateSource(string source)

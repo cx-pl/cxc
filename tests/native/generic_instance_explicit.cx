@@ -1,0 +1,5 @@
+public class Utility {
+    public T Identity<T>(T value) { return value; }
+}
+
+public int Run(Utility utility) { return utility.Identity<int>(29); }
