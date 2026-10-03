@@ -1,4 +1,4 @@
-﻿namespace CxCompiler.Model.Statements;
+namespace CxCompiler.Model.Statements;
 
 public abstract class StatementBase : CxCompiler.Model.Common.IHasSourceSpan
 {

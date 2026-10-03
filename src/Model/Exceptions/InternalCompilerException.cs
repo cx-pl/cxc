@@ -1,4 +1,4 @@
-﻿namespace CxCompiler.Model;
+namespace CxCompiler.Model;
 
 public class InternalCompilerException : Exception
 {

@@ -1,4 +1,4 @@
-﻿using Antlr4.Runtime.Misc;
+using Antlr4.Runtime.Misc;
 using CxCompiler.Grammar;
 using CxCompiler.Model;
 using CxCompiler.Model.Common;
@@ -42,7 +42,7 @@ public class PropertyDeclarationParserVisitor : CxParserBaseVisitor<PropertyDecl
         {
             name = "get";
         }
-        else if(context.Set() != null)
+        else if (context.Set() != null)
         {
             name = "set";
         }

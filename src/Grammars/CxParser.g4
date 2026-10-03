@@ -1,617 +1,617 @@
 parser grammar CxParser;
 
 options {
-	tokenVocab = CxLexer;
+    tokenVocab = CxLexer;
 }
 
 // Top-level statements
 
 compilationUnit
-	: importStatements? namespaceDeclaration? topLevelDeclarations?
-	;
+    : importStatements? namespaceDeclaration? topLevelDeclarations?
+    ;
 
 importStatements
-	: importStatement+
-	;
+    : importStatement+
+    ;
 
 importStatement
-	: Import name = qualifiedIdentifier Semicolon
-	;
+    : Import name = qualifiedIdentifier Semicolon
+    ;
 
 namespaceDeclaration
-	: Namespace name = qualifiedIdentifier Semicolon
-	;
+    : Namespace name = qualifiedIdentifier Semicolon
+    ;
 
-topLevelDeclarations
-	: topLevelDeclaration+
-	;
+ opLevelDeclarations
+    : topLevelDeclaration+
+    ;
 
-topLevelDeclaration
-	: classDeclaration
-	| functionDeclaration
-	| enumDeclaration
-	| typedefDeclaration
-	| extensionDeclaration
-	;
+ opLevelDeclaration
+    : classDeclaration
+    | functionDeclaration
+    | enumDeclaration
+    | typedefDeclaration
+    | extensionDeclaration
+    ;
 
 // Classes
 
 classModifiers
-	: classModifier*
-	;
+    : classModifier*
+    ;
 
 classModifier
-	: visibilityModifier
-	| Abstract
-	| Final
-	| Static
-	;
+    : visibilityModifier
+    | Abstract
+    | Final
+    | Static
+    ;
 
 visibilityModifier
-	: Public
-	| Protected
-	| Private
-	| Internal
-	;
+    : Public
+    | Protected
+    | Private
+    | Internal
+    ;
 
 classBase
-	: Colon list = classBaseList
-	;
+    : Colon list = classBaseList
+    ;
 
 classBaseList
-	: name = typeName
-	| list = classBaseList Comma name = typeName
-	;
+    : name = typeName
+    | list = classBaseList Comma name = typeName
+    ;
 
 classType
-	: Class
-	| Struct
-	| Interface
-	| Identifier
-	;
+    : Class
+    | Struct
+    | Interface
+    | Identifier
+    ;
 
 classDeclaration
-	: classModifiers partial = Partial? classType name = Identifier genericTypeParameters? base = classBase?
-		body = classDeclarationBody
-	;
+    : classModifiers partial = Partial? classType name = Identifier genericTypeParameters? base = classBase?
+        body = classDeclarationBody
+    ;
 
 classDeclarationBody
-	: LeftBrace members = memberDeclaration* RightBrace
-	| Semicolon
-	;
+    : LeftBrace members = memberDeclaration* RightBrace
+    | Semicolon
+    ;
 
 // Members
 
 memberModifiers
-	: memberModifier*
-	;
+    : memberModifier*
+    ;
 
 memberModifier
-	: visibilityModifier
-	| Abstract
-	| Virtual
-	| Override
-	| Final
-	| Static
-	| Extern
-	;
+    : visibilityModifier
+    | Abstract
+    | Virtual
+    | Override
+    | Final
+    | Static
+    | Extern
+    ;
 
 memberDeclaration
-	: fieldsDeclaration
-	| propertyDeclaration
-	| constructorDeclaration
-	| functionDeclaration
-	| classDeclaration
-	;
+    : fieldsDeclaration
+    | propertyDeclaration
+    | constructorDeclaration
+    | functionDeclaration
+    | classDeclaration
+    ;
 
 fieldsDeclaration
-	: memberModifiers typeName fieldInitializers Semicolon
-	;
+    : memberModifiers typeName fieldInitializers Semicolon
+    ;
 
 fieldInitializers
-	: fieldInitializer
-	| fieldInitializers Comma fieldInitializer
-	;
+    : fieldInitializer
+    | fieldInitializers Comma fieldInitializer
+    ;
 
 fieldInitializer
-	: Identifier (Assign literal)?
-	;
+    : Identifier (Assign literal)?
+    ;
 
 propertyDeclaration
-	: memberModifiers typeName Identifier LeftBrace propertyAccessorDeclarations RightBrace
-	;
+    : memberModifiers typeName Identifier LeftBrace propertyAccessorDeclarations RightBrace
+    ;
 
 propertyAccessorDeclarations
-	: propertyAccessorDeclaration+
-	;
+    : propertyAccessorDeclaration+
+    ;
 
 propertyAccessorDeclaration
-	: Extern? Const? Get propertyParams? propertyAccessorBody
-	| Extern? Set propertyParams? propertyAccessorBody
-	;
+    : Extern? Const? Get propertyParams? propertyAccessorBody
+    | Extern? Set propertyParams? propertyAccessorBody
+    ;
 
 propertyParams
-	: LeftParen propertyParam (Comma propertyParam)* RightParen
-	;
+    : LeftParen propertyParam (Comma propertyParam)* RightParen
+    ;
 
 propertyParam
-	: typeName? Identifier
-	;
+    : typeName? Identifier
+    ;
 
 propertyAccessorBody
-	: LeftBrace statements? RightBrace
-	| Arrow statement
-	| Semicolon
-	;
+    : LeftBrace statements? RightBrace
+    | Arrow statement
+    | Semicolon
+    ;
 
 constructorDeclaration
-	: modifiers = memberModifiers Constructor LeftParen functionParameters? RightParen constructorOrBaseInvocation? functionBody
-	;
+    : modifiers = memberModifiers Constructor LeftParen functionParameters? RightParen constructorOrBaseInvocation? functionBody
+    ;
 
 constructorOrBaseInvocation
-	: Colon (This | Base) functionInvocation
-	;
+    : Colon (This | Base) functionInvocation
+    ;
 
 functionDeclaration
-	: modifiers = memberModifiers async = Async? returnType = typeNameOrVoid name = Identifier genericTypeParameters? LeftParen functionParameters? RightParen Const? functionBody
-	;
+    : modifiers = memberModifiers async = Async? returnType = typeNameOrVoid name = Identifier genericTypeParameters? LeftParen functionParameters? RightParen Const? functionBody
+    ;
 
 functionParameters
-	: functionParameter
-	| functionParameters Comma functionParameter
-	;
+    : functionParameter
+    | functionParameters Comma functionParameter
+    ;
 
 functionParameter
-	: Params? typeName name = Identifier (defaultValue = Assign literal)?
-	;
+    : Params? typeName name = Identifier (defaultValue = Assign literal)?
+    ;
 
 functionBody
-	: LeftBrace statements? RightBrace
-	| Arrow statement
-	| Semicolon
-	;
+    : LeftBrace statements? RightBrace
+    | Arrow statement
+    | Semicolon
+    ;
 
 enumDeclaration
-	: visibilityModifier? Enum name = Identifier enumDeclarationBody
-	;
+    : visibilityModifier? Enum name = Identifier enumDeclarationBody
+    ;
 
 enumDeclarationBody
-	: LeftBrace (enumMemberDeclaration (Comma enumMemberDeclaration)* Comma?)? RightBrace
-	| Semicolon
-	;
+    : LeftBrace (enumMemberDeclaration (Comma enumMemberDeclaration)* Comma?)? RightBrace
+    | Semicolon
+    ;
 
 enumMemberDeclaration
-	: Identifier (value = Assign literal)?
-	// TODO: allow memberDeclaration to build rich enums
-	;
+    : Identifier (value = Assign literal)?
+    // TODO: allow memberDeclaration to build rich enums
+    ;
 
-typedefDeclaration
-	: Typedef Identifier Assign qualifiedIdentifier Semicolon
-	;
+ ypedefDeclaration
+    : Typedef Identifier Assign qualifiedIdentifier Semicolon
+    ;
 
 extensionDeclaration
-	: visibilityModifier? Extension name = Identifier base = classBase body = classDeclarationBody
-	;
+    : visibilityModifier? Extension name = Identifier base = classBase body = classDeclarationBody
+    ;
 
 // Statements
 
 statements
-	: statement
-	| statements statement
-	;
+    : statement
+    | statements statement
+    ;
 
 statement
-	: declarationStatement
-	| embeddedStatement
-	;
+    : declarationStatement
+    | embeddedStatement
+    ;
 
 declarationStatement
-	: localVariableDeclarationStatement
-	// TODO: | localFunctionDeclarationStatement
-	;
+    : localVariableDeclarationStatement
+    // TODO: | localFunctionDeclarationStatement
+    ;
 
 localVariableDeclarationStatement
-	: localVariableDeclaration Semicolon
-	;
+    : localVariableDeclaration Semicolon
+    ;
 
 localVariableDeclaration
-	: typeName variableDeclarations
-	;
+    : typeName variableDeclarations
+    ;
 
 variableDeclarations
-	: variableDeclaration
-	| variableDeclarations Comma variableDeclaration
-	;
+    : variableDeclaration
+    | variableDeclarations Comma variableDeclaration
+    ;
 
 variableDeclaration
-	: Identifier
-	| Identifier Assign expression
-	;
+    : Identifier
+    | Identifier Assign expression
+    ;
 
 embeddedStatement
-	: expressionStatement
-	| ifStatement
-	| switchStatement
-	| whileStatement
-	| doStatement
-	| forStatement
-	| foreachStatement
-	| returnStatement
-	| breakStatement
-	| continueStatement
-	| throwStatement
-	| tryStatement
-	| usingStatement
-	| LeftBrace statements? RightBrace
-	| Semicolon
-	;
+    : expressionStatement
+    | ifStatement
+    | switchStatement
+    | whileStatement
+    | doStatement
+    | forStatement
+    | foreachStatement
+    | returnStatement
+    | breakStatement
+    | continueStatement
+    | throwStatement
+    | tryStatement
+    | usingStatement
+    | LeftBrace statements? RightBrace
+    | Semicolon
+    ;
 
 expressionStatement
-	: expression Semicolon
-	;
+    : expression Semicolon
+    ;
 
 ifStatement
-	: If LeftParen expression RightParen embeddedStatement (Else embeddedStatement)?
-	;
+    : If LeftParen expression RightParen embeddedStatement (Else embeddedStatement)?
+    ;
 
 switchStatement
-	: Switch LeftParen expression RightParen LeftBrace switchSection* RightBrace
-	;
+    : Switch LeftParen expression RightParen LeftBrace switchSection* RightBrace
+    ;
 
 switchSection
-	: switchLabel+ statements
-	;
+    : switchLabel+ statements
+    ;
 
 switchLabel
-	: Case expression switchLabelFilter? Colon
-	| Default Colon
-	;
+    : Case expression switchLabelFilter? Colon
+    | Default Colon
+    ;
 
 switchLabelFilter
-	: When expression
-	;
+    : When expression
+    ;
 
 whileStatement
-	: While LeftParen expression RightParen embeddedStatement
-	;
+    : While LeftParen expression RightParen embeddedStatement
+    ;
 
 doStatement
-	: Do embeddedStatement While LeftParen expression RightParen Semicolon
-	;
+    : Do embeddedStatement While LeftParen expression RightParen Semicolon
+    ;
 
 forStatement
-	: For LeftParen forInitializer? Semicolon forCheck? Semicolon forIterator? RightParen embeddedStatement
-	;
+    : For LeftParen forInitializer? Semicolon forCheck? Semicolon forIterator? RightParen embeddedStatement
+    ;
 
 forInitializer
-	: localVariableDeclaration
-	| expression (Comma expression)*
-	;
+    : localVariableDeclaration
+    | expression (Comma expression)*
+    ;
 
 forCheck
-	: expression
-	;
+    : expression
+    ;
 
 forIterator
-	: expression (Comma expression)*
-	;
+    : expression (Comma expression)*
+    ;
 
 foreachStatement
-	: Foreach LeftParen typeName Identifier In expression RightParen embeddedStatement
-	;
+    : Foreach LeftParen typeName Identifier In expression RightParen embeddedStatement
+    ;
 
 returnStatement
-	: Return expression? Semicolon
-	;
+    : Return expression? Semicolon
+    ;
 
 breakStatement
-	: Break Semicolon
-	;
+    : Break Semicolon
+    ;
 
 continueStatement
-	: Continue Semicolon
-	;
+    : Continue Semicolon
+    ;
 
-throwStatement
-	: Throw expression? Semicolon
-	;
+ hrowStatement
+    : Throw expression? Semicolon
+    ;
 
-tryStatement
-	: Try embeddedStatement (catchClauses finallyClause? | finallyClause)
-	;
+ ryStatement
+    : Try embeddedStatement (catchClauses finallyClause? | finallyClause)
+    ;
 
 catchClauses
-	: catchClause+
-	;
+    : catchClause+
+    ;
 
 catchClause
-	: Catch LeftParen typeName Identifier? RightParen exceptionFilter? embeddedStatement
-	;
+    : Catch LeftParen typeName Identifier? RightParen exceptionFilter? embeddedStatement
+    ;
 
 exceptionFilter
-	: When LeftParen expression RightParen
-	;
+    : When LeftParen expression RightParen
+    ;
 
 finallyClause
-	: Finally embeddedStatement
-	;
+    : Finally embeddedStatement
+    ;
 
 usingStatement
-	: Using LeftParen expression RightParen embeddedStatement
-	;
+    : Using LeftParen expression RightParen embeddedStatement
+    ;
 
 // Expressions
 
 expression
-	: assignmentExpression
-	| nonAssignmentExpression
-	;
+    : assignmentExpression
+    | nonAssignmentExpression
+    ;
 
 assignmentExpression
-	: primaryExpression assignOperator expression
-	;
+    : primaryExpression assignOperator expression
+    ;
 
 assignOperator
-	: Assign
-	| PlusAssign
-	| MinusAssign
-	| StarAssign
-	| DivAssign
-	| ModAssign
-	| AndAssign
-	| OrAssign
-	| XorAssign
-	| LeftShiftAssign
-	| RightShiftAssign
-	;
+    : Assign
+    | PlusAssign
+    | MinusAssign
+    | StarAssign
+    | DivAssign
+    | ModAssign
+    | AndAssign
+    | OrAssign
+    | XorAssign
+    | LeftShiftAssign
+    | RightShiftAssign
+    ;
 
 nonAssignmentExpression
-	: conditionalExpression
-	// TODO: lambdaExpression
-	;
+    : conditionalExpression
+    // TODO: lambdaExpression
+    ;
 
 conditionalExpression
-	: nullCoalescingExpression (
-		Question throwableExpression Colon throwableExpression
-	)?
-	;
+    : nullCoalescingExpression (
+        Question throwableExpression Colon throwableExpression
+    )?
+    ;
 
 nullCoalescingExpression
-	: conditionalOrExpression (
-		QuestionQuestion nullCoalescingExpression
-	)?
-	;
+    : conditionalOrExpression (
+        QuestionQuestion nullCoalescingExpression
+    )?
+    ;
 
 conditionalOrExpression
-	: conditionalAndExpression (OrOr conditionalAndExpression)*
-	;
+    : conditionalAndExpression (OrOr conditionalAndExpression)*
+    ;
 
 conditionalAndExpression
-	: inclusiveOrExpression (AndAnd inclusiveOrExpression)*
-	;
+    : inclusiveOrExpression (AndAnd inclusiveOrExpression)*
+    ;
 
 inclusiveOrExpression
-	: exclusiveOrExpression (Or exclusiveOrExpression)*
-	;
+    : exclusiveOrExpression (Or exclusiveOrExpression)*
+    ;
 
 exclusiveOrExpression
-	: andExpression (Xor andExpression)*
-	;
+    : andExpression (Xor andExpression)*
+    ;
 
 andExpression
-	: equalityExpression (And equalityExpression)*
-	;
+    : equalityExpression (And equalityExpression)*
+    ;
 
 equalityExpression
-	: relationalExpression (
-		(Equal | NotEqual) relationalExpression
-	)*
-	;
+    : relationalExpression (
+        (Equal | NotEqual) relationalExpression
+    )*
+    ;
 
 relationalExpression
-	: shiftExpression (
-		(Less | LessEqual | Greater | GreaterEqual) shiftExpression
-		| Is typeName
-	)*
-	;
+    : shiftExpression (
+        (Less | LessEqual | Greater | GreaterEqual) shiftExpression
+        | Is typeName
+    )*
+    ;
 
 shiftExpression
-	: additiveExpression (
-		(LeftShift | RightShift) additiveExpression
-	)*
-	;
+    : additiveExpression (
+        (LeftShift | RightShift) additiveExpression
+    )*
+    ;
 
 additiveExpression
-	: multiplicativeExpression (
-		(Plus | Minus) multiplicativeExpression
-	)*
-	;
+    : multiplicativeExpression (
+        (Plus | Minus) multiplicativeExpression
+    )*
+    ;
 
 multiplicativeExpression
-	: unaryExpression ((Star | Div | Mod) unaryExpression)*
-	;
+    : unaryExpression ((Star | Div | Mod) unaryExpression)*
+    ;
 
 unaryExpression
-	: primaryExpression
-	| Plus unaryExpression
-	| Minus unaryExpression
-	| Not unaryExpression
-	| Tilde unaryExpression
-	| PlusPlus unaryExpression
-	| MinusMinus unaryExpression
-	| LeftParen typeName RightParen unaryExpression
-	| Await unaryExpression
-	;
+    : primaryExpression
+    | Plus unaryExpression
+    | Minus unaryExpression
+    | Not unaryExpression
+    | Tilde unaryExpression
+    | PlusPlus unaryExpression
+    | MinusMinus unaryExpression
+    | LeftParen typeName RightParen unaryExpression
+    | Await unaryExpression
+    ;
 
 primaryExpression
-	: primaryExpressionStart arrayExpression* (
-		(
-			memberAccess
-			| functionInvocation
-			| genericFunctionInvocation
-			| PlusPlus
-			| MinusMinus
-		) arrayExpression*
-	)*
-	;
+    : primaryExpressionStart arrayExpression* (
+        (
+            memberAccess
+            | functionInvocation
+            | genericFunctionInvocation
+            | PlusPlus
+            | MinusMinus
+        ) arrayExpression*
+    )*
+    ;
 
 primaryExpressionStart
-	: literal
-	| Identifier
-	| This
-	| LeftParen expression RightParen
-	| arrayCreationExpression
-	| New typeName functionInvocation
-	;
+    : literal
+    | Identifier
+    | This
+    | LeftParen expression RightParen
+    | arrayCreationExpression
+    | New typeName functionInvocation
+    ;
 
 arrayCreationExpression
-	: New arrayElementType LeftBracket expression RightBracket
-	;
+    : New arrayElementType LeftBracket expression RightBracket
+    ;
 
 arrayElementType
-	: builtInType
-	| qualifiedIdentifier genericTypeArguments?
-	;
+    : builtInType
+    | qualifiedIdentifier genericTypeArguments?
+    ;
 
 arrayExpression
-	: LeftBracket expression (Comma expression)* RightBracket
-	;
+    : LeftBracket expression (Comma expression)* RightBracket
+    ;
 
 memberAccess
-	: Dot Identifier
-	;
+    : Dot Identifier
+    ;
 
 functionInvocation
-	: LeftParen functionInvocationArguments? RightParen
-	;
+    : LeftParen functionInvocationArguments? RightParen
+    ;
 
 genericFunctionInvocation
-	: genericTypeArguments functionInvocation
-	;
+    : genericTypeArguments functionInvocation
+    ;
 
 functionInvocationArguments
-	: functionInvocationArgument
-	| functionInvocationArguments Comma functionInvocationArgument
-	;
+    : functionInvocationArgument
+    | functionInvocationArguments Comma functionInvocationArgument
+    ;
 
 functionInvocationArgument
-	: (Identifier Colon)? expression
-	;
+    : (Identifier Colon)? expression
+    ;
 
-throwableExpression
-	: expression
-	| throwExpression
-	;
+ hrowableExpression
+    : expression
+    | throwExpression
+    ;
 
-throwExpression
-	: Throw expression?
-	;
+ hrowExpression
+    : Throw expression?
+    ;
 
 
 // Annotations
 annotations
-	: annotation+
-	;
+    : annotation+
+    ;
 
 annotation
-	: At qualifiedIdentifier functionInvocation?
-	;
+    : At qualifiedIdentifier functionInvocation?
+    ;
 
 // Types
 
-typeNameOrVoid
-	: typeName
-	| Void
-	;
+ ypeNameOrVoid
+    : typeName
+    | Void
+    ;
 
-typeName
-	: Const? builtInType arrayDimension* Question?
-	| Const? namedType = qualifiedIdentifier namedTypeGenericArguments = genericTypeArguments? arrayDimension* Question?
-	| autoVarType = Var
-	| autoConstType = Const
-	// TODO: functionType
-	;
+ ypeName
+    : Const? builtInType arrayDimension* Question?
+    | Const? namedType = qualifiedIdentifier namedTypeGenericArguments = genericTypeArguments? arrayDimension* Question?
+    | autoVarType = Var
+    | autoConstType = Const
+    // TODO: functionType
+    ;
 
 arrayDimension
-	: LeftBracket RightBracket
-	;
+    : LeftBracket RightBracket
+    ;
 
 genericTypeParameters
-	: Less genericParamList Greater
-	;
+    : Less genericParamList Greater
+    ;
 
 genericParamList
-	: Identifier
-	| genericParamList Comma Identifier
-	;
+    : Identifier
+    | genericParamList Comma Identifier
+    ;
 
 genericTypeArguments
-	: Less genericTypeArgumentList Greater
-	;
+    : Less genericTypeArgumentList Greater
+    ;
 
 genericTypeArgumentList
-	: typeName
-	| genericTypeArgumentList Comma typeName
-	;
+    : typeName
+    | genericTypeArgumentList Comma typeName
+    ;
 
 builtInType
-	: integerType
-	| floatingType
-	| textualType
-	| objectType = Object
-	| ptrType = Ptr genericTypeArguments?
-	;
+    : integerType
+    | floatingType
+    | textualType
+    | objectType = Object
+    | ptrType = Ptr genericTypeArguments?
+    ;
 
 integerType
-	: Bool
-	| Byte
-	| Sbyte
-	| Short
-	| Ushort
-	| Int
-	| Uint
-	| Long
-	| Ulong
-	| Int8
-	| Int16
-	| Int32
-	| Int64
-	| UInt8
-	| UInt16
-	| UInt32
-	| UInt64
-	;
+    : Bool
+    | Byte
+    | Sbyte
+    | Short
+    | Ushort
+    | Int
+    | Uint
+    | Long
+    | Ulong
+    | Int8
+    | Int16
+    | Int32
+    | Int64
+    | UInt8
+    | UInt16
+    | UInt32
+    | UInt64
+    ;
 
 floatingType
-	: Float
-	| Double
-	// | Decimal
-	| Float32
-	| Float64
-	;
+    : Float
+    | Double
+    // | Decimal
+    | Float32
+    | Float64
+    ;
 
-textualType
-	: Char
-	| String
-	;
+ extualType
+    : Char
+    | String
+    ;
 
 // Identifiers and literals
 
 qualifiedIdentifier
-	: identifier = Identifier													# simpleIdentifier
-	| baseQualifiedIdentifier = qualifiedIdentifier Dot identifier = Identifier	# combinedQualifiedIdentifier
-	;
+    : identifier = Identifier													# simpleIdentifier
+    | baseQualifiedIdentifier = qualifiedIdentifier Dot identifier = Identifier	# combinedQualifiedIdentifier
+    ;
 
 literal
-	: booleanLiteral
-	| IntegerLiteral
-	| FloatingLiteral
-	| CharLiteral
-	| StringLiteral
-	| Null
-	;
+    : booleanLiteral
+    | IntegerLiteral
+    | FloatingLiteral
+    | CharLiteral
+    | StringLiteral
+    | Null
+    ;
 
 booleanLiteral
-	: True
-	| False
-	;
+    : True
+    | False
+    ;

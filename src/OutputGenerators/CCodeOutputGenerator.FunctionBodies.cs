@@ -184,13 +184,13 @@ public static partial class CCodeOutputGenerator
             else if (declaration.Body is
                 [LocalVariableDeclarationStatement local,
                     ExpressionStatement
+                {
+                    Expression: AssignmentExpression
                     {
-                        Expression: AssignmentExpression
-                        {
-                            Target: IdentifierExpression target,
-                            Value: IdentifierExpression replacement,
-                        },
+                        Target: IdentifierExpression target,
+                        Value: IdentifierExpression replacement,
                     },
+                },
                     ReturnStatement])
             {
                 var declarator = local.Declarators.Single();

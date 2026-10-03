@@ -1,4 +1,4 @@
-﻿namespace CxCompiler.Model.Types;
+namespace CxCompiler.Model.Types;
 
 public enum ClassModifier
 {

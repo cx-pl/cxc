@@ -75,12 +75,12 @@ Static: 'static';
 String: 'string';
 Struct: 'struct';
 Switch: 'switch';
-This: 'this';
-Throw: 'throw';
-True: 'true';
-Try: 'try';
-Typedef: 'typedef';
-Typeof: 'typeof';
+ his: 'this';
+ hrow: 'throw';
+ rue: 'true';
+ ry: 'try';
+ ypedef: 'typedef';
+ ypeof: 'typeof';
 Uint: 'uint';
 UInt8: 'uint8';
 UInt16: 'uint16';
@@ -123,7 +123,7 @@ OrOr: '||';
 Xor: '^';
 Not: '!';
 At: '@';
-Tilde: '~';
+ ilde: '~';
 Question: '?';
 Colon: ':';
 Semicolon: ';';
@@ -153,125 +153,125 @@ PipeError: '!=>';
 // Identifiers
 
 Identifier
-	: Nondigit (Nondigit | Digit)*
-	;
+    : Nondigit (Nondigit | Digit)*
+    ;
 
 // Literals
 
 fragment Digit
-	: [0-9]
-	;
+    : [0-9]
+    ;
 fragment NonzeroDigit
-	: [1-9]
-	;
+    : [1-9]
+    ;
 fragment BinaryDigit
-	: [0-1]
-	;
+    : [0-1]
+    ;
 fragment OctalDigit
-	: [0-7]
-	;
+    : [0-7]
+    ;
 fragment HexadecimalDigit
-	: [0-9a-fA-F]
-	;
+    : [0-9a-fA-F]
+    ;
 fragment Nondigit
-	: [a-zA-Z_]
-	;
+    : [a-zA-Z_]
+    ;
 fragment Sign
-	: [+-]
-	;
+    : [+-]
+    ;
 fragment ExponentPrefix
-	: [eE]
-	;
+    : [eE]
+    ;
 fragment OctalPrefix
-	: '0'
-	;
+    : '0'
+    ;
 fragment HexadecimalPrefix
-	: '0' [xX]
-	;
+    : '0' [xX]
+    ;
 fragment BinaryPrefix
-	: '0' [bB]
-	;
+    : '0' [bB]
+    ;
 fragment UnsignedSuffix
-	: [uU]
-	;
+    : [uU]
+    ;
 fragment LongSuffix
-	: [lL]
-	;
+    : [lL]
+    ;
 fragment FloatSuffix
-	: [fF]
-	;
+    : [fF]
+    ;
 fragment DoubleSuffix
-	: [dD]
-	;
+    : [dD]
+    ;
 fragment DecimalSuffix
-	: [mM]
-	;
+    : [mM]
+    ;
 fragment DigitSequence
-	: Digit+
-	;
+    : Digit+
+    ;
 fragment EscapeSequence
-	: '\\' ['"\\nrtb0]
-	;
+    : '\\' ['"\\nrtb0]
+    ;
 fragment CharCharacter
-	: ~['\\\r\n]
-	;
+    : ~['\\\r\n]
+    ;
 fragment StringCharacter
-	: ~["\\\r\n]
-	;
+    : ~["\\\r\n]
+    ;
 
 IntegerLiteral
-	: DecimalLiteral IntegerSuffix?
-	| OctalLiteral IntegerSuffix?
-	| HexadecimalLiteral IntegerSuffix?
-	| BinaryLiteral IntegerSuffix?
-	;
+    : DecimalLiteral IntegerSuffix?
+    | OctalLiteral IntegerSuffix?
+    | HexadecimalLiteral IntegerSuffix?
+    | BinaryLiteral IntegerSuffix?
+    ;
 fragment DecimalLiteral
-	: Digit+
-	;
+    : Digit+
+    ;
 fragment OctalLiteral
-	: OctalPrefix OctalDigit+
-	;
+    : OctalPrefix OctalDigit+
+    ;
 fragment HexadecimalLiteral
-	: HexadecimalPrefix HexadecimalDigit+
-	;
+    : HexadecimalPrefix HexadecimalDigit+
+    ;
 fragment BinaryLiteral
-	: BinaryPrefix BinaryDigit+
-	;
+    : BinaryPrefix BinaryDigit+
+    ;
 fragment IntegerSuffix
-	: UnsignedSuffix? LongSuffix?
-	;
+    : UnsignedSuffix? LongSuffix?
+    ;
 
 FloatingLiteral
-	: FloatingFractionalPart FloatingExponentPart? FloatingSuffix?
-	;
+    : FloatingFractionalPart FloatingExponentPart? FloatingSuffix?
+    ;
 fragment FloatingFractionalPart
-	: DigitSequence? '.' DigitSequence
-	| DigitSequence '.'
-	;
+    : DigitSequence? '.' DigitSequence
+    | DigitSequence '.'
+    ;
 fragment FloatingExponentPart
-	: ExponentPrefix Sign? DigitSequence
-	;
+    : ExponentPrefix Sign? DigitSequence
+    ;
 fragment FloatingSuffix
-	: FloatSuffix
-	| DoubleSuffix
-	| DecimalSuffix
-	;
+    : FloatSuffix
+    | DoubleSuffix
+    | DecimalSuffix
+    ;
 
 CharLiteral
-	: '\'' (CharCharacter | EscapeSequence) '\''
-	;
+    : '\'' (CharCharacter | EscapeSequence) '\''
+    ;
 StringLiteral
-	: '"' (StringCharacter | EscapeSequence)* '"'
-	;
+    : '"' (StringCharacter | EscapeSequence)* '"'
+    ;
 
 // Whitespace and comments
 
 Whitespace
-	: [ \r\t\n]+ -> channel(HIDDEN)
-	;
+    : [ \r\t\n]+ -> channel(HIDDEN)
+    ;
 BlockComment
-	: '/*' .*? '*/' -> channel(HIDDEN)
-	;
+    : '/*' .*? '*/' -> channel(HIDDEN)
+    ;
 LineComment
-	: '//' ~[\r\n]* -> channel(HIDDEN)
-	;
+    : '//' ~[\r\n]* -> channel(HIDDEN)
+    ;

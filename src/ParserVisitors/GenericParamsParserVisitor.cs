@@ -1,4 +1,4 @@
-﻿using Antlr4.Runtime.Misc;
+using Antlr4.Runtime.Misc;
 using CxCompiler.Grammar;
 
 namespace CxCompiler.ParserVisitors;

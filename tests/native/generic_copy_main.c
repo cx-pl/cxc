@@ -2,8 +2,7 @@
 
 #include "generic_copy.h"
 
-int main(void)
-{
+int main(void) {
     assert(CX_ID_2(generic_copy, RunInt)() == 7);
     assert(CX_ID_2(generic_copy, RunLong)() == 9);
     assert(CX_ID_2(generic_copy, RunIntAgain)() == 11);

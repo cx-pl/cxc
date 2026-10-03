@@ -322,14 +322,14 @@ public sealed class SemanticBinder
         if (function.Body is not
             [LocalVariableDeclarationStatement local,
                 ExpressionStatement
+            {
+                Expression: AssignmentExpression
                 {
-                    Expression: AssignmentExpression
-                    {
-                        Target: IdentifierExpression target,
-                        Operator: "=",
-                        Value: IdentifierExpression replacement,
-                    },
+                    Target: IdentifierExpression target,
+                    Operator: "=",
+                    Value: IdentifierExpression replacement,
                 },
+            },
                 ReturnStatement { Expression: IdentifierExpression returned }] ||
             local.Declarators is not [var declarator] ||
             local.DeclaredType is not NamedType declared ||
@@ -622,62 +622,62 @@ public sealed class SemanticBinder
                         $"Static type '{classDeclaration.FullName}' cannot declare base types.");
                 }
 
-            foreach (var baseType in classDeclaration.BaseTypes)
-            {
-                ResolveTypeReference(baseType, classDeclaration.Namespace, imports);
-                if (baseType is ObjectType)
+                foreach (var baseType in classDeclaration.BaseTypes)
                 {
-                    SetBaseClass(classDeclaration, baseType, null);
-                    continue;
-                }
-                if (UnwrapConst(baseType) is not NamedType namedType ||
-                    namedType.ResolvedTypeFullName.ToString() == "void")
-                {
-                    throw new CompilationErrorException(
-                        $"Cannot resolve base type '{GetTypeName(baseType)}' for " +
-                        $"'{classDeclaration.FullName}'.");
-                }
-                if (namedType.ResolvedTypeFullName.ToString() == "cxcore.System.Exception")
-                {
-                    SetBaseClass(classDeclaration, baseType, null);
-                    continue;
-                }
-
-                var baseSymbol = _types.SingleOrDefault(candidate =>
-                    IsType(candidate.Type, namedType))
-                    ?? throw new CompilationErrorException(
-                        $"Base type '{GetTypeName(baseType)}' is not a class or interface.");
-                switch (baseSymbol.Declaration.ClassType)
-                {
-                    case ClassType.Interface:
-                        if (classDeclaration.BaseInterfaces.Contains(baseSymbol.Declaration))
-                        {
-                            throw new CompilationErrorException(
-                                $"Type '{classDeclaration.FullName}' lists interface " +
-                                $"'{baseSymbol.Declaration.FullName}' more than once.");
-                        }
-                        classDeclaration.AddBaseInterface(baseSymbol.Declaration);
-                        break;
-
-                    case ClassType.Class:
-                        SetBaseClass(classDeclaration, baseType, baseSymbol.Declaration);
-                        break;
-
-                    default:
+                    ResolveTypeReference(baseType, classDeclaration.Namespace, imports);
+                    if (baseType is ObjectType)
+                    {
+                        SetBaseClass(classDeclaration, baseType, null);
+                        continue;
+                    }
+                    if (UnwrapConst(baseType) is not NamedType namedType ||
+                        namedType.ResolvedTypeFullName.ToString() == "void")
+                    {
                         throw new CompilationErrorException(
-                            $"Type '{classDeclaration.FullName}' cannot derive from " +
-                            $"'{baseSymbol.Declaration.FullName}'.");
-                }
-            }
+                            $"Cannot resolve base type '{GetTypeName(baseType)}' for " +
+                            $"'{classDeclaration.FullName}'.");
+                    }
+                    if (namedType.ResolvedTypeFullName.ToString() == "cxcore.System.Exception")
+                    {
+                        SetBaseClass(classDeclaration, baseType, null);
+                        continue;
+                    }
 
-            if (classDeclaration.ClassType == ClassType.Class &&
-                !classDeclaration.IsStatic &&
-                classDeclaration.BaseClassType is null &&
-                !(moduleName == "cxcore" &&
-                  classDeclaration.FullName == BuiltInSystemTypes.Object.FullName))
-            {
-                classDeclaration.SetBaseClass(BuiltInSystemTypes.Object, null);
-            }
+                    var baseSymbol = _types.SingleOrDefault(candidate =>
+                        IsType(candidate.Type, namedType))
+                        ?? throw new CompilationErrorException(
+                            $"Base type '{GetTypeName(baseType)}' is not a class or interface.");
+                    switch (baseSymbol.Declaration.ClassType)
+                    {
+                        case ClassType.Interface:
+                            if (classDeclaration.BaseInterfaces.Contains(baseSymbol.Declaration))
+                            {
+                                throw new CompilationErrorException(
+                                    $"Type '{classDeclaration.FullName}' lists interface " +
+                                    $"'{baseSymbol.Declaration.FullName}' more than once.");
+                            }
+                            classDeclaration.AddBaseInterface(baseSymbol.Declaration);
+                            break;
+
+                        case ClassType.Class:
+                            SetBaseClass(classDeclaration, baseType, baseSymbol.Declaration);
+                            break;
+
+                        default:
+                            throw new CompilationErrorException(
+                                $"Type '{classDeclaration.FullName}' cannot derive from " +
+                                $"'{baseSymbol.Declaration.FullName}'.");
+                    }
+                }
+
+                if (classDeclaration.ClassType == ClassType.Class &&
+                    !classDeclaration.IsStatic &&
+                    classDeclaration.BaseClassType is null &&
+                    !(moduleName == "cxcore" &&
+                      classDeclaration.FullName == BuiltInSystemTypes.Object.FullName))
+                {
+                    classDeclaration.SetBaseClass(BuiltInSystemTypes.Object, null);
+                }
 
                 ResolveBaseTypes(
                     moduleName,
@@ -3005,9 +3005,9 @@ public sealed class SemanticBinder
 
         var resolvedCandidates = typeCandidates
             .Select(candidate => creation.RequestedType is NamedType
-                {
-                    ConstructedIdentity: not null,
-                } closedType &&
+            {
+                ConstructedIdentity: not null,
+            } closedType &&
                 candidate.Constructor.Declaration?.ParentClassDeclaration is { } parent &&
                 parent.GenericTypeNames.Length == closedType.TypeArguments.Count
                     ? candidate with
@@ -3782,7 +3782,7 @@ public sealed class SemanticBinder
 
     private static bool IsNumeric(TypeBase type)
     {
-        return 
+        return
             IsType(type, BuiltInSystemTypes.Char) ||
             IsInteger(type) ||
             IsType(type, BuiltInSystemTypes.Float) ||

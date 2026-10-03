@@ -1,4 +1,4 @@
-﻿using CxCompiler;
+using CxCompiler;
 
 new Compiler()
     .Compile(args);

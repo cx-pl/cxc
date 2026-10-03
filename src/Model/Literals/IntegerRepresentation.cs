@@ -1,4 +1,4 @@
-﻿namespace CxCompiler.Model.Literals;
+namespace CxCompiler.Model.Literals;
 
 public enum IntegerRepresentation
 {

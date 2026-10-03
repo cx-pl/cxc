@@ -5,7 +5,7 @@ class ExceptionProbe {
 int RunFinallyTransfers() {
     ExceptionProbe.State = 0;
     while (true) {
-        try {
+         ry {
             ExceptionProbe.State = ExceptionProbe.State + 1;
             break;
         }
@@ -14,15 +14,15 @@ int RunFinallyTransfers() {
         }
     }
     for (int index = 0; index < 1; index++) {
-        try {
+         ry {
             continue;
         }
         finally {
             ExceptionProbe.State = ExceptionProbe.State + 100;
         }
     }
-    try {
-        try {
+     ry {
+         ry {
             return 7;
         }
         finally {
@@ -35,7 +35,7 @@ int RunFinallyTransfers() {
 }
 
 int ReturnFromFinally() {
-    try {
+     ry {
         return 1;
     }
     finally {

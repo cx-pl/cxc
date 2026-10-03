@@ -1,4 +1,4 @@
-﻿namespace CxCompiler.Model.Project;
+namespace CxCompiler.Model.Project;
 
 public enum CxProjectType
 {

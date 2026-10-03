@@ -1,4 +1,4 @@
-﻿using CxCompiler.Model.Common;
+using CxCompiler.Model.Common;
 using CxCompiler.Model.Errors;
 
 namespace CxCompiler.Model.Types;
@@ -47,7 +47,7 @@ public class ClassDeclaration : DeclarationBase
         string[] genericTypeNames,
         DeclarationScope declarationScope)
         : base("class", declarationScope.FullNamespace, name)
-    {        
+    {
         Visibility = Visibility.Private;
         IsPartial = partial;
         ClassType = classType;

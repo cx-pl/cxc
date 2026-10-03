@@ -1,5 +1,5 @@
 public T Replace<T>(T initial, T replacement) {
-    T copy = initial;
+      copy = initial;
     copy = replacement;
     return copy;
 }

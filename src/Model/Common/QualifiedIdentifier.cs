@@ -1,4 +1,4 @@
-﻿namespace CxCompiler.Model.Common;
+namespace CxCompiler.Model.Common;
 
 public class QualifiedIdentifier
 {

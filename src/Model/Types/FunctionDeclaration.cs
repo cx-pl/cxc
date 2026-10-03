@@ -1,4 +1,4 @@
-﻿using CxCompiler.Model.Common;
+using CxCompiler.Model.Common;
 
 using CxCompiler.Model.Statements;
 
@@ -17,7 +17,7 @@ public class FunctionDeclaration : DeclarationBase
     public bool Const { get; }
 
     public bool IsStatic => ParentClassDeclaration is null || MemberModifiers.Contains(MemberModifier.Static);
-    
+
     public ClassDeclaration? ParentClassDeclaration { get; }
 
     public IReadOnlyList<StatementBase>? Body { get; private set; }
@@ -26,7 +26,7 @@ public class FunctionDeclaration : DeclarationBase
     public FunctionDeclaration? VirtualContract { get; private set; }
 
     public FunctionDeclaration(
-        string name, QualifiedIdentifier @namespace, TypeBase returnType, 
+        string name, QualifiedIdentifier @namespace, TypeBase returnType,
         MemberModifier[] memberModifiers, ClassDeclaration? parentClassDeclaration,
         bool @const = false,
         string[]? genericTypeNames = null)

@@ -1,4 +1,4 @@
-﻿namespace CxCompiler.Model.Expressions;
+namespace CxCompiler.Model.Expressions;
 
 public abstract class ExpressionBase : CxCompiler.Model.Common.IHasSourceSpan
 {

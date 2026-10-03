@@ -1,4 +1,4 @@
-﻿namespace CxCompiler.OutputGenerators;
+namespace CxCompiler.OutputGenerators;
 
 public sealed class IndentingWriter
 {

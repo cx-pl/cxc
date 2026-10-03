@@ -1,4 +1,4 @@
-﻿using CxCompiler.Model;
+using CxCompiler.Model;
 using CxCompiler.Model.Common;
 using CxCompiler.Model.Expressions;
 using CxCompiler.Model.Project;
@@ -706,7 +706,7 @@ public static partial class CCodeOutputGenerator
         {
             var receiverConst = declaration.Const ? "const " : string.Empty;
             var receiverType = instance.ClosedContainingType is
-                { ConstructedIdentity: not null } closedType &&
+            { ConstructedIdentity: not null } closedType &&
                 RequiresClosedValueLayout(closedType)
                     ? $"struct {closedType.ConstructedIdentity.CIdentifier}"
                     : declaration.ParentClassDeclaration!.ToCIdentifier(instance.ModuleName);

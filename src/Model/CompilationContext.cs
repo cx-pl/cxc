@@ -1,4 +1,4 @@
-﻿using CxCompiler.Model.Common;
+using CxCompiler.Model.Common;
 
 namespace CxCompiler.Model;
 

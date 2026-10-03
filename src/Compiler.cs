@@ -1,4 +1,4 @@
-﻿using Antlr4.Runtime;
+using Antlr4.Runtime;
 using CxCompiler.Grammar;
 using CxCompiler.Model.Errors;
 using CxCompiler.Model.Project;
