@@ -22,7 +22,7 @@ public sealed class EnumDeclarationParserVisitor : CxParserBaseVisitor<EnumDecla
         var declaration = new EnumDeclaration(
             context.name.Text,
             _namespace,
-            ParseVisibility(context.visibilityModifier()?.GetText()));
+            ParseVisibility(context.visibilityModifier()?.GetText())).WithSourceSpan(context);
 
         foreach (var memberContext in context.enumDeclarationBody().enumMemberDeclaration())
         {
@@ -31,7 +31,8 @@ public sealed class EnumDeclarationParserVisitor : CxParserBaseVisitor<EnumDecla
                 declaration,
                 memberContext.literal() is not { } literal
                     ? null
-                    : new LiteralExpression(literal.GetText())));
+                    : new LiteralExpression(literal.GetText()).WithSourceSpan(literal))
+                .WithSourceSpan(memberContext));
         }
 
         return declaration;

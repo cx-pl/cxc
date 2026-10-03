@@ -33,8 +33,8 @@ public sealed class ReflectionMetadataTests
         Assert.Contains("\"scale\"", source);
         Assert.Contains("&CX_ID_3(unnamed, Mode, __typeinfo)", source);
         Assert.Contains("CX_REFLECTION_FLAG_TYPE_ENUM", source);
-        Assert.Contains(".RuntimeFieldCount = 3", source);
-        Assert.Contains(".RuntimeFunctionCount = 4", source);
+        Assert.Contains(".fieldCount = 3", source);
+        Assert.Contains(".functionCount = 4", source);
     }
 
     [Fact]

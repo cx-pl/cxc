@@ -7,13 +7,20 @@ namespace CxCompiler.Tests;
 
 internal static class CompilerTestHelper
 {
-    public static CompilationContext Parse(string source)
+    public static CompilationContext Parse(string source, string sourcePath = "test.cx")
     {
-        var lexer = new CxLexer(new AntlrInputStream(source));
+        var listener = new ParserErrorListener(sourcePath);
+        var input = new AntlrInputStream(source) { name = sourcePath };
+        var lexer = new CxLexer(input);
+        lexer.RemoveErrorListeners();
+        lexer.AddErrorListener(listener);
         var parser = new CxParser(new CommonTokenStream(lexer));
+        parser.RemoveErrorListeners();
+        parser.AddErrorListener(listener);
         var syntaxTree = parser.compilationUnit();
 
-        Assert.Equal(0, parser.NumberOfSyntaxErrors);
+        Assert.True(!listener.HasErrors,
+            string.Join(Environment.NewLine, listener.Diagnostics));
         return new CompilationUnitParserVisitor().Visit(syntaxTree);
     }
 }

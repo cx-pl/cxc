@@ -211,9 +211,8 @@ public class Compiler
                 name: Path.GetFileNameWithoutExtension(filePath));
         }
 
-        using var reader = new StreamReader(filePath);
-        var inputStream = new AntlrInputStream(reader);
-        var errorListener = new ParserErrorListener();
+        var inputStream = new AntlrInputStream(File.ReadAllText(filePath)) { name = filePath };
+        var errorListener = new ParserErrorListener(filePath);
 
         var lexer = new CxLexer(inputStream);
         lexer.RemoveErrorListeners();
@@ -225,6 +224,12 @@ public class Compiler
         parser.AddErrorListener(errorListener);
 
         var compilationUnit = parser.compilationUnit();
+        if (errorListener.HasErrors)
+        {
+            throw new CxCompiler.Model.Errors.CompilationErrorException(
+                string.Join(Environment.NewLine, errorListener.Diagnostics));
+        }
+
         var visitor = new CompilationUnitParserVisitor();
         var compilationContext = visitor.Visit(compilationUnit);
 

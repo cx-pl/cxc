@@ -1,5 +1,6 @@
-﻿using Antlr4.Runtime.Misc;
+using Antlr4.Runtime.Misc;
 using CxCompiler.Grammar;
+using CxCompiler.Model.Common;
 using CxCompiler.Model.Types;
 using CxCompiler.Model.Types.BuiltInTypes;
 
@@ -21,9 +22,7 @@ public class FieldsDeclarationParserVisitor : CxParserBaseVisitor<FieldDeclarati
     {
         _memberModifiers = new MemberModifiersParserVisitor().Visit(context.memberModifiers());
         _fieldType = new TypeNameContextVisitor().Visit(context.typeName());
-
         base.VisitChildren(context);
-
         return _fieldDeclarations.ToArray();
     }
 
@@ -36,10 +35,9 @@ public class FieldsDeclarationParserVisitor : CxParserBaseVisitor<FieldDeclarati
             _classDeclaration,
             context.literal() is { } literal
                 ? new ExpressionParserVisitor().Visit(literal)
-                : null);
+                : null).WithSourceSpan(context);
 
         _fieldDeclarations.Add(fieldDeclaration);
-
         return base.VisitFieldInitializer(context);
     }
 }

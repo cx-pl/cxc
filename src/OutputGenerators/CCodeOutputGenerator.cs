@@ -1543,6 +1543,23 @@ public static partial class CCodeOutputGenerator
                 writer.WriteLine($"static struct cx_reflection_field {closedFields}[{fields.Length}];");
                 writer.WriteLine("#endif");
             }
+            var runtimeFunctionCount = GetReflectionFunctionCount(declaration);
+            var runtimeTypeInfo = fields.Length == 0 && runtimeFunctionCount == 0
+                ? "CX_NULL"
+                : $"(cx_ptr)&CX_ID_2({identity.CIdentifier}, __runtime_type_info)";
+            if (runtimeTypeInfo != "CX_NULL")
+            {
+                writer.WriteLine($"static const struct cx_runtime_type_info CX_ID_2({identity.CIdentifier}, __runtime_type_info) = {{");
+                writer.IncreaseIndent();
+                writer.WriteLine(".interfaces = CX_NULL,");
+                writer.WriteLine(".interfaceCount = 0,");
+                writer.WriteLine($".fields = {(fields.Length == 0 ? "CX_NULL" : $"(const struct cx_reflection_field*){closedFields}")},");
+                writer.WriteLine($".fieldCount = {fields.Length},");
+                writer.WriteLine($".functions = {(runtimeFunctionCount == 0 ? "CX_NULL" : $"(const struct cx_reflection_function*){closedFunctions ?? GetReflectionFunctionsIdentifier(declaration, moduleName).ToCIdentifier()}")},");
+                writer.WriteLine($".functionCount = {runtimeFunctionCount},");
+                writer.DecreaseIndent();
+                writer.WriteLine("};");
+            }
             writer.WriteLine($"CX_STRING_DEF({closedNameIdentifier}, \"{declaration.Name}\");");
             writer.WriteLine($"CX_STRING_DEF({closedNamespaceIdentifier}, \"{declaration.Namespace}\");");
             writer.WriteLine();
@@ -1560,17 +1577,7 @@ public static partial class CCodeOutputGenerator
             writer.WriteLine($".Name = &{closedNameIdentifier},");
             writer.WriteLine($".Namespace = &{closedNamespaceIdentifier},");
             writer.WriteLine(".BaseType = { ._obj = &CX_ID_4(cxcore, System, Object, __typeinfo) },");
-            if (fields.Length != 0)
-            {
-                writer.WriteLine($".RuntimeFields = (cx_ptr){closedFields},");
-                writer.WriteLine($".RuntimeFieldCount = {fields.Length},");
-            }
-            if (GetReflectionFunctionCount(declaration) != 0)
-            {
-                writer.WriteLine($".RuntimeFunctions = (cx_ptr)" +
-                    $"{closedFunctions ?? GetReflectionFunctionsIdentifier(declaration, moduleName).ToCIdentifier()},");
-                writer.WriteLine($".RuntimeFunctionCount = {GetReflectionFunctionCount(declaration)},");
-            }
+            writer.WriteLine($".RuntimeTypeInfo = {runtimeTypeInfo},");
             writer.WriteLine($".GenericArity = {declaration.GenericTypeNames.Length},");
             writer.DecreaseIndent();
             writer.WriteLine("};");
@@ -1586,17 +1593,7 @@ public static partial class CCodeOutputGenerator
             writer.WriteLine($".Name = &{closedNameIdentifier},");
             writer.WriteLine($".Namespace = &{closedNamespaceIdentifier},");
             writer.WriteLine(".BaseType = { ._obj = CX_NULL },");
-            if (fields.Length != 0)
-            {
-                writer.WriteLine($".RuntimeFields = (cx_ptr){closedFields},");
-                writer.WriteLine($".RuntimeFieldCount = {fields.Length},");
-            }
-            if (GetReflectionFunctionCount(declaration) != 0)
-            {
-                writer.WriteLine($".RuntimeFunctions = (cx_ptr)" +
-                    $"{closedFunctions ?? GetReflectionFunctionsIdentifier(declaration, moduleName).ToCIdentifier()},");
-                writer.WriteLine($".RuntimeFunctionCount = {GetReflectionFunctionCount(declaration)},");
-            }
+            writer.WriteLine($".RuntimeTypeInfo = {runtimeTypeInfo},");
             writer.WriteLine($".GenericArity = {declaration.GenericTypeNames.Length},");
             writer.DecreaseIndent();
             writer.WriteLine("};");
@@ -1661,15 +1658,24 @@ public static partial class CCodeOutputGenerator
         var size = classDeclaration.IsStatic || classDeclaration.ClassType == ClassType.Interface
             ? "0"
             : $"sizeof({classDeclaration.ToCIdentifier(moduleName)})";
-        var interfaceMap = reflectedInterfaces.Length == 0
+        var hasRuntimeTypeInfo = reflectedInterfaces.Length != 0 || fields.Length != 0 || functionCount != 0;
+        var runtimeTypeInfo = !hasRuntimeTypeInfo
             ? "CX_NULL"
-            : $"(cx_ptr){GetInterfaceRuntimeMapIdentifier(classDeclaration, moduleName).ToCIdentifier()}";
-        var fieldMap = fields.Length == 0
-            ? "CX_NULL"
-            : $"(cx_ptr){GetReflectionFieldsIdentifier(classDeclaration, moduleName).ToCIdentifier()}";
-        var functionMap = functionCount == 0
-            ? "CX_NULL"
-            : $"(cx_ptr){GetReflectionFunctionsIdentifier(classDeclaration, moduleName).ToCIdentifier()}";
+            : $"(cx_ptr)&{GetRuntimeTypeInfoIdentifier(classDeclaration, moduleName).ToCIdentifier()}";
+
+        if (hasRuntimeTypeInfo)
+        {
+            writer.WriteLine($"static const struct cx_runtime_type_info {GetRuntimeTypeInfoIdentifier(classDeclaration, moduleName).ToCIdentifier()} = {{");
+            writer.IncreaseIndent();
+            writer.WriteLine($".interfaces = {(reflectedInterfaces.Length == 0 ? "CX_NULL" : $"(const struct cx_interface_impl*){GetInterfaceRuntimeMapIdentifier(classDeclaration, moduleName).ToCIdentifier()}")},");
+            writer.WriteLine($".interfaceCount = {reflectedInterfaces.Length},");
+            writer.WriteLine($".fields = {(fields.Length == 0 ? "CX_NULL" : $"(const struct cx_reflection_field*){GetReflectionFieldsIdentifier(classDeclaration, moduleName).ToCIdentifier()}")},");
+            writer.WriteLine($".fieldCount = {fields.Length},");
+            writer.WriteLine($".functions = {(functionCount == 0 ? "CX_NULL" : $"(const struct cx_reflection_function*){GetReflectionFunctionsIdentifier(classDeclaration, moduleName).ToCIdentifier()}")},");
+            writer.WriteLine($".functionCount = {functionCount},");
+            writer.DecreaseIndent();
+            writer.WriteLine("};");
+        }
 
         writer.WriteLine("#if !defined(CX_DYNAMIC_MODULE)");
         writer.WriteLine($"struct CX_ID_4(cxcore, System, Reflection, TypeInfo) {new QualifiedIdentifier(moduleName, classDeclaration.FullName, "__typeinfo").ToCIdentifier()} = {{");
@@ -1680,12 +1686,7 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine($".Name = &{nameIdentifier.ToCIdentifier()},");
         writer.WriteLine($".Namespace = &{namespaceIdentifier.ToCIdentifier()},");
         writer.WriteLine($".BaseType = {{ ._obj = {baseType} }},");
-        writer.WriteLine($".RuntimeInterfaces = {interfaceMap},");
-        writer.WriteLine($".RuntimeInterfaceCount = {reflectedInterfaces.Length},");
-        writer.WriteLine($".RuntimeFields = {fieldMap},");
-        writer.WriteLine($".RuntimeFieldCount = {fields.Length},");
-        writer.WriteLine($".RuntimeFunctions = {functionMap},");
-        writer.WriteLine($".RuntimeFunctionCount = {functionCount},");
+        writer.WriteLine($".RuntimeTypeInfo = {runtimeTypeInfo},");
         writer.WriteLine($".GenericArity = {classDeclaration.GenericTypeNames.Length},");
         writer.DecreaseIndent();
         writer.WriteLine("};");
@@ -1698,12 +1699,7 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine($".Name = &{nameIdentifier.ToCIdentifier()},");
         writer.WriteLine($".Namespace = &{namespaceIdentifier.ToCIdentifier()},");
         writer.WriteLine(".BaseType = { ._obj = CX_NULL },");
-        writer.WriteLine($".RuntimeInterfaces = {interfaceMap},");
-        writer.WriteLine($".RuntimeInterfaceCount = {reflectedInterfaces.Length},");
-        writer.WriteLine($".RuntimeFields = {fieldMap},");
-        writer.WriteLine($".RuntimeFieldCount = {fields.Length},");
-        writer.WriteLine($".RuntimeFunctions = {functionMap},");
-        writer.WriteLine($".RuntimeFunctionCount = {functionCount},");
+        writer.WriteLine($".RuntimeTypeInfo = {runtimeTypeInfo},");
         writer.WriteLine($".GenericArity = {classDeclaration.GenericTypeNames.Length},");
         writer.DecreaseIndent();
         writer.WriteLine("};");
@@ -2043,6 +2039,13 @@ public static partial class CCodeOutputGenerator
         string moduleName)
     {
         return new QualifiedIdentifier(moduleName, classDeclaration.FullName, "__interfaces");
+    }
+
+    private static QualifiedIdentifier GetRuntimeTypeInfoIdentifier(
+        ClassDeclaration classDeclaration,
+        string moduleName)
+    {
+        return new QualifiedIdentifier(moduleName, classDeclaration.FullName, "__runtime_type_info");
     }
 
     private static void WriteInterfaceDispatchThunks(

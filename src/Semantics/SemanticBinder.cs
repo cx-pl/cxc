@@ -110,7 +110,8 @@ public sealed class SemanticBinder
             {
                 throw new CompilationErrorException(
                     $"Type '{group.Key.FullName}' is declared more than once; every declaration " +
-                    "must be partial to share a type name.");
+                    "must be partial to share a type name.",
+                    declarations[^1].SourceSpan);
             }
 
             var first = declarations[0];
@@ -120,12 +121,14 @@ public sealed class SemanticBinder
             {
                 throw new CompilationErrorException(
                     $"Partial declarations of type '{group.Key.FullName}' have conflicting " +
-                    "kind or generic parameters.");
+                    "kind or generic parameters.",
+                    declarations[^1].SourceSpan);
             }
 
             throw new CompilationErrorException(
                 $"Partial declarations of type '{group.Key.FullName}' cannot yet be merged; " +
-                "declare the type once.");
+                "declare the type once.",
+                declarations[^1].SourceSpan);
         }
     }
 
@@ -144,7 +147,8 @@ public sealed class SemanticBinder
                 .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal);
             throw new CompilationErrorException(
                 $"Type '{duplicate.Key}' is declared by multiple CX projects: " +
-                string.Join(", ", owners) + ".");
+                string.Join(", ", owners) + ".",
+                duplicate.Last().Type.SourceSpan);
         }
     }
 
@@ -542,46 +546,61 @@ public sealed class SemanticBinder
     {
         foreach (var declaration in declarations)
         {
-            switch (declaration)
+            try
             {
-                case ClassDeclaration classDeclaration:
-                    if (publicApiOnly && classDeclaration.Visibility != Visibility.Public)
-                    {
-                        break;
-                    }
-                    foreach (var field in classDeclaration.MemberDeclarations.Declarations.OfType<FieldDeclaration>()
-                        .Where(field => !publicApiOnly || field.MemberModifiers.Contains(MemberModifier.Public)))
-                    {
-                        ResolveTypeReference(field.Type, currentNamespace, imports);
-                    }
-                    foreach (var property in classDeclaration.MemberDeclarations.Declarations.OfType<PropertyDeclaration>()
-                        .Where(property => !publicApiOnly || property.MemberModifiers.Contains(MemberModifier.Public)))
-                    {
-                        ResolveTypeReference(property.Type, currentNamespace, imports);
-                        foreach (var parameter in property.PropertyAccessorDeclarations
-                            .SelectMany(accessor => accessor.Parameters))
+                switch (declaration)
+                {
+                    case ClassDeclaration classDeclaration:
+                        if (publicApiOnly && classDeclaration.Visibility != Visibility.Public)
                         {
-                            ResolveTypeReference(parameter.ParameterType, currentNamespace, imports);
+                            break;
                         }
-                    }
-                    ResolveDeclarationTypes(
-                        classDeclaration.MemberDeclarations.Declarations,
-                        classDeclaration.Namespace,
-                        imports,
-                        publicApiOnly);
-                    break;
-
-                case FunctionDeclaration function:
-                    if (publicApiOnly && !IsPublicApiFunction(function))
-                    {
+                        foreach (var field in classDeclaration.MemberDeclarations.Declarations.OfType<FieldDeclaration>()
+                            .Where(field => !publicApiOnly || field.MemberModifiers.Contains(MemberModifier.Public)))
+                        {
+                            BindAtSourceSpan(field, () =>
+                                ResolveTypeReference(field.Type, currentNamespace, imports));
+                        }
+                        foreach (var property in classDeclaration.MemberDeclarations.Declarations.OfType<PropertyDeclaration>()
+                            .Where(property => !publicApiOnly || property.MemberModifiers.Contains(MemberModifier.Public)))
+                        {
+                            BindAtSourceSpan(property, () =>
+                                ResolveTypeReference(property.Type, currentNamespace, imports));
+                            foreach (var accessor in property.PropertyAccessorDeclarations)
+                            {
+                                foreach (var parameter in accessor.Parameters)
+                                {
+                                    BindAtSourceSpan(parameter, () =>
+                                        ResolveTypeReference(parameter.ParameterType, currentNamespace, imports));
+                                }
+                            }
+                        }
+                        ResolveDeclarationTypes(
+                            classDeclaration.MemberDeclarations.Declarations,
+                            classDeclaration.Namespace,
+                            imports,
+                            publicApiOnly);
                         break;
-                    }
-                    ResolveTypeReference(function.ReturnType, currentNamespace, imports);
-                    foreach (var parameter in function.Parameters)
-                    {
-                        ResolveTypeReference(parameter.ParameterType, currentNamespace, imports);
-                    }
-                    break;
+
+                    case FunctionDeclaration function:
+                        if (publicApiOnly && !IsPublicApiFunction(function))
+                        {
+                            break;
+                        }
+                        BindAtSourceSpan(function, () =>
+                            ResolveTypeReference(function.ReturnType, currentNamespace, imports));
+                        foreach (var parameter in function.Parameters)
+                        {
+                            BindAtSourceSpan(parameter, () =>
+                                ResolveTypeReference(parameter.ParameterType, currentNamespace, imports));
+                        }
+                        break;
+                }
+            }
+            catch (CompilationErrorException exception) when (
+                exception.SourceSpan is null && declaration.SourceSpan is not null)
+            {
+                throw exception.WithSourceSpan(declaration.SourceSpan);
             }
         }
     }
@@ -595,11 +614,13 @@ public sealed class SemanticBinder
             .Where(declaration => !IsReferencedModule(moduleName) ||
                 declaration.Visibility == Visibility.Public))
         {
-            if (classDeclaration.IsStatic && classDeclaration.BaseTypes.Count > 0)
+            try
             {
-                throw new CompilationErrorException(
-                    $"Static type '{classDeclaration.FullName}' cannot declare base types.");
-            }
+                if (classDeclaration.IsStatic && classDeclaration.BaseTypes.Count > 0)
+                {
+                    throw new CompilationErrorException(
+                        $"Static type '{classDeclaration.FullName}' cannot declare base types.");
+                }
 
             foreach (var baseType in classDeclaration.BaseTypes)
             {
@@ -658,10 +679,16 @@ public sealed class SemanticBinder
                 classDeclaration.SetBaseClass(BuiltInSystemTypes.Object, null);
             }
 
-            ResolveBaseTypes(
-                moduleName,
-                classDeclaration.MemberDeclarations.Declarations,
-                imports);
+                ResolveBaseTypes(
+                    moduleName,
+                    classDeclaration.MemberDeclarations.Declarations,
+                    imports);
+            }
+            catch (CompilationErrorException exception) when (
+                exception.SourceSpan is null && classDeclaration.SourceSpan is not null)
+            {
+                throw exception.WithSourceSpan(classDeclaration.SourceSpan);
+            }
         }
 
         static void SetBaseClass(
@@ -713,7 +740,8 @@ public sealed class SemanticBinder
             if (!visiting.Add(declaration))
             {
                 throw new CompilationErrorException(
-                    $"Inheritance cycle detected at type '{declaration.FullName}'.");
+                    $"Inheritance cycle detected at type '{declaration.FullName}'.",
+                    declaration.SourceSpan);
             }
 
             if (declaration.BaseClassDeclaration is not null)
@@ -952,8 +980,20 @@ public sealed class SemanticBinder
                         FunctionSignaturesMatch(slot.Contract, function));
                     if (inheritedSlot is null)
                     {
+                        var sameNameCandidates = slots
+                            .Where(slot => slot.Contract.Name == function.Name)
+                            .Select(slot =>
+                                $"  {GetTypeName(slot.Contract.ReturnType)} {slot.Contract.FullName}(" +
+                                string.Join(", ", slot.Contract.Parameters.Select(parameter =>
+                                    GetTypeName(parameter.ParameterType))) + ")")
+                            .ToArray();
+                        var candidateDetails = sameNameCandidates.Length == 0
+                            ? string.Empty
+                            : " Candidates:\n" + string.Join("\n", sameNameCandidates);
                         throw new CompilationErrorException(
-                            $"Function '{function.FullName}' has no matching virtual function to override.");
+                            $"Function '{function.FullName}' has no matching virtual function to override." +
+                            candidateDetails,
+                            function.SourceSpan);
                     }
                     ValidateOverride(type, inheritedSlot, function);
                     function.BindVirtualSlot(inheritedSlot.Index, inheritedSlot.Contract);
@@ -1017,19 +1057,22 @@ public sealed class SemanticBinder
             {
                 throw new CompilationErrorException(
                     $"Function '{implementation.FullName}' cannot override final function " +
-                    $"'{slot.Implementation.FullName}'.");
+                    $"'{slot.Implementation.FullName}'.",
+                    implementation.SourceSpan);
             }
             if (!IsType(slot.Contract.ReturnType, implementation.ReturnType))
             {
                 throw new CompilationErrorException(
                     $"Function '{implementation.FullName}' must return " +
                     $"'{GetTypeName(slot.Contract.ReturnType)}' to override " +
-                    $"'{slot.Contract.FullName}'.");
+                    $"'{slot.Contract.FullName}'.",
+                    implementation.SourceSpan);
             }
             if (implementation.MemberModifiers.Contains(MemberModifier.Abstract) && !type.IsAbstract)
             {
                 throw new CompilationErrorException(
-                    $"Abstract override '{implementation.FullName}' must be declared in an abstract class.");
+                    $"Abstract override '{implementation.FullName}' must be declared in an abstract class.",
+                    implementation.SourceSpan);
             }
         }
 
@@ -1212,16 +1255,19 @@ public sealed class SemanticBinder
     {
         foreach (var field in _fields.Where(field => field.Declaration.Initializer is not null))
         {
-            var initializer = (LiteralExpression)field.Declaration.Initializer!;
-            var initializerType = BindLiteral(initializer);
-            initializer.SetInferredType(initializerType);
-            if (!CanAssign(field.Declaration.Type, initializerType))
+            BindAtSourceSpan(field.Declaration, () =>
             {
-                throw new CompilationErrorException(
-                    $"Cannot initialize field '{field.Declaration.FullName}' of type " +
-                    $"'{GetTypeName(field.Declaration.Type)}' with '{GetTypeName(initializerType)}'.");
-            }
-            ApplyContextualType(initializer, field.Declaration.Type);
+                var initializer = (LiteralExpression)field.Declaration.Initializer!;
+                var initializerType = BindLiteral(initializer);
+                initializer.SetInferredType(initializerType);
+                if (!CanAssign(field.Declaration.Type, initializerType))
+                {
+                    throw new CompilationErrorException(
+                        $"Cannot initialize field '{field.Declaration.FullName}' of type " +
+                        $"'{GetTypeName(field.Declaration.Type)}' with '{GetTypeName(initializerType)}'.");
+                }
+                ApplyContextualType(initializer, field.Declaration.Type);
+            });
         }
     }
 
@@ -1232,18 +1278,49 @@ public sealed class SemanticBinder
             foreach (var member in enumType.Declaration.Members
                 .Where(member => member.Value is not null))
             {
-                var valueType = BindLiteral(member.Value!);
-                member.Value!.SetInferredType(valueType);
-                if (!IsInteger(valueType))
+                BindAtSourceSpan(member, () =>
                 {
-                    throw new CompilationErrorException(
-                        $"Enum member '{member.FullName}' must have an integer value.");
-                }
+                    var valueType = BindLiteral(member.Value!);
+                    member.Value!.SetInferredType(valueType);
+                    if (!IsInteger(valueType))
+                    {
+                        throw new CompilationErrorException(
+                            $"Enum member '{member.FullName}' must have an integer value.");
+                    }
+                });
             }
         }
     }
 
+    private static void BindAtSourceSpan(IHasSourceSpan source, Action bind)
+    {
+        try
+        {
+            bind();
+        }
+        catch (CompilationErrorException exception) when (
+            exception.SourceSpan is null && source.SourceSpan is not null)
+        {
+            throw exception.WithSourceSpan(source.SourceSpan);
+        }
+    }
+
     private void BindFunction(
+        FunctionDeclaration function,
+        IReadOnlyList<QualifiedIdentifier> imports)
+    {
+        try
+        {
+            BindFunctionCore(function, imports);
+        }
+        catch (CompilationErrorException exception) when (
+            exception.SourceSpan is null && function.SourceSpan is not null)
+        {
+            throw exception.WithSourceSpan(function.SourceSpan);
+        }
+    }
+
+    private void BindFunctionCore(
         FunctionDeclaration function,
         IReadOnlyList<QualifiedIdentifier> imports)
     {
@@ -1371,7 +1448,8 @@ public sealed class SemanticBinder
                 if (!visiting.Add(current))
                 {
                     throw new CompilationErrorException(
-                        $"Constructor initializer cycle detected in '{constructor.ParentClassDeclaration!.FullName}'.");
+                        $"Constructor initializer cycle detected in '{constructor.ParentClassDeclaration!.FullName}'.",
+                        constructor.SourceSpan);
                 }
                 current = next;
             }
@@ -1379,6 +1457,21 @@ public sealed class SemanticBinder
     }
 
     private void BindPropertyAccessor(
+        PropertyAccessorDeclaration accessor,
+        IReadOnlyList<QualifiedIdentifier> imports)
+    {
+        try
+        {
+            BindPropertyAccessorCore(accessor, imports);
+        }
+        catch (CompilationErrorException exception) when (
+            exception.SourceSpan is null && accessor.SourceSpan is not null)
+        {
+            throw exception.WithSourceSpan(accessor.SourceSpan);
+        }
+    }
+
+    private void BindPropertyAccessorCore(
         PropertyAccessorDeclaration accessor,
         IReadOnlyList<QualifiedIdentifier> imports)
     {
@@ -1451,6 +1544,18 @@ public sealed class SemanticBinder
         LocalScope scope)
     {
         foreach (var statement in statements)
+        {
+            BindStatement(statement, function, imports, scope);
+        }
+    }
+
+    private void BindStatement(
+        StatementBase statement,
+        FunctionDeclaration function,
+        IReadOnlyList<QualifiedIdentifier> imports,
+        LocalScope scope)
+    {
+        try
         {
             switch (statement)
             {
@@ -1545,15 +1650,11 @@ public sealed class SemanticBinder
                         $"Binding statement '{statement.GetType().Name}' is not yet supported.");
             }
         }
-    }
-
-    private void BindStatement(
-        StatementBase statement,
-        FunctionDeclaration function,
-        IReadOnlyList<QualifiedIdentifier> imports,
-        LocalScope scope)
-    {
-        BindStatements([statement], function, imports, scope);
+        catch (CompilationErrorException exception) when (
+            exception.SourceSpan is null && statement.SourceSpan is not null)
+        {
+            throw exception.WithSourceSpan(statement.SourceSpan);
+        }
     }
 
     private void BindLoopBody(
@@ -1920,6 +2021,23 @@ public sealed class SemanticBinder
     }
 
     private TypeBase BindExpression(
+        ExpressionBase expression,
+        FunctionDeclaration function,
+        IReadOnlyList<QualifiedIdentifier> imports,
+        LocalScope scope)
+    {
+        try
+        {
+            return BindExpressionCore(expression, function, imports, scope);
+        }
+        catch (CompilationErrorException exception) when (
+            exception.SourceSpan is null && expression.SourceSpan is not null)
+        {
+            throw exception.WithSourceSpan(expression.SourceSpan);
+        }
+    }
+
+    private TypeBase BindExpressionCore(
         ExpressionBase expression,
         FunctionDeclaration function,
         IReadOnlyList<QualifiedIdentifier> imports,
@@ -2560,7 +2678,11 @@ public sealed class SemanticBinder
         if (candidates.Length > 1)
         {
             throw new CompilationErrorException(
-                $"Function call '{sourceDisplay}' with {invocation.Arguments.Count} argument(s) is ambiguous.");
+                $"Function call '{sourceDisplay}' with {invocation.Arguments.Count} argument(s) is ambiguous. Candidates:\n" +
+                string.Join("\n", candidates.Select(candidate =>
+                    $"  {GetTypeName(candidate.Symbol.ReturnType)} {candidate.Symbol.FullName}(" +
+                    string.Join(", ", candidate.Symbol.ParameterTypes.Select(GetTypeName)) + ")")),
+                invocation.SourceSpan);
         }
 
         var target = candidates[0];
@@ -2922,7 +3044,11 @@ public sealed class SemanticBinder
         if (matchingConstructors.Length > 1)
         {
             throw new CompilationErrorException(
-                $"Constructor call for '{GetTypeName(creation.RequestedType)}' is ambiguous.");
+                $"Constructor call for '{GetTypeName(creation.RequestedType)}' is ambiguous. Candidates:\n" +
+                string.Join("\n", matchingConstructors.Select(candidate =>
+                    $"  {candidate.Constructor.FullName}(" +
+                    string.Join(", ", candidate.Constructor.ParameterTypes.Select(GetTypeName)) + ")")),
+                creation.SourceSpan);
         }
 
         var constructor = matchingConstructors[0].Constructor;

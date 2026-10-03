@@ -1,6 +1,7 @@
 ﻿using Antlr4.Runtime.Misc;
 using CxCompiler.Grammar;
 using CxCompiler.Model;
+using CxCompiler.Model.Common;
 using CxCompiler.Model.Types;
 using CxCompiler.Model.Types.BuiltInTypes;
 
@@ -27,7 +28,7 @@ public class PropertyDeclarationParserVisitor : CxParserBaseVisitor<PropertyDecl
             _classDeclaration.FullName,
             _fieldType,
             _memberModifiers,
-            _classDeclaration);
+            _classDeclaration).WithSourceSpan(context);
 
         base.VisitChildren(context);
 
@@ -54,7 +55,7 @@ public class PropertyDeclarationParserVisitor : CxParserBaseVisitor<PropertyDecl
             _propertyDeclaration,
             name,
             context.Extern() != null,
-            context.Const() != null);
+            context.Const() != null).WithSourceSpan(context);
 
         if (context.propertyParams() is { } propertyParams)
         {
@@ -71,7 +72,7 @@ public class PropertyDeclarationParserVisitor : CxParserBaseVisitor<PropertyDecl
                 propertyAccessorDeclaration.AddParameter(new FunctionParameter(
                     parameterContext.Identifier().GetText(),
                     parameterType,
-                    null));
+                    null).WithSourceSpan(parameterContext));
             }
         }
 

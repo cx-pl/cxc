@@ -39,8 +39,18 @@ public sealed class RuntimeTypeTests
         var source = GenerateSource(project);
 
         Assert.Contains("static const struct cx_interface_impl CX_ID_3(unnamed, Derived, __interfaces)[]", source);
+        Assert.Contains("static const struct cx_runtime_type_info CX_ID_3(unnamed, Derived, __runtime_type_info)", source);
+        Assert.Equal(1, source.Split("static const struct cx_runtime_type_info CX_ID_3(unnamed, Derived, __runtime_type_info)").Length - 1);
+        Assert.Contains(".interfaces = (const struct cx_interface_impl*)CX_ID_3(unnamed, Derived, __interfaces)", source);
+        Assert.Contains(".fields = CX_NULL", source);
         Assert.Contains("struct CX_ID_4(cxcore, System, Reflection, TypeInfo) CX_ID_3(unnamed, Derived, __typeinfo)", source);
-        Assert.Contains(".RuntimeInterfaces = (cx_ptr)CX_ID_3(unnamed, Derived, __interfaces)", source);
+        Assert.Contains(".RuntimeTypeInfo = (cx_ptr)&CX_ID_3(unnamed, Derived, __runtime_type_info)", source);
+        Assert.DoesNotContain(".RuntimeFields =", source);
+        Assert.DoesNotContain(".RuntimeFieldCount =", source);
+        Assert.DoesNotContain(".RuntimeFunctions =", source);
+        Assert.DoesNotContain(".RuntimeFunctionCount =", source);
+        Assert.DoesNotContain(".RuntimeInterfaces =", source);
+        Assert.DoesNotContain(".RuntimeInterfaceCount =", source);
         Assert.Contains("CX_BEGIN_INTERFACE_VTABLE_DEF(CX_ID_5(unnamed, Derived, __iface, IDerived, __vtable), CX_ID_2(unnamed, Derived))", source);
         Assert.Contains("cx_checked_cast_object((cx_ptr)(value), &CX_ID_3(unnamed, Derived, __typeinfo))", source);
         Assert.Contains("cx_checked_cast_interface(value, &CX_ID_3(unnamed, Derived, __typeinfo))", source);

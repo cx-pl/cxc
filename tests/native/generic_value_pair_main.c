@@ -40,7 +40,7 @@ int main(void)
     secondRead = CX_ID_2(generic_value_pair, ReadSecond)(box);
     assert(firstRead.first == 1 && firstRead.second == 3 && firstRead.third == 5);
     assert(secondRead.first == 2 && secondRead.second == 4 && secondRead.third == 6);
-    assert(info->RuntimeFieldCount == 2);
+    assert(((const struct cx_runtime_type_info*)info->RuntimeTypeInfo)->fieldCount == 2);
     assert(info->Size > sizeof(struct CX_ID_2(generic_value_pair, Box)));
     free(box);
     return 0;

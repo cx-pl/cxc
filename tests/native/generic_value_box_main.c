@@ -35,9 +35,9 @@ int main(void)
     const struct CX_ID_4(cxcore, System, Reflection, TypeInfo)* otherInfo =
         &CX_GET_TYPEINFO(otherBox);
     const struct cx_reflection_field* fields =
-        (const struct cx_reflection_field*)info->RuntimeFields;
+        (const struct cx_reflection_field*)((const struct cx_runtime_type_info*)info->RuntimeTypeInfo)->fields;
     const struct cx_reflection_field* otherFields =
-        (const struct cx_reflection_field*)otherInfo->RuntimeFields;
+        (const struct cx_reflection_field*)((const struct cx_runtime_type_info*)otherInfo->RuntimeTypeInfo)->fields;
 
     assert(box != NULL && otherBox != NULL);
     CX_ID_2(generic_value_box, Write)(box, input);
@@ -51,8 +51,8 @@ int main(void)
     assert(info->Size > sizeof(struct CX_ID_2(generic_value_box, Box)));
     assert(otherInfo->Size > info->Size);
     assert(info->Hash != otherInfo->Hash);
-    assert(info->RuntimeFieldCount == 1);
-    assert(otherInfo->RuntimeFieldCount == 1);
+    assert(((const struct cx_runtime_type_info*)info->RuntimeTypeInfo)->fieldCount == 1);
+    assert(((const struct cx_runtime_type_info*)otherInfo->RuntimeTypeInfo)->fieldCount == 1);
     assert(fields[0].typeInfo ==
         &CX_ID_3(generic_value_box, Payload, __typeinfo));
     assert(otherFields[0].typeInfo ==

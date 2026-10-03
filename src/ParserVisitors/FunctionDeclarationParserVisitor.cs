@@ -31,7 +31,7 @@ public class FunctionDeclarationParserVisitor : CxParserBaseVisitor<FunctionDecl
             _parentClassDeclaration,
             context.Const() != null,
             new GenericParamsParserVisitor().VisitGenericTypeParameters(
-                context.genericTypeParameters()));
+                context.genericTypeParameters())).WithSourceSpan(context);
 
         base.VisitChildren(context);
 
@@ -52,7 +52,7 @@ public class FunctionDeclarationParserVisitor : CxParserBaseVisitor<FunctionDecl
         var funtionParameter = new FunctionParameter(
             context.name.Text,
             type,
-            null); // TODO: Handle default value if present
+            null).WithSourceSpan(context); // TODO: Handle default value if present
 
         _functionDeclaration.AddParameter(funtionParameter);
 

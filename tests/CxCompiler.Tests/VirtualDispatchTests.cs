@@ -106,6 +106,20 @@ public sealed class VirtualDispatchTests
         Assert.Contains(expectedMessage, exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void InvalidOverrideShowsCandidateAndSourceLocation()
+    {
+        var exception = Assert.Throws<CompilationErrorException>(() => new SemanticBinder().Bind(
+            CreateProject("""
+                public class Parent { public virtual int Value(int value) { return value; } }
+                public class Child : Parent { public override int Value(string value) { return 2; } }
+                """)));
+
+        Assert.Contains("test.cx(2,", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Candidates:", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Value(", exception.Message, StringComparison.Ordinal);
+    }
+
     private static CxProject CreateProject(string source)
     {
         var project = CxProject.CreateDefaultApplicationProject();

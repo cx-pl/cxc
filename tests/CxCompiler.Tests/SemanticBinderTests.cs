@@ -158,6 +158,25 @@ public sealed class SemanticBinderTests
         Assert.Contains("must return a value of type 'System.Int'", exception.Message);
     }
 
+    [Fact]
+    public void AmbiguousOverloadDiagnosticListsCandidateSignaturesAndCallLocation()
+    {
+        var project = CreateProject("""
+            public class Left {}
+            public class Right {}
+            public int Choose(Left value) { return 1; }
+            public int Choose(Right value) { return 2; }
+            public int Run() { return Choose(null); }
+            """);
+
+        var exception = Assert.Throws<CompilationErrorException>(
+            () => new SemanticBinder().Bind(project));
+
+        Assert.Contains("test.cx(5,", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Candidates:", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Choose(", exception.Message, StringComparison.Ordinal);
+    }
+
     private static CxProject CreateProject(string source)
     {
         var project = CxProject.CreateDefaultApplicationProject();

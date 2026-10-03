@@ -1,9 +1,21 @@
-﻿using Antlr4.Runtime;
+using Antlr4.Runtime;
 
 namespace CxCompiler;
 
-class ParserErrorListener : BaseErrorListener, IAntlrErrorListener<int>
+public sealed class ParserErrorListener : BaseErrorListener, IAntlrErrorListener<int>
 {
+    private readonly string? _sourcePath;
+    private readonly List<string> _diagnostics = [];
+    private readonly HashSet<string> _seenDiagnostics = new(StringComparer.Ordinal);
+
+    public IReadOnlyList<string> Diagnostics => _diagnostics;
+    public bool HasErrors => _diagnostics.Count > 0;
+
+    public ParserErrorListener(string? sourcePath = null)
+    {
+        _sourcePath = sourcePath;
+    }
+
     public override void SyntaxError(
         TextWriter output,
         IRecognizer recognizer,
@@ -13,11 +25,7 @@ class ParserErrorListener : BaseErrorListener, IAntlrErrorListener<int>
         string msg,
         RecognitionException e)
     {
-        string sourceName = recognizer.InputStream.SourceName;
-        Console.WriteLine("line:{0} col:{1} src:{2} msg:{3}", line, charPositionInLine, sourceName, msg);
-        Console.WriteLine("--------------------");
-        Console.WriteLine(e);
-        Console.WriteLine("--------------------");
+        AddDiagnostic(recognizer, line, charPositionInLine, msg);
     }
 
     public void SyntaxError(
@@ -29,10 +37,16 @@ class ParserErrorListener : BaseErrorListener, IAntlrErrorListener<int>
         string msg,
         RecognitionException e)
     {
-        string sourceName = recognizer.InputStream.SourceName;
-        Console.WriteLine("line:{0} col:{1} src:{2} msg:{3}", line, charPositionInLine, sourceName, msg);
-        Console.WriteLine("--------------------");
-        Console.WriteLine(e);
-        Console.WriteLine("--------------------");
+        AddDiagnostic(recognizer, line, charPositionInLine, msg);
+    }
+
+    private void AddDiagnostic(IRecognizer recognizer, int line, int column, string message)
+    {
+        var sourcePath = _sourcePath ?? recognizer.InputStream.SourceName;
+        var diagnostic = $"{sourcePath}({line},{column + 1}): error: {message}";
+        if (_seenDiagnostics.Add(diagnostic))
+        {
+            _diagnostics.Add(diagnostic);
+        }
     }
 }

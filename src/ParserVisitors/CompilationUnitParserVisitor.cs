@@ -1,6 +1,7 @@
 ﻿using Antlr4.Runtime.Misc;
 using CxCompiler.Grammar;
 using CxCompiler.Model;
+using CxCompiler.Model.Common;
 
 namespace CxCompiler.ParserVisitors;
 
@@ -31,7 +32,8 @@ public class CompilationUnitParserVisitor : CxParserBaseVisitor<CompilationConte
 
     public override CompilationContext VisitClassDeclaration([NotNull] CxParser.ClassDeclarationContext context)
     {
-        var classDeclaration = new ClassDeclarationParserVisitor(compilationContext.DeclarationScope).Visit(context);
+        var classDeclaration = new ClassDeclarationParserVisitor(compilationContext.DeclarationScope)
+            .Visit(context).WithSourceSpan(context);
 
         compilationContext.DeclarationScope.AddDeclaration(classDeclaration);
         return compilationContext;
@@ -39,7 +41,8 @@ public class CompilationUnitParserVisitor : CxParserBaseVisitor<CompilationConte
 
     public override CompilationContext VisitFunctionDeclaration([NotNull] CxParser.FunctionDeclarationContext context)
     {
-        var functionDeclaration = new FunctionDeclarationParserVisitor(compilationContext.Namespace, null).Visit(context);
+        var functionDeclaration = new FunctionDeclarationParserVisitor(compilationContext.Namespace, null)
+            .Visit(context).WithSourceSpan(context);
 
         compilationContext.DeclarationScope.AddDeclaration(functionDeclaration);
         return compilationContext;
@@ -48,7 +51,7 @@ public class CompilationUnitParserVisitor : CxParserBaseVisitor<CompilationConte
     public override CompilationContext VisitEnumDeclaration([NotNull] CxParser.EnumDeclarationContext context)
     {
         var enumDeclaration = new EnumDeclarationParserVisitor(
-            compilationContext.Namespace).Visit(context);
+            compilationContext.Namespace).Visit(context).WithSourceSpan(context);
         compilationContext.DeclarationScope.AddDeclaration(enumDeclaration);
         return compilationContext;
     }

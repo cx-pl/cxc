@@ -43,7 +43,10 @@ public class PropertyAccessorDeclaration : DeclarationBase
             returnType,
             ParentPropertyDeclaration.MemberModifiers,
             ParentPropertyDeclaration.ParentClassDeclaration,
-            Const);
+            Const)
+        {
+            SourceSpan = SourceSpan,
+        };
         foreach (var parameter in Parameters)
         {
             function.AddParameter(parameter);

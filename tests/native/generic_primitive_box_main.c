@@ -31,7 +31,7 @@ int main(void)
     assert(box != NULL);
     CX_ID_2(generic_primitive_box, Write)(box, 71);
     assert(CX_ID_2(generic_primitive_box, Read)(box) == 71);
-    assert(info->RuntimeFieldCount == 1);
+    assert(((const struct cx_runtime_type_info*)info->RuntimeTypeInfo)->fieldCount == 1);
     assert(info->Size > 0);
     free(box);
     return 0;

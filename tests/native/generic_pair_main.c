@@ -35,13 +35,13 @@ int main(void)
     const struct CX_ID_4(cxcore, System, Reflection, TypeInfo)* reverseInfo =
         &CX_GET_TYPEINFO(reverse);
     const struct cx_reflection_field* forwardFields =
-        (const struct cx_reflection_field*)forwardInfo->RuntimeFields;
+        (const struct cx_reflection_field*)((const struct cx_runtime_type_info*)forwardInfo->RuntimeTypeInfo)->fields;
     const struct cx_reflection_field* reverseFields =
-        (const struct cx_reflection_field*)reverseInfo->RuntimeFields;
+        (const struct cx_reflection_field*)((const struct cx_runtime_type_info*)reverseInfo->RuntimeTypeInfo)->fields;
     const struct cx_reflection_function* forwardFunctions =
-        (const struct cx_reflection_function*)forwardInfo->RuntimeFunctions;
+        (const struct cx_reflection_function*)((const struct cx_runtime_type_info*)forwardInfo->RuntimeTypeInfo)->functions;
     const struct cx_reflection_function* reverseFunctions =
-        (const struct cx_reflection_function*)reverseInfo->RuntimeFunctions;
+        (const struct cx_reflection_function*)((const struct cx_runtime_type_info*)reverseInfo->RuntimeTypeInfo)->functions;
     const struct CX_ID_4(cxcore, System, Reflection, TypeInfo)* firstType =
         &CX_ID_3(generic_pair, First, __typeinfo);
     const struct CX_ID_4(cxcore, System, Reflection, TypeInfo)* secondType =
@@ -52,7 +52,7 @@ int main(void)
     assert(forward->first == firstValue && forward->second == secondValue);
     assert(reverse->first == secondValue && reverse->second == firstValue);
     assert(forwardInfo->Hash != reverseInfo->Hash);
-    assert(forwardInfo->RuntimeFieldCount == 2 && reverseInfo->RuntimeFieldCount == 2);
+    assert(((const struct cx_runtime_type_info*)forwardInfo->RuntimeTypeInfo)->fieldCount == 2 && ((const struct cx_runtime_type_info*)reverseInfo->RuntimeTypeInfo)->fieldCount == 2);
     assert(forwardFields[0].typeInfo == firstType);
     assert(forwardFields[1].typeInfo == secondType);
     assert(reverseFields[0].typeInfo == secondType);

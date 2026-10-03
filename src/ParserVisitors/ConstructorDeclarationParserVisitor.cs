@@ -24,7 +24,7 @@ public class ConstructorDeclarationParserVisitor : CxParserBaseVisitor<Construct
         _constructorDeclaration = new ConstructorDeclaration(
             _namespace,
             memberModifiers,
-            _parentClassDeclaration);
+            _parentClassDeclaration).WithSourceSpan(context);
 
         base.VisitChildren(context);
 
@@ -54,7 +54,7 @@ public class ConstructorDeclarationParserVisitor : CxParserBaseVisitor<Construct
         var funtionParameter = new FunctionParameter(
             context.name.Text,
             type,
-            null); // TODO: Handle default value if present
+            null).WithSourceSpan(context); // TODO: Handle default value if present
 
         _constructorDeclaration.AddParameter(funtionParameter);
 

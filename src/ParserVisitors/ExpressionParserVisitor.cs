@@ -22,7 +22,7 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
         return new AssignmentExpression(
             Visit(context.primaryExpression()),
             context.assignOperator().GetText(),
-            Visit(context.expression()));
+            Visit(context.expression())).WithSourceSpan(context);
     }
 
     public override ExpressionBase VisitConditionalExpression([NotNull] CxParser.ConditionalExpressionContext context)
@@ -36,15 +36,15 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
         return new ConditionalExpression(
             Visit(context.nullCoalescingExpression()),
             VisitConditionalBranch(branches[0]),
-            VisitConditionalBranch(branches[1]));
+            VisitConditionalBranch(branches[1])).WithSourceSpan(context);
     }
 
     public override ExpressionBase VisitNullCoalescingExpression([NotNull] CxParser.NullCoalescingExpressionContext context)
     {
         var left = Visit(context.conditionalOrExpression());
-        return context.nullCoalescingExpression() is { } right
+        return (context.nullCoalescingExpression() is { } right
             ? new NullCoalescingExpression(left, Visit(right))
-            : left;
+            : left).WithSourceSpan(context);
     }
     public override ExpressionBase VisitConditionalOrExpression([NotNull] CxParser.ConditionalOrExpressionContext context) => BuildBinary(context);
     public override ExpressionBase VisitConditionalAndExpression([NotNull] CxParser.ConditionalAndExpressionContext context) => BuildBinary(context);
@@ -75,7 +75,7 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
                 expression = new BinaryExpression(expression, terminal.GetText(), right);
             }
         }
-        return expression;
+        return expression.WithSourceSpan(context);
     }
     public override ExpressionBase VisitShiftExpression([NotNull] CxParser.ShiftExpressionContext context) => BuildBinary(context);
     public override ExpressionBase VisitAdditiveExpression([NotNull] CxParser.AdditiveExpressionContext context) => BuildBinary(context);
@@ -91,7 +91,7 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
         {
             return new CastExpression(
                 new TypeNameContextVisitor().Visit(context.typeName()),
-                Visit(context.unaryExpression()));
+                Visit(context.unaryExpression())).WithSourceSpan(context);
         }
         if (context.Await() is not null)
         {
@@ -99,7 +99,7 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
         }
 
         var operatorText = context.children.OfType<ITerminalNode>().First().GetText();
-        return new UnaryExpression(operatorText, Visit(context.unaryExpression()));
+        return new UnaryExpression(operatorText, Visit(context.unaryExpression())).WithSourceSpan(context);
     }
 
     public override ExpressionBase VisitPrimaryExpression([NotNull] CxParser.PrimaryExpressionContext context)
@@ -133,7 +133,7 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
             };
         }
 
-        return expression;
+        return expression.WithSourceSpan(context);
     }
 
     public override ExpressionBase VisitPrimaryExpressionStart([NotNull] CxParser.PrimaryExpressionStartContext context)
@@ -145,12 +145,12 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
 
         if (context.Identifier() is { } identifier)
         {
-            return new IdentifierExpression(new QualifiedIdentifier(identifier.GetText()));
+            return new IdentifierExpression(new QualifiedIdentifier(identifier.GetText())).WithSourceSpan(context);
         }
 
         if (context.This() is not null)
         {
-            return new ThisExpression();
+            return new ThisExpression().WithSourceSpan(context);
         }
 
         if (context.expression() is { } parenthesizedExpression)
@@ -173,14 +173,14 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
                         : []);
             return new ArrayCreationExpression(
                 elementType,
-                Visit(arrayCreation.expression()));
+                Visit(arrayCreation.expression())).WithSourceSpan(context);
         }
 
         if (context.New() is not null && context.typeName() is { } typeName)
         {
             return new ObjectCreationExpression(
                 new TypeNameContextVisitor().Visit(typeName),
-                GetArguments(context.functionInvocation()));
+                GetArguments(context.functionInvocation())).WithSourceSpan(context);
         }
 
         throw new InternalCompilerException($"Expression '{context.GetText()}' is not yet supported.");
@@ -188,7 +188,7 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
 
     public override ExpressionBase VisitLiteral([NotNull] CxParser.LiteralContext context)
     {
-        return new LiteralExpression(context.GetText());
+        return new LiteralExpression(context.GetText()).WithSourceSpan(context);
     }
 
     private IReadOnlyList<ExpressionBase> GetArguments(CxParser.FunctionInvocationContext context)
@@ -238,7 +238,7 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
             operatorText = null;
         }
 
-        return expression ?? throw new InternalCompilerException("Binary expression is empty.");
+        return (expression ?? throw new InternalCompilerException("Binary expression is empty.")).WithSourceSpan(context);
     }
 
     private ExpressionBase VisitConditionalBranch(CxParser.ThrowableExpressionContext context)

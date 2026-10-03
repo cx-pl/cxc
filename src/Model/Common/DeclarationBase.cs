@@ -3,8 +3,9 @@ using System.Diagnostics;
 namespace CxCompiler.Model.Common;
 
 [DebuggerDisplay("{FullName}")]
-public abstract class DeclarationBase
+public abstract class DeclarationBase : IHasSourceSpan
 {
+    public SourceSpan? SourceSpan { get; set; }
     public string DeclarationType { get; }
     public string Name { get; }
     public QualifiedIdentifier Namespace { get; }

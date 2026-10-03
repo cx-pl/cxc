@@ -50,7 +50,7 @@ public class ClassDeclarationParserVisitor : CxParserBaseVisitor<DeclarationBase
             _classDeclaration.MemberDeclarations.AddDeclaration(innerClassDeclaration);
         }
 
-        return _classDeclaration;
+        return _classDeclaration.WithSourceSpan(context);
     }
 
     private void AddBaseTypes(CxParser.ClassBaseListContext? context)

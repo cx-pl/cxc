@@ -36,9 +36,9 @@ int main(void)
     const struct CX_ID_4(cxcore, System, Reflection, TypeInfo)* secondInfo =
         &CX_GET_TYPEINFO(second);
     const struct cx_reflection_field* firstFields =
-        (const struct cx_reflection_field*)firstInfo->RuntimeFields;
+        (const struct cx_reflection_field*)((const struct cx_runtime_type_info*)firstInfo->RuntimeTypeInfo)->fields;
     const struct cx_reflection_field* secondFields =
-        (const struct cx_reflection_field*)secondInfo->RuntimeFields;
+        (const struct cx_reflection_field*)((const struct cx_runtime_type_info*)secondInfo->RuntimeTypeInfo)->fields;
 
     assert(first != NULL && second != NULL);
     assert(firstValue != NULL && secondValue != NULL);
@@ -49,7 +49,7 @@ int main(void)
         CX_ID_2(cx_generic_8d155e088624f0bab65feabbbdfe872db6e53c44d8291996d8b935a0e93ef991,
             __vtable));
     assert(firstInfo->Hash != secondInfo->Hash);
-    assert(firstInfo->RuntimeFieldCount == 1 && secondInfo->RuntimeFieldCount == 1);
+    assert(((const struct cx_runtime_type_info*)firstInfo->RuntimeTypeInfo)->fieldCount == 1 && ((const struct cx_runtime_type_info*)secondInfo->RuntimeTypeInfo)->fieldCount == 1);
     assert(firstFields[0].offset ==
         offsetof(struct CX_ID_2(generic_reference_field, Box), value));
     assert(firstFields[0].typeInfo ==

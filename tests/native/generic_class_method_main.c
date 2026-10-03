@@ -35,9 +35,9 @@ int main(void)
     const struct CX_ID_4(cxcore, System, Reflection, TypeInfo)* secondInfo =
         &CX_GET_TYPEINFO(second);
     const struct cx_reflection_function* firstFunctions =
-        (const struct cx_reflection_function*)firstInfo->RuntimeFunctions;
+        (const struct cx_reflection_function*)((const struct cx_runtime_type_info*)firstInfo->RuntimeTypeInfo)->functions;
     const struct cx_reflection_function* secondFunctions =
-        (const struct cx_reflection_function*)secondInfo->RuntimeFunctions;
+        (const struct cx_reflection_function*)((const struct cx_runtime_type_info*)secondInfo->RuntimeTypeInfo)->functions;
 
     assert(firstValue != NULL && secondValue != NULL);
     assert(first != NULL && second != NULL);
@@ -45,8 +45,8 @@ int main(void)
     CX_ID_2(generic_class_method, SetSecond)(second, secondValue);
     assert(first->value == firstValue && second->value == secondValue);
     assert(firstInfo->Hash != secondInfo->Hash);
-    assert(firstInfo->RuntimeFunctionCount == 2);
-    assert(secondInfo->RuntimeFunctionCount == 2);
+    assert(((const struct cx_runtime_type_info*)firstInfo->RuntimeTypeInfo)->functionCount == 2);
+    assert(((const struct cx_runtime_type_info*)secondInfo->RuntimeTypeInfo)->functionCount == 2);
     assert(firstFunctions[1].parameters[0].typeInfo ==
         &CX_ID_3(generic_class_method, First, __typeinfo));
     assert(secondFunctions[1].parameters[0].typeInfo ==

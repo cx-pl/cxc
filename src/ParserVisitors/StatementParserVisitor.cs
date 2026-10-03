@@ -1,5 +1,6 @@
 using Antlr4.Runtime.Misc;
 using CxCompiler.Grammar;
+using CxCompiler.Model.Common;
 using CxCompiler.Model.Expressions;
 using CxCompiler.Model.Statements;
 
@@ -22,7 +23,7 @@ public sealed class StatementParserVisitor : CxParserBaseVisitor<StatementBase>
     public override StatementBase VisitExpressionStatement([NotNull] CxParser.ExpressionStatementContext context)
     {
         var expression = new ExpressionParserVisitor().Visit(context.expression());
-        return new ExpressionStatement(expression);
+        return new ExpressionStatement(expression).WithSourceSpan(context);
     }
 
     public override StatementBase VisitReturnStatement([NotNull] CxParser.ReturnStatementContext context)
@@ -30,23 +31,24 @@ public sealed class StatementParserVisitor : CxParserBaseVisitor<StatementBase>
         var expression = context.expression() is { } expressionContext
             ? new ExpressionParserVisitor().Visit(expressionContext)
             : null;
-        return new ReturnStatement(expression);
+        return new ReturnStatement(expression).WithSourceSpan(context);
     }
 
     public override StatementBase VisitBreakStatement([NotNull] CxParser.BreakStatementContext context)
     {
-        return new BreakStatement();
+        return new BreakStatement().WithSourceSpan(context);
     }
 
     public override StatementBase VisitContinueStatement([NotNull] CxParser.ContinueStatementContext context)
     {
-        return new ContinueStatement();
+        return new ContinueStatement().WithSourceSpan(context);
     }
 
     public override StatementBase VisitLocalVariableDeclarationStatement(
         [NotNull] CxParser.LocalVariableDeclarationStatementContext context)
     {
-        return ParseLocalVariableDeclaration(context.localVariableDeclaration());
+        return ParseLocalVariableDeclaration(context.localVariableDeclaration())
+            .WithSourceSpan(context);
     }
 
     public override StatementBase VisitIfStatement([NotNull] CxParser.IfStatementContext context)
@@ -55,7 +57,7 @@ public sealed class StatementParserVisitor : CxParserBaseVisitor<StatementBase>
         return new IfStatement(
             ParseExpression(context.expression()),
             Visit(embeddedStatements[0]),
-            embeddedStatements.Length > 1 ? Visit(embeddedStatements[1]) : null);
+            embeddedStatements.Length > 1 ? Visit(embeddedStatements[1]) : null).WithSourceSpan(context);
     }
 
     public override StatementBase VisitSwitchStatement(
@@ -63,21 +65,21 @@ public sealed class StatementParserVisitor : CxParserBaseVisitor<StatementBase>
     {
         return new SwitchStatement(
             ParseExpression(context.expression()),
-            context.switchSection().Select(ParseSwitchSection).ToArray());
+            context.switchSection().Select(ParseSwitchSection).ToArray()).WithSourceSpan(context);
     }
 
     public override StatementBase VisitWhileStatement([NotNull] CxParser.WhileStatementContext context)
     {
         return new WhileStatement(
             ParseExpression(context.expression()),
-            Visit(context.embeddedStatement()));
+            Visit(context.embeddedStatement())).WithSourceSpan(context);
     }
 
     public override StatementBase VisitDoStatement([NotNull] CxParser.DoStatementContext context)
     {
         return new DoWhileStatement(
             Visit(context.embeddedStatement()),
-            ParseExpression(context.expression()));
+            ParseExpression(context.expression())).WithSourceSpan(context);
     }
 
     public override StatementBase VisitForStatement([NotNull] CxParser.ForStatementContext context)
@@ -101,7 +103,7 @@ public sealed class StatementParserVisitor : CxParserBaseVisitor<StatementBase>
             initializerExpressions,
             condition,
             iterators,
-            Visit(context.embeddedStatement()));
+            Visit(context.embeddedStatement())).WithSourceSpan(context);
     }
 
     public override StatementBase VisitForeachStatement(
@@ -111,14 +113,14 @@ public sealed class StatementParserVisitor : CxParserBaseVisitor<StatementBase>
             new TypeNameContextVisitor().Visit(context.typeName()),
             context.Identifier().GetText(),
             ParseExpression(context.expression()),
-            Visit(context.embeddedStatement()));
+            Visit(context.embeddedStatement())).WithSourceSpan(context);
     }
 
     public override StatementBase VisitThrowStatement([NotNull] CxParser.ThrowStatementContext context)
     {
         return new ThrowStatement(context.expression() is { } expression
             ? ParseExpression(expression)
-            : null);
+            : null).WithSourceSpan(context);
     }
 
     public override StatementBase VisitTryStatement([NotNull] CxParser.TryStatementContext context)
@@ -131,7 +133,7 @@ public sealed class StatementParserVisitor : CxParserBaseVisitor<StatementBase>
             catchClauses,
             context.finallyClause()?.embeddedStatement() is { } finallyBody
                 ? Visit(finallyBody)
-                : null);
+                : null).WithSourceSpan(context);
     }
 
     private CatchClause ParseCatchClause(CxParser.CatchClauseContext context)
@@ -151,7 +153,7 @@ public sealed class StatementParserVisitor : CxParserBaseVisitor<StatementBase>
         var type = new TypeNameContextVisitor().Visit(declaration.typeName());
         var declarators = new List<LocalVariableDeclarator>();
         AddDeclarators(declaration.variableDeclarations(), declarators);
-        return new LocalVariableDeclarationStatement(type, declarators);
+        return new LocalVariableDeclarationStatement(type, declarators).WithSourceSpan(declaration);
     }
 
     private static SwitchSection ParseSwitchSection(CxParser.SwitchSectionContext context)
@@ -174,11 +176,11 @@ public sealed class StatementParserVisitor : CxParserBaseVisitor<StatementBase>
     {
         if (context.LeftBrace() is not null)
         {
-            return new BlockStatement(ParseStatements(context.statements()));
+            return new BlockStatement(ParseStatements(context.statements())).WithSourceSpan(context);
         }
         if (context.Semicolon() is not null)
         {
-            return new EmptyStatement();
+            return new EmptyStatement().WithSourceSpan(context);
         }
 
         return base.VisitEmbeddedStatement(context);
