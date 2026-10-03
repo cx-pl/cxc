@@ -13,6 +13,35 @@ property accessors, parameters, implemented interfaces, nested types, and generi
 arity. Metadata is read-only; reflection invocation and dynamic construction are
 not currently supported.
 
+## Conditional compilation
+
+CX supports `#if`, `#elif`, `#else`, `#endif`, `#define`, `#undef`, `#error`,
+and `#warning` directives. Conditional expressions accept symbols, `true` and
+`false`, parentheses, `!`, `&&`, `||`, `==`, and `!=`. Symbols are
+case-sensitive. A source-level `#define` or `#undef` applies from that line to
+the end of that source file.
+
+Pass target symbols to the compiler with `-D` or `--define`:
+
+```powershell
+cxc -D CX_CPU_X64 --define CX_OS_WINDOWS app.cxproj
+```
+
+For example, source can select platform-specific CX code without a C shim:
+
+```cx
+#if CX_OS_WINDOWS
+public void UsePlatformApi() { /* Windows implementation */ }
+#elif CX_OS_LINUX
+public void UsePlatformApi() { /* Linux implementation */ }
+#else
+#error Unsupported operating system
+#endif
+```
+
+Inactive branches are omitted before parsing, and source line numbers are
+preserved for diagnostics.
+
 ## Generated build files
 
 Compiling a `.cx` source or `.cxproj` writes the generated C source, header, and

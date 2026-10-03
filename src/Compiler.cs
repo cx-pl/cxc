@@ -4,6 +4,7 @@ using CxCompiler.Model.Errors;
 using CxCompiler.Model.Project;
 using CxCompiler.OutputGenerators;
 using CxCompiler.ParserVisitors;
+using CxCompiler.Preprocessing;
 using CxCompiler.Semantics;
 using System.Text.RegularExpressions;
 using YamlDotNet.Serialization;
@@ -15,15 +16,48 @@ public class Compiler
 {
     private string? _projectPath = null;
     private CxProject? _project = null;
+    private IReadOnlySet<string> _preprocessorSymbols = new HashSet<string>(StringComparer.Ordinal);
 
     public void Compile(ReadOnlySpan<string> args)
     {
-        if (args.Length == 1 && args[0].EndsWith(".cxproj", StringComparison.OrdinalIgnoreCase))
+        var sourceArguments = new List<string>();
+        var symbols = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 0; index < args.Length; index++)
         {
-            CompileProjectGraph(Path.GetFullPath(args[0]));
+            var arg = args[index];
+            string? symbol = null;
+            if (arg is "-D" or "--define")
+            {
+                if (++index >= args.Length)
+                    throw new CompilationErrorException($"Compiler option '{arg}' requires a symbol name.");
+                symbol = args[index];
+            }
+            else if (arg.StartsWith("--define=", StringComparison.Ordinal))
+            {
+                symbol = arg[9..];
+            }
+            else if (arg.StartsWith("-D", StringComparison.Ordinal) && arg.Length > 2)
+            {
+                symbol = arg[2..];
+            }
+
+            if (symbol is null)
+            {
+                sourceArguments.Add(arg);
+                continue;
+            }
+            if (!System.Text.RegularExpressions.Regex.IsMatch(symbol, "^[A-Za-z_][A-Za-z0-9_]*$"))
+                throw new CompilationErrorException($"Invalid preprocessor symbol '{symbol}'.");
+            symbols.Add(symbol);
+        }
+        _preprocessorSymbols = symbols;
+
+        if (sourceArguments.Count == 1 && sourceArguments[0].EndsWith(".cxproj", StringComparison.OrdinalIgnoreCase))
+        {
+            CompileProjectGraph(Path.GetFullPath(sourceArguments[0]), symbols);
             return;
         }
-        foreach (var arg in args)
+        foreach (var arg in sourceArguments)
         {
             if (arg.EndsWith(".cxproj", StringComparison.OrdinalIgnoreCase))
             {
@@ -87,7 +121,7 @@ public class Compiler
 
     private sealed record ProjectNode(string Path, CxProject Project, IReadOnlyList<ProjectNode> References);
 
-    private static void CompileProjectGraph(string rootPath)
+    private static void CompileProjectGraph(string rootPath, IReadOnlySet<string> symbols)
     {
         var nodes = new Dictionary<string, ProjectNode>(StringComparer.OrdinalIgnoreCase);
         var active = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -115,7 +149,7 @@ public class Compiler
             }
 
             active.Add(path);
-            var compiler = new Compiler();
+            var compiler = new Compiler { _preprocessorSymbols = new HashSet<string>(symbols, StringComparer.Ordinal) };
             compiler.CompileCxProjectFile(path);
             var project = compiler._project!;
             var projectDirectory = Path.GetDirectoryName(path)!;
@@ -211,7 +245,17 @@ public class Compiler
                 name: Path.GetFileNameWithoutExtension(filePath));
         }
 
-        var inputStream = new AntlrInputStream(File.ReadAllText(filePath)) { name = filePath };
+        var preprocessed = CxPreprocessor.Process(File.ReadAllText(filePath), filePath, _preprocessorSymbols);
+        foreach (var diagnostic in preprocessed.Diagnostics.Where(diagnostic => diagnostic.Severity == "warning"))
+            Console.Error.WriteLine(diagnostic);
+        var preprocessingErrors = preprocessed.Diagnostics
+            .Where(diagnostic => diagnostic.Severity == "error")
+            .Select(diagnostic => diagnostic.ToString())
+            .ToArray();
+        if (preprocessingErrors.Length > 0)
+            throw new CompilationErrorException(string.Join(Environment.NewLine, preprocessingErrors));
+
+        var inputStream = new AntlrInputStream(preprocessed.Source) { name = filePath };
         var errorListener = new ParserErrorListener(filePath);
 
         var lexer = new CxLexer(inputStream);
