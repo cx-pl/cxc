@@ -22,11 +22,11 @@ namespaceDeclaration
     : Namespace name = qualifiedIdentifier Semicolon
     ;
 
- opLevelDeclarations
+topLevelDeclarations
     : topLevelDeclaration+
     ;
 
- opLevelDeclaration
+topLevelDeclaration
     : classDeclaration
     | functionDeclaration
     | enumDeclaration
@@ -185,7 +185,7 @@ enumMemberDeclaration
     // TODO: allow memberDeclaration to build rich enums
     ;
 
- ypedefDeclaration
+typedefDeclaration
     : Typedef Identifier Assign qualifiedIdentifier Semicolon
     ;
 
@@ -312,11 +312,11 @@ continueStatement
     : Continue Semicolon
     ;
 
- hrowStatement
+throwStatement
     : Throw expression? Semicolon
     ;
 
- ryStatement
+tryStatement
     : Try embeddedStatement (catchClauses finallyClause? | finallyClause)
     ;
 
@@ -498,12 +498,12 @@ functionInvocationArgument
     : (Identifier Colon)? expression
     ;
 
- hrowableExpression
+throwableExpression
     : expression
     | throwExpression
     ;
 
- hrowExpression
+throwExpression
     : Throw expression?
     ;
 
@@ -519,12 +519,12 @@ annotation
 
 // Types
 
- ypeNameOrVoid
+typeNameOrVoid
     : typeName
     | Void
     ;
 
- ypeName
+typeName
     : Const? builtInType arrayDimension* Question?
     | Const? namedType = qualifiedIdentifier namedTypeGenericArguments = genericTypeArguments? arrayDimension* Question?
     | autoVarType = Var
@@ -590,7 +590,7 @@ floatingType
     | Float64
     ;
 
- extualType
+textualType
     : Char
     | String
     ;
