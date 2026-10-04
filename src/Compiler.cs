@@ -9,27 +9,131 @@ using CxCompiler.Semantics;
 using System.Text.RegularExpressions;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
+using System.Diagnostics;
 
 namespace CxCompiler;
 
 public class Compiler
 {
+    public const string Usage = """
+        Usage: cxc [options] <file.cx|project.cxproj>
+
+        Options:
+          -D, --define SYMBOL       Define a conditional-compilation symbol
+          -o, --output-dir DIR      Write generated files to DIR (default: <project>/.obj)
+          --module-name NAME        Override the generated module/target name
+          --emit-only               Generate C and CMake files without building (default)
+          --compile                 Build generated C with CMake
+          --cxcore-dir DIR          Path to a cxcore source checkout for --compile
+          -v, --verbosity LEVEL     quiet, normal, or verbose (default: normal)
+          --diagnostics-format FMT  text or json (default: text)
+          -h, --help                Show this help
+        """;
+
+    private sealed record Options(
+        string? OutputDirectory,
+        string? ModuleName,
+        string? CxCoreDirectory,
+        bool Build,
+        string Verbosity,
+        string DiagnosticsFormat,
+        HashSet<string> Symbols,
+        List<string> Inputs);
+
     private string? _projectPath = null;
     private CxProject? _project = null;
     private IReadOnlySet<string> _preprocessorSymbols = new HashSet<string>(StringComparer.Ordinal);
 
     public void Compile(ReadOnlySpan<string> args)
     {
+        var options = ParseOptions(args);
+        _verbosity = options.Verbosity;
+        _diagnosticsFormat = options.DiagnosticsFormat;
+        _outputDirectoryOverride = options.OutputDirectory;
+        _moduleNameOverride = options.ModuleName;
+        _cxCoreDirectory = options.CxCoreDirectory;
+        _buildGeneratedCode = options.Build;
+        var sourceArguments = options.Inputs;
+        var symbols = options.Symbols;
+        _preprocessorSymbols = symbols;
+
+        if (sourceArguments.Count == 1 && sourceArguments[0].EndsWith(".cxproj", StringComparison.OrdinalIgnoreCase))
+        {
+            CompileProjectGraph(Path.GetFullPath(sourceArguments[0]), symbols, options);
+            return;
+        }
+        foreach (var arg in sourceArguments)
+        {
+            if (arg.EndsWith(".cxproj", StringComparison.OrdinalIgnoreCase))
+                CompileCxProjectFile(arg);
+            else if (arg.EndsWith(".cx", StringComparison.OrdinalIgnoreCase))
+                CompileCxSourceFile(arg);
+            else
+                throw new CompilationErrorException($"Unsupported file type: {arg}");
+        }
+
+        new SemanticBinder().Bind(_project!);
+        var projectFilePath = Path.GetFullPath(_projectPath!);
+        var projectDirectory = Path.GetDirectoryName(projectFilePath)!;
+        var outputDirectory = ResolveOutputDirectory(projectDirectory);
+        Directory.CreateDirectory(outputDirectory);
+        IgnoreGeneratedDirectories(projectDirectory);
+        CCodeOutputGenerator.GenerateOutput(
+            _project!,
+            Path.Combine(outputDirectory, $"{_project!.Name}.cxproj"),
+            projectDirectory);
+        if (_verbosity != "quiet") Console.WriteLine($"Generated {_project.Name} in {outputDirectory}");
+        BuildIfRequested(outputDirectory, projectDirectory);
+    }
+
+    private static Options ParseOptions(ReadOnlySpan<string> args)
+    {
         var sourceArguments = new List<string>();
         var symbols = new HashSet<string>(StringComparer.Ordinal);
+        string? outputDirectory = null;
+        string? moduleName = null;
+        string? cxCoreDirectory = null;
+        string verbosity = "normal";
+        string diagnosticsFormat = "text";
+        var build = false;
+        var emitOnly = false;
         for (var index = 0; index < args.Length; index++)
         {
             var arg = args[index];
+            if (arg is "-h" or "--help" or "help")
+                throw new CommandLineException("Help must be requested by itself.");
+            if (arg is "--compile") { build = true; continue; }
+            if (arg is "--emit-only") { emitOnly = true; continue; }
+            if (arg is "-o" or "--output-dir" or "--module-name" or "--cxcore-dir" or
+                "-v" or "--verbosity" or "--diagnostics-format")
+            {
+                if (++index >= args.Length)
+                    throw new CommandLineException($"Compiler option '{arg}' requires a value.");
+                var value = args[index];
+                switch (arg)
+                {
+                    case "-o": case "--output-dir": outputDirectory = value; break;
+                    case "--module-name": moduleName = value; break;
+                    case "--cxcore-dir": cxCoreDirectory = value; break;
+                    case "-v": case "--verbosity": verbosity = value; break;
+                    case "--diagnostics-format": diagnosticsFormat = value; break;
+                }
+                continue;
+            }
+            if (arg.StartsWith("--output-dir=", StringComparison.Ordinal)) { outputDirectory = arg[13..]; continue; }
+            if (arg.StartsWith("--module-name=", StringComparison.Ordinal)) { moduleName = arg[14..]; continue; }
+            if (arg.StartsWith("--cxcore-dir=", StringComparison.Ordinal)) { cxCoreDirectory = arg[13..]; continue; }
+            if (arg.StartsWith("--verbosity=", StringComparison.Ordinal)) { verbosity = arg[12..]; continue; }
+            if (arg.StartsWith("--diagnostics-format=", StringComparison.Ordinal)) { diagnosticsFormat = arg[21..]; continue; }
+            if (arg.StartsWith("-", StringComparison.Ordinal) && arg is not ("-D" or "--define") &&
+                !arg.StartsWith("--define=", StringComparison.Ordinal) &&
+                !(arg.StartsWith("-D", StringComparison.Ordinal) && arg.Length > 2))
+                throw new CommandLineException($"Unknown compiler option '{arg}'.");
             string? symbol = null;
             if (arg is "-D" or "--define")
             {
                 if (++index >= args.Length)
-                    throw new CompilationErrorException($"Compiler option '{arg}' requires a symbol name.");
+                    throw new CommandLineException($"Compiler option '{arg}' requires a symbol name.");
                 symbol = args[index];
             }
             else if (arg.StartsWith("--define=", StringComparison.Ordinal))
@@ -47,42 +151,101 @@ public class Compiler
                 continue;
             }
             if (!System.Text.RegularExpressions.Regex.IsMatch(symbol, "^[A-Za-z_][A-Za-z0-9_]*$"))
-                throw new CompilationErrorException($"Invalid preprocessor symbol '{symbol}'.");
+                throw new CommandLineException($"Invalid preprocessor symbol '{symbol}'.");
             symbols.Add(symbol);
         }
-        _preprocessorSymbols = symbols;
+        if (sourceArguments.Count == 0)
+            throw new CommandLineException("A CX source file or project file is required.");
+        if (sourceArguments.Count > 1 && sourceArguments.Any(input => input.EndsWith(".cxproj", StringComparison.OrdinalIgnoreCase)))
+            throw new CommandLineException("A project file cannot be combined with other input files.");
+        if (build && emitOnly)
+            throw new CommandLineException("Options '--compile' and '--emit-only' cannot be combined.");
+        if (verbosity is not ("quiet" or "normal" or "verbose"))
+            throw new CommandLineException($"Unknown verbosity level '{verbosity}'. Expected quiet, normal, or verbose.");
+        if (diagnosticsFormat is not ("text" or "json"))
+            throw new CommandLineException($"Unknown diagnostics format '{diagnosticsFormat}'. Expected text or json.");
+        if (moduleName is not null && !Regex.IsMatch(moduleName, "^[A-Za-z_][A-Za-z0-9_]*$"))
+            throw new CommandLineException("Module name must be a valid C identifier.");
+        if (outputDirectory is not null && string.IsNullOrWhiteSpace(outputDirectory))
+            throw new CommandLineException("Output directory cannot be empty.");
+        if (cxCoreDirectory is not null && string.IsNullOrWhiteSpace(cxCoreDirectory))
+            throw new CommandLineException("cxcore directory cannot be empty.");
+        return new Options(outputDirectory, moduleName, cxCoreDirectory, build,
+            verbosity, diagnosticsFormat, symbols, sourceArguments);
+    }
 
-        if (sourceArguments.Count == 1 && sourceArguments[0].EndsWith(".cxproj", StringComparison.OrdinalIgnoreCase))
-        {
-            CompileProjectGraph(Path.GetFullPath(sourceArguments[0]), symbols);
-            return;
-        }
-        foreach (var arg in sourceArguments)
-        {
-            if (arg.EndsWith(".cxproj", StringComparison.OrdinalIgnoreCase))
-            {
-                CompileCxProjectFile(arg);
-            }
-            else if (arg.EndsWith(".cx", StringComparison.OrdinalIgnoreCase))
-            {
-                CompileCxSourceFile(arg);
-            }
-            else
-            {
-                throw new CompilationErrorException($"Unsupported file type: {arg}");
-            }
-        }
+    private string _verbosity = "normal";
+    private string _diagnosticsFormat = "text";
+    private string? _outputDirectoryOverride;
+    private string? _moduleNameOverride;
+    private string? _cxCoreDirectory;
+    private bool _buildGeneratedCode;
 
-        new SemanticBinder().Bind(_project!);
-        var projectFilePath = Path.GetFullPath(_projectPath!);
-        var projectDirectory = Path.GetDirectoryName(projectFilePath)!;
-        var objectDirectory = Path.Combine(projectDirectory, ".obj");
-        Directory.CreateDirectory(objectDirectory);
-        IgnoreGeneratedDirectories(projectDirectory);
-        CCodeOutputGenerator.GenerateOutput(
-            _project!,
-            Path.Combine(objectDirectory, Path.GetFileName(projectFilePath)),
-            projectDirectory);
+    private string ResolveOutputDirectory(string projectDirectory) =>
+        Path.GetFullPath(_outputDirectoryOverride is null
+            ? Path.Combine(projectDirectory, ".obj")
+            : Path.IsPathRooted(_outputDirectoryOverride)
+                ? _outputDirectoryOverride
+                : Path.Combine(Environment.CurrentDirectory, _outputDirectoryOverride));
+
+    private void BuildIfRequested(string outputDirectory, string projectDirectory)
+    {
+        if (!_buildGeneratedCode) return;
+        var cxCoreDirectory = _cxCoreDirectory ?? Environment.GetEnvironmentVariable("CXCORE_SOURCE_DIR")
+            ?? FindSiblingCxCore(projectDirectory);
+        if (!Directory.Exists(cxCoreDirectory) || !File.Exists(Path.Combine(cxCoreDirectory, "CMakeLists.txt")))
+            throw new CompilationErrorException(
+                "Native build requested, but cxcore was not found. Pass --cxcore-dir or set CXCORE_SOURCE_DIR.");
+
+        var buildDirectory = Path.Combine(outputDirectory, "build");
+        RunCMake(["-S", outputDirectory, "-B", buildDirectory,
+            $"-DCXCORE_SOURCE_DIR={Path.GetFullPath(cxCoreDirectory)}"]);
+        RunCMake(["--build", buildDirectory, "--config", "Release"]);
+
+        void RunCMake(IEnumerable<string> arguments)
+        {
+            var startInfo = new ProcessStartInfo("cmake")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+            using var process = Process.Start(startInfo)
+                ?? throw new CompilationErrorException("Could not start CMake.");
+            var standardOutput = process.StandardOutput.ReadToEndAsync();
+            var standardError = process.StandardError.ReadToEndAsync();
+            process.WaitForExit();
+            Task.WaitAll(standardOutput, standardError);
+            if (_verbosity == "verbose")
+            {
+                Console.Write(standardOutput.Result);
+                Console.Error.Write(standardError.Result);
+            }
+            if (process.ExitCode != 0)
+                throw new CompilationErrorException(
+                    $"CMake failed with exit code {process.ExitCode}.{Environment.NewLine}{standardError.Result.Trim()}");
+        }
+    }
+
+    private static string FindSiblingCxCore(string startDirectory)
+    {
+        var current = new DirectoryInfo(Path.GetFullPath(startDirectory));
+        while (current is not null)
+        {
+            var candidate = Path.Combine(current.FullName, "cxcore");
+            if (File.Exists(Path.Combine(candidate, "CMakeLists.txt"))) return candidate;
+            current = current.Parent;
+        }
+        return Path.Combine(startDirectory, "cxcore");
+    }
+
+    private void WriteDiagnostic(string severity, string message)
+    {
+        if (_diagnosticsFormat == "json")
+            Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { severity, message }));
+        else
+            Console.Error.WriteLine(message);
     }
 
     private void CompileCxProjectFile(string filePath)
@@ -100,6 +263,8 @@ public class Compiler
             ".json" => ParseCxProjectFromJson(reader),
             _ => throw new CompilationErrorException($"Unsupported project file format: {Path.GetExtension(filePath)}"),
         };
+        if (_moduleNameOverride is not null)
+            _project.Name = _moduleNameOverride;
         _project.Targets ??= [];
         if (_project.Targets.Any(target => string.IsNullOrWhiteSpace(target)
             || !Regex.IsMatch(target, "^[A-Za-z0-9][A-Za-z0-9._-]*$")))
@@ -119,9 +284,10 @@ public class Compiler
         }
     }
 
-    private sealed record ProjectNode(string Path, CxProject Project, IReadOnlyList<ProjectNode> References);
+    private sealed record ProjectNode(string Path, CxProject Project, IReadOnlyList<ProjectNode> References,
+        Compiler Compiler);
 
-    private static void CompileProjectGraph(string rootPath, IReadOnlySet<string> symbols)
+    private void CompileProjectGraph(string rootPath, IReadOnlySet<string> symbols, Options options)
     {
         var nodes = new Dictionary<string, ProjectNode>(StringComparer.OrdinalIgnoreCase);
         var active = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -150,6 +316,15 @@ public class Compiler
 
             active.Add(path);
             var compiler = new Compiler { _preprocessorSymbols = new HashSet<string>(symbols, StringComparer.Ordinal) };
+            if (string.Equals(path, rootPath, StringComparison.OrdinalIgnoreCase))
+            {
+                compiler._moduleNameOverride = options.ModuleName;
+                compiler._outputDirectoryOverride = options.OutputDirectory;
+                compiler._cxCoreDirectory = options.CxCoreDirectory;
+                compiler._buildGeneratedCode = options.Build;
+                compiler._verbosity = options.Verbosity;
+                compiler._diagnosticsFormat = options.DiagnosticsFormat;
+            }
             compiler.CompileCxProjectFile(path);
             var project = compiler._project!;
             var projectDirectory = Path.GetDirectoryName(path)!;
@@ -174,7 +349,7 @@ public class Compiler
                 throw new CompilationErrorException(
                     $"Project '{project.Name}' has referenced projects with conflicting target names.");
             active.Remove(path);
-            var node = new ProjectNode(path, project, refs);
+            var node = new ProjectNode(path, project, refs, compiler);
             nodes.Add(path, node);
             return node;
         }
@@ -209,11 +384,14 @@ public class Compiler
             }
             new SemanticBinder().Bind(node.Project);
             var directory = Path.GetDirectoryName(node.Path)!;
-            var objectDirectory = Path.Combine(directory, ".obj");
+            var objectDirectory = node.Compiler.ResolveOutputDirectory(directory);
             Directory.CreateDirectory(objectDirectory);
             IgnoreGeneratedDirectories(directory);
             CCodeOutputGenerator.GenerateOutput(node.Project,
                 Path.Combine(objectDirectory, Path.GetFileName(node.Path)), directory);
+            if (node.Compiler._verbosity != "quiet")
+                Console.WriteLine($"Generated {node.Project.Name} in {objectDirectory}");
+            node.Compiler.BuildIfRequested(objectDirectory, directory);
         }
 
         static IEnumerable<ProjectNode> EnumerateDependencies(ProjectNode node)
@@ -236,18 +414,18 @@ public class Compiler
 
     private void CompileCxSourceFile(string filePath)
     {
-        Console.WriteLine($"Compiling {filePath}");
+        if (_verbosity == "verbose") Console.WriteLine($"Compiling {filePath}");
 
         if (_project is null)
         {
             _projectPath = filePath;
             _project = CxProject.CreateDefaultApplicationProject(
-                name: Path.GetFileNameWithoutExtension(filePath));
+                name: _moduleNameOverride ?? Path.GetFileNameWithoutExtension(filePath));
         }
 
         var preprocessed = CxPreprocessor.Process(File.ReadAllText(filePath), filePath, _preprocessorSymbols);
         foreach (var diagnostic in preprocessed.Diagnostics.Where(diagnostic => diagnostic.Severity == "warning"))
-            Console.Error.WriteLine(diagnostic);
+            WriteDiagnostic("warning", diagnostic.ToString());
         var preprocessingErrors = preprocessed.Diagnostics
             .Where(diagnostic => diagnostic.Severity == "error")
             .Select(diagnostic => diagnostic.ToString())

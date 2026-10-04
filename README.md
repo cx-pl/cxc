@@ -42,10 +42,27 @@ public void UsePlatformApi() { /* Linux implementation */ }
 Inactive branches are omitted before parsing, and source line numbers are
 preserved for diagnostics.
 
+## Command line
+
+The compiler emits generated C and CMake files without invoking a native build
+by default. Use `--compile` to configure and build them with CMake; `cxcore` is
+located from `CXCORE_SOURCE_DIR` or a nearby `cxcore` checkout, or can be selected
+with `--cxcore-dir`.
+
+```powershell
+cxc --output-dir .build/generated --module-name SampleApp --compile app.cx
+```
+
+`--emit-only` selects generation without building. `--verbosity` accepts
+`quiet`, `normal`, or `verbose`, and `--diagnostics-format` accepts `text` or
+`json` (JSON Lines on standard error). Command-line errors return exit code 2;
+source, generation, and native-build failures return exit code 1.
+
 ## Generated build files
 
 Compiling a `.cx` source or `.cxproj` writes the generated C source, header, and
-`CMakeLists.txt` to the project’s `.obj/` directory. The generated CMake target
+`CMakeLists.txt` to the project’s `.obj/` directory unless `--output-dir` is
+provided. The generated CMake target
 also includes native `.c` files under the project source tree, excluding `.obj/`,
 `.bin/`, and `.git/`. Runtime executables and shared libraries are written to
 `.bin/`; archive and object build files remain under `.obj/`.

@@ -8,7 +8,7 @@
 // </auto-generated>
 //------------------------------------------------------------------------------
 
-// Generated from CxLexer.g4 by ANTLR 4.13.1
+// Generated from c:/workspace/cx-pl/cxc/src/Grammars/CxLexer.g4 by ANTLR 4.13.1
 
 // Unreachable code detected
 #pragma warning disable 0162

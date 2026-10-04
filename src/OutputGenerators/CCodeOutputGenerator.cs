@@ -13,6 +13,54 @@ namespace CxCompiler.OutputGenerators;
 
 public static partial class CCodeOutputGenerator
 {
+    private static StreamWriter OpenGeneratedFile(string outputFilePath) =>
+        new ReproducibleStreamWriter(outputFilePath);
+
+    private sealed class ReproducibleStreamWriter : StreamWriter
+    {
+        private readonly string _destination;
+        private readonly string _temporaryPath;
+        private bool _finished;
+
+        public ReproducibleStreamWriter(string destination)
+            : this(Path.GetFullPath(destination),
+                Path.Combine(Path.GetDirectoryName(Path.GetFullPath(destination))!,
+                    $".{Path.GetFileName(destination)}.{Guid.NewGuid():N}.tmp"))
+        {
+        }
+
+        private ReproducibleStreamWriter(string destination, string temporaryPath)
+            : base(temporaryPath, append: false)
+        {
+            _destination = destination;
+            _temporaryPath = temporaryPath;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (_finished)
+            {
+                base.Dispose(disposing);
+                return;
+            }
+            base.Dispose(disposing);
+            _finished = true;
+            try
+            {
+                if (File.Exists(_destination) &&
+                    File.ReadAllBytes(_destination).AsSpan().SequenceEqual(File.ReadAllBytes(_temporaryPath)))
+                    File.Delete(_temporaryPath);
+                else
+                    File.Move(_temporaryPath, _destination, overwrite: true);
+            }
+            catch
+            {
+                if (File.Exists(_temporaryPath)) File.Delete(_temporaryPath);
+                throw;
+            }
+        }
+    }
+
     public static void GenerateOutput(CxProject project, string filePath)
     {
         var outputDirectory = Path.GetDirectoryName(filePath)
@@ -53,7 +101,7 @@ public static partial class CCodeOutputGenerator
         string outputDirectory,
         string projectDirectory)
     {
-        using var fileWriter = new StreamWriter(outputFilePath, append: false);
+        using var fileWriter = OpenGeneratedFile(outputFilePath);
 
         fileWriter.WriteLine("cmake_minimum_required(VERSION 3.31)");
         fileWriter.WriteLine($"project({project.Name})");
@@ -126,7 +174,7 @@ public static partial class CCodeOutputGenerator
         fileWriter.WriteLine(
             $"target_include_directories({project.Name} PRIVATE \"${{CMAKE_CURRENT_LIST_DIR}}/{EscapeCMakePath(includeDirectory)}\")");
         fileWriter.WriteLine(
-            $"target_include_directories({project.Name} PRIVATE \"${{CMAKE_CURRENT_LIST_DIR}}/{EscapeCMakePath(Path.GetRelativePath(outputDirectory, Path.Combine(projectDirectory, ".obj")))}\")");
+            $"target_include_directories({project.Name} PRIVATE \"${{CMAKE_CURRENT_LIST_DIR}}\")");
         fileWriter.WriteLine($"if(TARGET cxcore)");
         fileWriter.WriteLine($"    target_link_libraries({project.Name} PRIVATE cxcore)");
         fileWriter.WriteLine($"endif()");
@@ -161,6 +209,7 @@ public static partial class CCodeOutputGenerator
         string generatedSourcePath)
     {
         var generatedSourceFullPath = Path.GetFullPath(generatedSourcePath);
+        var generatedOutputDirectory = Path.GetDirectoryName(generatedSourceFullPath)!;
         var excludedDirectoryNames = new HashSet<string>(
             [".obj", ".bin", ".git", ".vs", "CMakeFiles"],
             StringComparer.OrdinalIgnoreCase);
@@ -170,6 +219,7 @@ public static partial class CCodeOutputGenerator
                 Path.GetFullPath(path),
                 generatedSourceFullPath,
                 StringComparison.OrdinalIgnoreCase))
+            .Where(path => !IsWithinDirectory(Path.GetFullPath(path), generatedOutputDirectory))
             .Where(path => Path.GetRelativePath(projectDirectory, path)
                 .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
                     StringSplitOptions.RemoveEmptyEntries)
@@ -177,6 +227,15 @@ public static partial class CCodeOutputGenerator
                 .All(directory => !excludedDirectoryNames.Contains(directory)))
             .OrderBy(path => Path.GetRelativePath(projectDirectory, path),
                 StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool IsWithinDirectory(string path, string directory)
+    {
+        var relative = Path.GetRelativePath(directory, path);
+        return !Path.IsPathRooted(relative) && relative != "." &&
+            relative != ".." && !relative.StartsWith($"..{Path.DirectorySeparatorChar}",
+                StringComparison.Ordinal) && !relative.StartsWith($"..{Path.AltDirectorySeparatorChar}",
+                StringComparison.Ordinal);
     }
 
     private static string EscapeCMakePath(string path) =>
@@ -188,7 +247,7 @@ public static partial class CCodeOutputGenerator
         string outputFilePath,
         bool publicApi)
     {
-        using var fileWriter = new StreamWriter(outputFilePath);
+        using var fileWriter = OpenGeneratedFile(outputFilePath);
         var writer = new IndentingWriter(fileWriter);
 
         writer.WriteLine($"// This is an autogenerated C header file for project '{project.Name}'");
@@ -720,7 +779,7 @@ public static partial class CCodeOutputGenerator
 
     private static void WriteProjectSourceFile(CxProject project, string outputFilePath)
     {
-        using var fileWriter = new StreamWriter(outputFilePath);
+        using var fileWriter = OpenGeneratedFile(outputFilePath);
         var writer = new IndentingWriter(fileWriter);
 
         writer.WriteLine($"// This is an autogenerated C source file for project '{project.Name}'");
