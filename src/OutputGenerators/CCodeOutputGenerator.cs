@@ -831,6 +831,7 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine("//");
         writer.WriteLine();
         WriteStaticFields(writer, declarations, project.Name);
+        WriteStaticRootRegistration(writer, declarations, project.Name);
         writer.WriteLine();
 
         writer.WriteLine("//");
@@ -911,6 +912,7 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine("#endif");
         writer.WriteLine("{");
         writer.IncreaseIndent();
+        writer.WriteLine($"__cx_register_static_roots_{moduleToken}();");
         writer.WriteLine("cx_runtime_require_abi(CX_RUNTIME_ABI_VERSION);");
         writer.WriteLine("#if !defined(CX_STATIC_LINK)");
         writer.WriteLine($"__cx_module_init_{moduleToken}();");
@@ -1049,6 +1051,7 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine($"void {GetModuleApiName(project.Name)} __cx_module_init_{token}(void)");
         writer.WriteLine("{");
         writer.IncreaseIndent();
+        writer.WriteLine($"__cx_register_static_roots_{token}();");
         writer.WriteLine("cx_runtime_require_abi(CX_RUNTIME_ABI_VERSION);");
         writer.WriteLine($"while (atomic_flag_test_and_set_explicit(&__cx_module_init_lock_{token}, memory_order_acquire)) {{ }}");
         writer.WriteLine($"if (!__cx_module_initialized_{token})");
@@ -1285,6 +1288,44 @@ public static partial class CCodeOutputGenerator
             writer.WriteLine(
                 $"{field.Type.ToCIdentifier(false)} {GetStaticFieldIdentifier(field, moduleName)}{initializer};");
         }
+    }
+
+    private static void WriteStaticRootRegistration(
+        IndentingWriter writer,
+        IEnumerable<DeclarationBase> declarations,
+        string moduleName)
+    {
+        var staticFields = EnumerateFields(declarations).Where(field => field.IsStatic).ToArray();
+        var helperName = $"__cx_register_static_roots_{GetModuleToken(moduleName)}";
+        writer.WriteLine($"static void {helperName}(void)");
+        writer.WriteLine("{");
+        writer.IncreaseIndent();
+        writer.WriteLine("static cx_bool registered;");
+        writer.WriteLine("cx_gc_check_thread();");
+        if (staticFields.Length != 0)
+        {
+            writer.WriteLine("static const struct cx_gc_root_region roots[] = {");
+            writer.IncreaseIndent();
+            foreach (var field in staticFields)
+            {
+                var fieldName = GetStaticFieldIdentifier(field, moduleName);
+                writer.WriteLine($"{{ (const void *)&{fieldName}, (cx_uint)sizeof({fieldName}) }},");
+            }
+            writer.DecreaseIndent();
+            writer.WriteLine("};");
+        }
+        writer.WriteLine("if (!registered)");
+        writer.WriteLine("{");
+        writer.IncreaseIndent();
+        writer.WriteLine(staticFields.Length == 0
+            ? "cx_gc_register_static_roots(NULL, 0);"
+            : $"cx_gc_register_static_roots(roots, (cx_uint){staticFields.Length});");
+        writer.WriteLine("registered = CX_TRUE;");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+        writer.WriteLine();
     }
 
     private static IEnumerable<FieldDeclaration> EnumerateFields(

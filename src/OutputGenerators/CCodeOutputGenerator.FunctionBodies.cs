@@ -57,6 +57,7 @@ public static partial class CCodeOutputGenerator
             writer.Write(string.Join(", ", parameters));
             writer.WriteLine(") {");
             writer.IncreaseIndent();
+            writer.WriteLine($"__cx_register_static_roots_{GetModuleToken(moduleName)}();");
             writer.WriteLine("#if !defined(CX_STATIC_LINK)");
             writer.WriteLine($"__cx_module_init_{GetModuleToken(moduleName)}();");
             writer.WriteLine("#endif");
@@ -133,6 +134,7 @@ public static partial class CCodeOutputGenerator
                 $"{instance.SpecializationName}({string.Join(", ", parameters)})");
             writer.WriteLine("{");
             writer.IncreaseIndent();
+            writer.WriteLine($"__cx_register_static_roots_{GetModuleToken(moduleName)}();");
             writer.WriteLine("#if !defined(CX_STATIC_LINK)");
             writer.WriteLine($"__cx_module_init_{GetModuleToken(moduleName)}();");
             writer.WriteLine("#endif");
