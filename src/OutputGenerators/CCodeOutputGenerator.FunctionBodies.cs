@@ -42,6 +42,7 @@ public static partial class CCodeOutputGenerator
             }
 
             var nameOverrideIndex = GetNameOverrideIndex(functionDeclaration, declarations);
+            WriteSourceLocation(writer, functionDeclaration.SourceSpan);
             writer.Write($"{functionDeclaration.ToCIdentifier(moduleName, nameOverrideIndex)}(");
 
             var parameters = new List<string>();
@@ -294,6 +295,7 @@ public static partial class CCodeOutputGenerator
         string moduleName,
         StatementWriteContext context)
     {
+        WriteSourceLocation(writer, statement.SourceSpan);
         WriteExpressionTemporaries(writer, GetDirectExpressions(statement));
 
         switch (statement)

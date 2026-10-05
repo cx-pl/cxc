@@ -66,7 +66,10 @@ cxc --output-dir .build/generated --module-name SampleApp --compile app.cx
 
 `--emit-only` selects generation without building. `--verbosity` accepts
 `quiet`, `normal`, or `verbose`, and `--diagnostics-format` accepts `text` or
-`json` (JSON Lines on standard error). Command-line errors return exit code 2;
+`json` (JSON Lines on standard error). `--configuration Debug` builds with
+native debug information; `Release` is the default. Generated C includes CX
+source line directives so native debugger symbols can map statements back to
+their `.cx` files. Command-line errors return exit code 2;
 source, generation, and native-build failures return exit code 1.
 
 ## Executable entry point

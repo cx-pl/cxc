@@ -9,6 +9,7 @@ using CxCompiler.Model.Types.BuiltInTypes;
 using CxCompiler.Semantics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Xml.Linq;
 
 namespace CxCompiler.OutputGenerators;
 
@@ -16,6 +17,17 @@ public static partial class CCodeOutputGenerator
 {
     private static StreamWriter OpenGeneratedFile(string outputFilePath) =>
         new ReproducibleStreamWriter(outputFilePath);
+
+    private static void WriteSourceLocation(IndentingWriter writer, SourceSpan? sourceSpan)
+    {
+        if (sourceSpan is not { } location || location.StartLine < 1)
+            return;
+
+        var sourcePath = Path.GetFullPath(location.FilePath)
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal);
+        writer.WriteLine($"#line {location.StartLine} \"{sourcePath}\"");
+    }
 
     private sealed class ReproducibleStreamWriter : StreamWriter
     {
@@ -97,6 +109,71 @@ public static partial class CCodeOutputGenerator
             publicApi: false);
         WriteProjectSourceFile(project, Path.Combine(outputDirectory, $"{project.Name}.c"),
             declarations, entryPoint);
+        WriteProjectNatvisFile(
+            project,
+            Path.Combine(outputDirectory, $"{project.Name}.natvis"),
+            declarations);
+    }
+
+    private static void WriteProjectNatvisFile(
+        CxProject project,
+        string outputFilePath,
+        IReadOnlyCollection<DeclarationBase> declarations)
+    {
+        XNamespace ns = "http://schemas.microsoft.com/vstudio/debugger/natvis/2010";
+        var visualizers = declarations
+            .OfType<ClassDeclaration>()
+            .Where(declaration => !declaration.IsStatic &&
+                declaration.ClassType is ClassType.Class or ClassType.Struct)
+            .Select(declaration => new XElement(ns + "Type",
+                new XAttribute("Name", GetNatvisTypeName(declaration, project.Name)),
+                new XElement(ns + "Expand",
+                    EnumerateNatvisFields(declaration, "", new HashSet<ClassDeclaration>())
+                        .Select(field => new XElement(ns + "Item",
+                            new XAttribute("Name", field.Name),
+                            field.Expression)))))
+            .ToArray();
+
+        var document = new XDocument(
+            new XDeclaration("1.0", "utf-8", null),
+            new XElement(ns + "AutoVisualizer", visualizers));
+        using var writer = OpenGeneratedFile(outputFilePath);
+        document.Save(writer);
+    }
+
+    private static string GetNatvisTypeName(ClassDeclaration declaration, string defaultModuleName)
+    {
+        var moduleName = declaration.ProjectName ?? defaultModuleName;
+        return string.Join("_", new[] { moduleName }.Concat(declaration.FullName.Parts));
+    }
+
+    private static IEnumerable<(string Name, string Expression)> EnumerateNatvisFields(
+        ClassDeclaration declaration,
+        string fieldPrefix,
+        HashSet<ClassDeclaration> visited)
+    {
+        if (!visited.Add(declaration)) yield break;
+
+        if (declaration.ClassType == ClassType.Class &&
+            declaration.BaseClassDeclaration is { } baseDeclaration)
+        {
+            foreach (var field in EnumerateNatvisFields(
+                baseDeclaration,
+                fieldPrefix + "__base.",
+                visited))
+            {
+                yield return field;
+            }
+        }
+
+        var isRuntimeObject = declaration.Name == "Object" &&
+            declaration.FullName.ToString() == "System.Object";
+        foreach (var field in declaration.MemberDeclarations.Declarations
+            .OfType<FieldDeclaration>()
+            .Where(field => !field.IsStatic && !isRuntimeObject))
+        {
+            yield return (field.Name, fieldPrefix + field.Name);
+        }
     }
 
     private static void WriteCMakeListsFile(
@@ -903,6 +980,7 @@ public static partial class CCodeOutputGenerator
         var moduleToken = GetModuleToken(project.Name);
         writer.WriteLine();
         writer.WriteLine("// Native executable entry point");
+        WriteSourceLocation(writer, main.SourceSpan);
         if (takesArguments)
             WriteArgumentStringHelper(writer);
         writer.WriteLine("#if defined(_WIN32)");

@@ -24,6 +24,7 @@ public class Compiler
           --module-name NAME        Override the generated module/target name
           --emit-only               Generate C and CMake files without building (default)
           --compile                 Build generated C with CMake
+          --configuration NAME      Build configuration: Debug or Release (default: Release)
           --cxcore-dir DIR          Path to a cxcore source checkout for --compile
           -v, --verbosity LEVEL     quiet, normal, or verbose (default: normal)
           --diagnostics-format FMT  text or json (default: text)
@@ -35,6 +36,7 @@ public class Compiler
         string? OutputDirectory,
         string? ModuleName,
         string? CxCoreDirectory,
+        string Configuration,
         bool Build,
         string Verbosity,
         string DiagnosticsFormat,
@@ -53,6 +55,7 @@ public class Compiler
         _outputDirectoryOverride = options.OutputDirectory;
         _moduleNameOverride = options.ModuleName;
         _cxCoreDirectory = options.CxCoreDirectory;
+        _buildConfiguration = options.Configuration;
         _buildGeneratedCode = options.Build;
         var sourceArguments = options.Inputs;
         var symbols = options.Symbols;
@@ -94,6 +97,7 @@ public class Compiler
         string? outputDirectory = null;
         string? moduleName = null;
         string? cxCoreDirectory = null;
+        string configuration = "Release";
         string verbosity = "normal";
         string diagnosticsFormat = "text";
         var build = false;
@@ -106,6 +110,7 @@ public class Compiler
             if (arg is "--compile") { build = true; continue; }
             if (arg is "--emit-only") { emitOnly = true; continue; }
             if (arg is "-o" or "--output-dir" or "--module-name" or "--cxcore-dir" or
+                "--configuration" or
                 "-v" or "--verbosity" or "--diagnostics-format")
             {
                 if (++index >= args.Length)
@@ -116,6 +121,7 @@ public class Compiler
                     case "-o": case "--output-dir": outputDirectory = value; break;
                     case "--module-name": moduleName = value; break;
                     case "--cxcore-dir": cxCoreDirectory = value; break;
+                    case "--configuration": configuration = value; break;
                     case "-v": case "--verbosity": verbosity = value; break;
                     case "--diagnostics-format": diagnosticsFormat = value; break;
                 }
@@ -124,6 +130,7 @@ public class Compiler
             if (arg.StartsWith("--output-dir=", StringComparison.Ordinal)) { outputDirectory = arg[13..]; continue; }
             if (arg.StartsWith("--module-name=", StringComparison.Ordinal)) { moduleName = arg[14..]; continue; }
             if (arg.StartsWith("--cxcore-dir=", StringComparison.Ordinal)) { cxCoreDirectory = arg[13..]; continue; }
+            if (arg.StartsWith("--configuration=", StringComparison.Ordinal)) { configuration = arg[16..]; continue; }
             if (arg.StartsWith("--verbosity=", StringComparison.Ordinal)) { verbosity = arg[12..]; continue; }
             if (arg.StartsWith("--diagnostics-format=", StringComparison.Ordinal)) { diagnosticsFormat = arg[21..]; continue; }
             if (arg.StartsWith("-", StringComparison.Ordinal) && arg is not ("-D" or "--define") &&
@@ -165,13 +172,15 @@ public class Compiler
             throw new CommandLineException($"Unknown verbosity level '{verbosity}'. Expected quiet, normal, or verbose.");
         if (diagnosticsFormat is not ("text" or "json"))
             throw new CommandLineException($"Unknown diagnostics format '{diagnosticsFormat}'. Expected text or json.");
+        if (configuration is not ("Debug" or "Release"))
+            throw new CommandLineException($"Unknown build configuration '{configuration}'. Expected Debug or Release.");
         if (moduleName is not null && !Regex.IsMatch(moduleName, "^[A-Za-z_][A-Za-z0-9_]*$"))
             throw new CommandLineException("Module name must be a valid C identifier.");
         if (outputDirectory is not null && string.IsNullOrWhiteSpace(outputDirectory))
             throw new CommandLineException("Output directory cannot be empty.");
         if (cxCoreDirectory is not null && string.IsNullOrWhiteSpace(cxCoreDirectory))
             throw new CommandLineException("cxcore directory cannot be empty.");
-        return new Options(outputDirectory, moduleName, cxCoreDirectory, build,
+        return new Options(outputDirectory, moduleName, cxCoreDirectory, configuration, build,
             verbosity, diagnosticsFormat, symbols, sourceArguments);
     }
 
@@ -180,6 +189,7 @@ public class Compiler
     private string? _outputDirectoryOverride;
     private string? _moduleNameOverride;
     private string? _cxCoreDirectory;
+    private string _buildConfiguration = "Release";
     private bool _buildGeneratedCode;
 
     private string ResolveOutputDirectory(string projectDirectory) =>
@@ -200,8 +210,9 @@ public class Compiler
 
         var buildDirectory = Path.Combine(outputDirectory, "build");
         RunCMake(["-S", outputDirectory, "-B", buildDirectory,
-            $"-DCXCORE_SOURCE_DIR={Path.GetFullPath(cxCoreDirectory)}"]);
-        RunCMake(["--build", buildDirectory, "--config", "Release"]);
+            $"-DCXCORE_SOURCE_DIR={Path.GetFullPath(cxCoreDirectory)}",
+            $"-DCMAKE_BUILD_TYPE={_buildConfiguration}"]);
+        RunCMake(["--build", buildDirectory, "--config", _buildConfiguration]);
 
         void RunCMake(IEnumerable<string> arguments)
         {
@@ -322,6 +333,7 @@ public class Compiler
                 compiler._moduleNameOverride = options.ModuleName;
                 compiler._outputDirectoryOverride = options.OutputDirectory;
                 compiler._cxCoreDirectory = options.CxCoreDirectory;
+                compiler._buildConfiguration = options.Configuration;
                 compiler._buildGeneratedCode = options.Build;
                 compiler._verbosity = options.Verbosity;
                 compiler._diagnosticsFormat = options.DiagnosticsFormat;
