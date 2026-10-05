@@ -184,6 +184,36 @@ public static partial class CCodeOutputGenerator
                 writer.WriteLine(
                     $"__this->{targetField.Declaration.Name} = {parameter.Identifier.Parts[^1]};");
             }
+            else if (declaration.GenericTypeNames.Length > 0 &&
+                IsGenericLocalSequenceBody(declaration))
+            {
+                foreach (var statement in declaration.Body!)
+                {
+                    switch (statement)
+                    {
+                        case LocalVariableDeclarationStatement local:
+                            var declarator = local.Declarators.Single();
+                            var source = (IdentifierExpression)declarator.Initializer!;
+                            writer.WriteLine($"{instance.ReturnType.ToCIdentifier(false)} " +
+                                $"{declarator.Name} = {source.Identifier.Parts[0]};");
+                            break;
+                        case ExpressionStatement
+                        {
+                            Expression: AssignmentExpression
+                            {
+                                Target: IdentifierExpression target,
+                                Value: IdentifierExpression replacement,
+                            },
+                        }:
+                            writer.WriteLine(
+                                $"{target.Identifier.Parts[0]} = {replacement.Identifier.Parts[0]};");
+                            break;
+                        case ReturnStatement { Expression: IdentifierExpression returned }:
+                            writer.WriteLine($"return {returned.Identifier.Parts[0]};");
+                            break;
+                    }
+                }
+            }
             else if (declaration.Body is
                 [LocalVariableDeclarationStatement local,
                     ExpressionStatement
@@ -212,6 +242,14 @@ public static partial class CCodeOutputGenerator
                 writer.WriteLine($"{instance.ReturnType.ToCIdentifier(false)} " +
                     $"{declarator.Name} = {source.Identifier.Parts[0]};");
                 writer.WriteLine($"return {declarator.Name};");
+            }
+            else if (declaration.GenericTypeNames.Length > 0 &&
+                declaration.Body!.All(statement => IsGenericReturnFlow(statement, declaration)))
+            {
+                foreach (var statement in declaration.Body!)
+                {
+                    WriteGenericReturnFlow(writer, statement, declaration, moduleName);
+                }
             }
             else if (declaration.Body is
                 [IfStatement
@@ -244,6 +282,165 @@ public static partial class CCodeOutputGenerator
             writer.WriteLine("}");
             writer.WriteLine();
         }
+    }
+
+    private static bool IsGenericReturnFlow(
+        StatementBase statement,
+        FunctionDeclaration declaration) => statement switch
+    {
+        ReturnStatement { Expression: IdentifierExpression identifier } =>
+            declaration.Parameters.Any(parameter =>
+                parameter.Name == identifier.Identifier.ToString() &&
+                IsSameGenericTypePattern(declaration.ReturnType, parameter.ParameterType)),
+        BlockStatement block => block.Statements.All(item => IsGenericReturnFlow(item, declaration)),
+        IfStatement conditional =>
+            IsGenericReturnFlowBooleanExpression(conditional.Condition, declaration) &&
+            IsGenericReturnFlow(conditional.ThenStatement, declaration) &&
+            (conditional.ElseStatement is null ||
+                IsGenericReturnFlow(conditional.ElseStatement, declaration)),
+        _ => false,
+    };
+
+    private static bool IsGenericReturnFlowBooleanExpression(
+        ExpressionBase expression,
+        FunctionDeclaration declaration) => expression switch
+    {
+        IdentifierExpression identifier => declaration.Parameters.Any(parameter =>
+            parameter.Name == identifier.Identifier.ToString() && parameter.ParameterType is BoolType),
+        LiteralExpression { SourceText: "true" or "false" } => true,
+        UnaryExpression { Operator: "!", Operand: var operand } =>
+            IsGenericReturnFlowBooleanExpression(operand, declaration),
+        BinaryExpression { Operator: "&&" or "||", Left: var left, Right: var right } =>
+            IsGenericReturnFlowBooleanExpression(left, declaration) &&
+            IsGenericReturnFlowBooleanExpression(right, declaration),
+        BinaryExpression { Operator: "==" or "!=", Left: var left, Right: var right } =>
+            IsGenericReturnFlowBooleanExpression(left, declaration) &&
+            IsGenericReturnFlowBooleanExpression(right, declaration),
+        _ => false,
+    };
+
+    private static bool IsSameGenericTypePattern(TypeBase left, TypeBase right) =>
+        (left, right) switch
+        {
+            (ConstType first, ConstType second) =>
+                IsSameGenericTypePattern(first.UnderlyingType, second.UnderlyingType),
+            (GenericType first, GenericType second) => first.Name == second.Name,
+            (ArrayType first, ArrayType second) =>
+                IsSameGenericTypePattern(first.ElementType, second.ElementType),
+            (NullableType first, NullableType second) =>
+                IsSameGenericTypePattern(first.UnderlyingType, second.UnderlyingType),
+            (NamedType first, NamedType second) =>
+                first.ResolvedTypeFullName == second.ResolvedTypeFullName &&
+                first.TypeArguments.Count == second.TypeArguments.Count &&
+                first.TypeArguments.Zip(second.TypeArguments)
+                    .All(pair => IsSameGenericTypePattern(pair.First, pair.Second)),
+            _ => left.FullName == right.FullName,
+        };
+
+    private static bool IsGenericLocalSequenceBody(FunctionDeclaration declaration)
+    {
+        if (declaration.Body is not { Count: >= 2 } body ||
+            body[^1] is not ReturnStatement { Expression: IdentifierExpression returned } ||
+            !body.Take(body.Count - 1).OfType<LocalVariableDeclarationStatement>()
+                .Any(local => local.Declarators.Count == 1))
+        {
+            return false;
+        }
+
+        var values = declaration.Parameters.ToDictionary(
+            parameter => parameter.Name,
+            parameter => parameter.ParameterType,
+            StringComparer.Ordinal);
+        var locals = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 0; index < body.Count - 1; index++)
+        {
+            switch (body[index])
+            {
+                case LocalVariableDeclarationStatement local when
+                    local.Declarators is [var declarator] &&
+                    declarator.Initializer is IdentifierExpression source &&
+                    IsSameGenericTypePattern(declaration.ReturnType,
+                        GenericTypeSubstitution.BindParameters(
+                            local.DeclaredType, declaration.GenericTypeNames)) &&
+                    values.TryGetValue(source.Identifier.ToString(), out var sourceType) &&
+                    IsSameGenericTypePattern(declaration.ReturnType, sourceType) &&
+                    !values.ContainsKey(declarator.Name):
+                    values.Add(declarator.Name, declaration.ReturnType);
+                    locals.Add(declarator.Name);
+                    break;
+                case ExpressionStatement
+                {
+                    Expression: AssignmentExpression
+                    {
+                        Target: IdentifierExpression target,
+                        Operator: "=",
+                        Value: IdentifierExpression replacement,
+                    },
+                } when locals.Contains(target.Identifier.ToString()) &&
+                    values.TryGetValue(replacement.Identifier.ToString(), out var replacementType) &&
+                    IsSameGenericTypePattern(declaration.ReturnType, replacementType):
+                    break;
+                default:
+                    return false;
+            }
+        }
+
+        return locals.Contains(returned.Identifier.ToString()) &&
+            values.TryGetValue(returned.Identifier.ToString(), out var returnType) &&
+            IsSameGenericTypePattern(declaration.ReturnType, returnType);
+    }
+
+    private static void WriteGenericReturnFlow(
+        IndentingWriter writer,
+        StatementBase statement,
+        FunctionDeclaration declaration,
+        string moduleName)
+    {
+        switch (statement)
+        {
+            case ReturnStatement { Expression: IdentifierExpression identifier }:
+                writer.WriteLine($"return {identifier.Identifier.Parts[0]};");
+                break;
+            case BlockStatement block:
+                writer.WriteLine("{");
+                writer.IncreaseIndent();
+                foreach (var nested in block.Statements)
+                {
+                    WriteGenericReturnFlow(writer, nested, declaration, moduleName);
+                }
+                writer.DecreaseIndent();
+                writer.WriteLine("}");
+                break;
+            case IfStatement conditional:
+                writer.WriteLine($"if ({ToCExpression(conditional.Condition, declaration, moduleName)})");
+                WriteGenericReturnFlowControlled(writer, conditional.ThenStatement,
+                    declaration, moduleName);
+                if (conditional.ElseStatement is not null)
+                {
+                    writer.WriteLine("else");
+                    WriteGenericReturnFlowControlled(writer, conditional.ElseStatement,
+                        declaration, moduleName);
+                }
+                break;
+        }
+    }
+
+    private static void WriteGenericReturnFlowControlled(
+        IndentingWriter writer,
+        StatementBase statement,
+        FunctionDeclaration declaration,
+        string moduleName)
+    {
+        if (statement is BlockStatement)
+        {
+            WriteGenericReturnFlow(writer, statement, declaration, moduleName);
+            return;
+        }
+        writer.WriteLine("{");
+        writer.IncreaseIndent();
+        WriteGenericReturnFlow(writer, statement, declaration, moduleName);
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
     }
 
     private static void WritePropertyAccessorDefinitions(

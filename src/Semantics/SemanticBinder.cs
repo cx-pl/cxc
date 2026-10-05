@@ -258,6 +258,11 @@ public sealed class SemanticBinder
             return;
         }
         else if (!function.MemberModifiers.Contains(MemberModifier.Extern) &&
+            IsGenericLocalSequenceBody(function))
+        {
+            return;
+        }
+        else if (!function.MemberModifiers.Contains(MemberModifier.Extern) &&
             IsGenericConditionalReturnBody(function))
         {
             return;
@@ -265,12 +270,17 @@ public sealed class SemanticBinder
         throw new CompilationErrorException(
             $"Generic function '{function.FullName}' currently supports only an extern " +
             "declaration, a direct type-parameter return, one local copy, or a " +
-            "single assignment to a local copy, or a boolean conditional that " +
-            "returns matching type-parameter values or arrays.");
+            "single assignment to a local copy, or return-only boolean conditional " +
+            "control flow that returns matching type-parameter values or arrays.");
     }
 
     private static bool IsDirectGenericIdentityType(TypeBase returnType, TypeBase parameterType)
     {
+        if (returnType is ConstType returnConst && parameterType is ConstType parameterConst)
+        {
+            return IsDirectGenericIdentityType(
+                returnConst.UnderlyingType, parameterConst.UnderlyingType);
+        }
         if (returnType is GenericType returned && parameterType is GenericType argument)
         {
             return returned.Name == argument.Name;
@@ -352,47 +362,132 @@ public sealed class SemanticBinder
             IsMatchingParameter(replacement.Identifier.ToString());
     }
 
-    private static bool IsGenericConditionalReturnBody(FunctionDeclaration function)
+    private static bool IsGenericLocalSequenceBody(FunctionDeclaration function)
     {
-        if (function.Body is not
-            [IfStatement
-            {
-                Condition: IdentifierExpression condition,
-                ThenStatement: ReturnStatement
-                {
-                    Expression: IdentifierExpression whenTrue,
-                },
-                ElseStatement: ReturnStatement
-                {
-                    Expression: IdentifierExpression whenFalse,
-                },
-            }] || function.ReturnType is not (GenericType or ArrayType) ||
+        if (function.Body is not { Count: >= 2 } body ||
+            body[^1] is not ReturnStatement { Expression: IdentifierExpression returned } ||
             !ContainsFunctionTypeParameter(function.ReturnType, function.GenericTypeNames))
         {
             return false;
         }
 
-        var conditionParameter = function.Parameters.SingleOrDefault(parameter =>
-            parameter.Name == condition.Identifier.ToString());
-        var trueParameter = function.Parameters.SingleOrDefault(parameter =>
-            parameter.Name == whenTrue.Identifier.ToString());
-        var falseParameter = function.Parameters.SingleOrDefault(parameter =>
-            parameter.Name == whenFalse.Identifier.ToString());
-        return conditionParameter?.ParameterType is BoolType &&
-            trueParameter is not null &&
-            IsDirectGenericIdentityType(function.ReturnType, trueParameter.ParameterType) &&
-            falseParameter is not null &&
-            IsDirectGenericIdentityType(function.ReturnType, falseParameter.ParameterType);
+        var values = function.Parameters.ToDictionary(
+            parameter => parameter.Name,
+            parameter => parameter.ParameterType,
+            StringComparer.Ordinal);
+        var localNames = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 0; index < body.Count - 1; index++)
+        {
+            switch (body[index])
+            {
+                case LocalVariableDeclarationStatement local when
+                    local.Declarators is [var declarator] &&
+                    declarator.Initializer is IdentifierExpression source &&
+                    IsDirectGenericIdentityType(
+                        function.ReturnType,
+                        GenericTypeSubstitution.BindParameters(
+                            local.DeclaredType, function.GenericTypeNames)) &&
+                    HasMatchingValue(source.Identifier.ToString(), values, function.ReturnType) &&
+                    !values.ContainsKey(declarator.Name):
+                    values.Add(declarator.Name, function.ReturnType);
+                    localNames.Add(declarator.Name);
+                    break;
+                case ExpressionStatement
+                {
+                    Expression: AssignmentExpression
+                    {
+                        Target: IdentifierExpression target,
+                        Operator: "=",
+                        Value: IdentifierExpression replacement,
+                    },
+                } when localNames.Contains(target.Identifier.ToString()) &&
+                    HasMatchingValue(replacement.Identifier.ToString(), values, function.ReturnType):
+                    break;
+                default:
+                    return false;
+            }
+        }
+
+        return localNames.Contains(returned.Identifier.ToString()) &&
+            HasMatchingValue(returned.Identifier.ToString(), values, function.ReturnType);
     }
+
+    private static bool HasMatchingValue(
+        string name,
+        IReadOnlyDictionary<string, TypeBase> values,
+        TypeBase expectedType) =>
+        values.TryGetValue(name, out var valueType) &&
+        IsDirectGenericIdentityType(expectedType, valueType);
+
+    private static bool IsGenericConditionalReturnBody(FunctionDeclaration function)
+    {
+        if (function.Body is not { Count: > 0 } ||
+            !function.Body.All(statement => IsGenericReturnFlow(statement, function)) ||
+            !GenericReturnFlowAlwaysReturns(function.Body) ||
+            !ContainsFunctionTypeParameter(function.ReturnType, function.GenericTypeNames))
+        {
+            return false;
+        }
+        return true;
+    }
+
+    private static bool GenericReturnFlowAlwaysReturns(IReadOnlyList<StatementBase> statements) =>
+        statements.Count > 0 && GenericReturnFlowAlwaysReturns(statements[^1]);
+
+    private static bool GenericReturnFlowAlwaysReturns(StatementBase statement) => statement switch
+    {
+        ReturnStatement => true,
+        BlockStatement block => GenericReturnFlowAlwaysReturns(block.Statements),
+        IfStatement { ElseStatement: not null } conditional =>
+            GenericReturnFlowAlwaysReturns(conditional.ThenStatement) &&
+            GenericReturnFlowAlwaysReturns(conditional.ElseStatement),
+        _ => false,
+    };
+
+    private static bool IsGenericReturnFlow(StatementBase statement, FunctionDeclaration function) =>
+        statement switch
+        {
+            ReturnStatement { Expression: IdentifierExpression identifier } =>
+                function.Parameters.Any(parameter =>
+                    parameter.Name == identifier.Identifier.ToString() &&
+                    IsDirectGenericIdentityType(function.ReturnType, parameter.ParameterType)),
+            BlockStatement block => block.Statements.All(item => IsGenericReturnFlow(item, function)),
+            IfStatement conditional =>
+                IsBooleanExpression(conditional.Condition, function) &&
+                IsGenericReturnFlow(conditional.ThenStatement, function) &&
+                (conditional.ElseStatement is null ||
+                    IsGenericReturnFlow(conditional.ElseStatement, function)),
+            _ => false,
+        };
+
+    private static bool IsBooleanExpression(ExpressionBase expression, FunctionDeclaration function) =>
+        expression switch
+        {
+            IdentifierExpression identifier => function.Parameters.Any(parameter =>
+                parameter.Name == identifier.Identifier.ToString() && parameter.ParameterType is BoolType),
+            LiteralExpression { SourceText: "true" or "false" } => true,
+            UnaryExpression { Operator: "!", Operand: var operand } =>
+                IsBooleanExpression(operand, function),
+            BinaryExpression { Operator: "&&" or "||", Left: var left, Right: var right } =>
+                IsBooleanExpression(left, function) && IsBooleanExpression(right, function),
+            BinaryExpression { Operator: "==" or "!=", Left: var left, Right: var right } =>
+                IsBooleanExpression(left, function) && IsBooleanExpression(right, function),
+            _ => false,
+        };
 
     private static bool ContainsFunctionTypeParameter(
         TypeBase type,
         IReadOnlyCollection<string> genericTypeNames) =>
         type switch
         {
+            ConstType constant => ContainsFunctionTypeParameter(
+                constant.UnderlyingType, genericTypeNames),
             GenericType generic => genericTypeNames.Contains(generic.Name),
-            ArrayType { ElementType: GenericType generic } =>
-                genericTypeNames.Contains(generic.Name),
+            ArrayType array => ContainsFunctionTypeParameter(array.ElementType, genericTypeNames),
+            NullableType nullable => ContainsFunctionTypeParameter(
+                nullable.UnderlyingType, genericTypeNames),
+            NamedType named => named.TypeArguments.Any(argument =>
+                ContainsFunctionTypeParameter(argument, genericTypeNames)),
             _ => false,
         };
 
@@ -1486,7 +1581,8 @@ public sealed class SemanticBinder
         }
 
         var propertyType = UnwrapConst(accessor.ParentPropertyDeclaration.Type);
-        if (propertyType is GenericType &&
+        if (IsPropertyGenericTypePattern(propertyType,
+                accessor.ParentPropertyDeclaration.ParentClassDeclaration?.GenericTypeNames ?? []) &&
                 !IsGenericFieldGetter(accessor) && !IsGenericFieldSetter(accessor) ||
             propertyType is NamedType namedType && namedType.GenericParams.Length > 0)
         {
@@ -1501,23 +1597,25 @@ public sealed class SemanticBinder
     {
         if (accessor.Name != "get" || accessor.Parameters.Count != 0 ||
             accessor.ParentPropertyDeclaration.IsStatic ||
-            accessor.ParentPropertyDeclaration.Type is not GenericType propertyType ||
+            !IsPropertyGenericTypePattern(accessor.ParentPropertyDeclaration.Type,
+                accessor.ParentPropertyDeclaration.ParentClassDeclaration?.GenericTypeNames ?? []) ||
             accessor.Body is not
             [ReturnStatement { Expression: IdentifierExpression identifier }])
         {
             return false;
         }
-        return accessor.ParentPropertyDeclaration.ParentClassDeclaration.MemberDeclarations
+        return accessor.ParentPropertyDeclaration.ParentClassDeclaration?.MemberDeclarations
             .Declarations.OfType<FieldDeclaration>().Any(field =>
                 !field.IsStatic && field.Name == identifier.Identifier.ToString() &&
-                field.Type is GenericType fieldType && fieldType.Name == propertyType.Name);
+                IsDirectGenericIdentityType(field.Type, accessor.ParentPropertyDeclaration.Type)) == true;
     }
 
     private static bool IsGenericFieldSetter(PropertyAccessorDeclaration accessor)
     {
         if (accessor.Name != "set" || accessor.Parameters.Count != 0 ||
             accessor.ParentPropertyDeclaration.IsStatic ||
-            accessor.ParentPropertyDeclaration.Type is not GenericType propertyType ||
+            !IsPropertyGenericTypePattern(accessor.ParentPropertyDeclaration.Type,
+                accessor.ParentPropertyDeclaration.ParentClassDeclaration?.GenericTypeNames ?? []) ||
             accessor.Body is not
             [ExpressionStatement
             {
@@ -1531,11 +1629,21 @@ public sealed class SemanticBinder
         {
             return false;
         }
-        return accessor.ParentPropertyDeclaration.ParentClassDeclaration.MemberDeclarations
+        return accessor.ParentPropertyDeclaration.ParentClassDeclaration?.MemberDeclarations
             .Declarations.OfType<FieldDeclaration>().Any(field =>
                 !field.IsStatic && field.Name == fieldName.Identifier.ToString() &&
-                field.Type is GenericType fieldType && fieldType.Name == propertyType.Name);
+                IsDirectGenericIdentityType(field.Type, accessor.ParentPropertyDeclaration.Type)) == true;
     }
+
+    private static bool IsPropertyGenericTypePattern(
+        TypeBase type,
+        IReadOnlyCollection<string> genericTypeNames) => type switch
+    {
+        ConstType constant => IsPropertyGenericTypePattern(constant.UnderlyingType, genericTypeNames),
+        GenericType generic => genericTypeNames.Contains(generic.Name),
+        ArrayType array => IsPropertyGenericTypePattern(array.ElementType, genericTypeNames),
+        _ => false,
+    };
 
     private void BindStatements(
         IEnumerable<StatementBase> statements,

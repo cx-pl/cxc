@@ -27,17 +27,24 @@ separate-compilation boundary.
   receiver ABI tied to the closed value layout when needed.
 - Supported generic function bodies are: `extern` declarations; returning a
   matching type-parameter value, array, nullable, or nested constructed value;
-  selecting between two matching parameters with a boolean `if`; copying a
-  parameter into one local and returning it; and assigning another matching
-  parameter to that local before returning it. Bodies outside these shapes are
-  rejected rather than emitted with unresolved open types.
-- Generic classes support empty layouts, reference-backed `T` fields, `T[]`
-  fields, and closed value layouts with direct `T` fields. Closed value
-  arguments include primitive values and named non-generic structs. Multi-field
-  and multi-parameter layouts preserve field order and concrete C types.
+  selecting between matching parameters with boolean return-only control flow
+  (including nested `if` statements, blocks, boolean parameters/literals and
+  their `!`, `&&`, `||`, `==`, and `!=` combinations, and a conditional return
+  followed by a fallback return); and straight-line sequences of matching generic local
+  copies/reassignments followed by returning a matching local.
+  The expanded subsets still do not support general expressions, loops, or
+  arbitrary generic locals.
+- Generic classes support empty layouts, reference-backed `T` fields, nested
+  generic array fields such as `T[][]`, and closed value layouts with direct
+  generic fields or recursively nested generic arrays. Matching field-backed
+  properties and constructors use the same recursive type patterns. Closed
+  value arguments include primitive values and named non-generic structs.
+  Multi-field and multi-parameter layouts preserve field order and concrete C
+  types.
 - Supported constructors are empty parameterless constructors and constructors
-  with one direct assignment per generic field parameter. Direct generic-field
-  getters and setters are specialized for closed value layouts. Other fields,
+  with one matching assignment per generic field parameter (including nested
+  array patterns). Direct generic-field getters and setters are specialized for
+  closed value layouts. Other fields,
   initializers, bases, virtual/interface dispatch, and constructor/method bodies
   that exceed these patterns remain diagnosed as unsupported.
 

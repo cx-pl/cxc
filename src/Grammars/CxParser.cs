@@ -8,7 +8,7 @@
 // </auto-generated>
 //------------------------------------------------------------------------------
 
-// Generated from CxParser.g4 by ANTLR 4.13.1
+// Generated from c:/workspace/cx-pl/cxc/src/Grammars/CxParser.g4 by ANTLR 4.13.1
 
 // Unreachable code detected
 #pragma warning disable 0162
@@ -37,142 +37,142 @@ public partial class CxParser : Parser {
 	protected static DFA[] decisionToDFA;
 	protected static PredictionContextCache sharedContextCache = new PredictionContextCache();
 	public const int
-		Abstract=1, Alias=2, As=3, Async=4, Await=5, Base=6, Bool=7, Break=8,
-		Byte=9, Case=10, Catch=11, Char=12, Class=13, Concept=14, Const=15, Constructor=16,
-		Continue=17, Decimal=18, Default=19, Delegate=20, Do=21, Double=22, Else=23,
-		Enum=24, Extension=25, Extern=26, False=27, Final=28, Finally=29, Float=30,
-		Float32=31, Float64=32, For=33, Foreach=34, Get=35, If=36, In=37, Int=38,
-		Int8=39, Int16=40, Int32=41, Int64=42, Interface=43, Internal=44, Import=45,
-		Is=46, Long=47, Nameof=48, Namespace=49, New=50, Null=51, Object=52, Operator=53,
-		Out=54, Override=55, Params=56, Partial=57, Private=58, Protected=59,
-		Ptr=60, Public=61, Ref=62, Return=63, Sbyte=64, Set=65, Short=66, Sizeof=67,
-		Static=68, String=69, Struct=70, Switch=71, This=72, Throw=73, True=74,
-		Try=75, Typedef=76, Typeof=77, Uint=78, UInt8=79, UInt16=80, UInt32=81,
-		UInt64=82, Ulong=83, Ushort=84, Using=85, Var=86, Virtual=87, Void=88,
-		When=89, While=90, LeftParen=91, RightParen=92, LeftBracket=93, RightBracket=94,
-		LeftBrace=95, RightBrace=96, Less=97, LessEqual=98, Greater=99, GreaterEqual=100,
-		LeftShift=101, RightShift=102, Plus=103, PlusPlus=104, Minus=105, MinusMinus=106,
-		Star=107, Div=108, Mod=109, And=110, AndAnd=111, Or=112, OrOr=113, Xor=114,
-		Not=115, At=116, Tilde=117, Question=118, Colon=119, Semicolon=120, Comma=121,
-		Assign=122, StarAssign=123, DivAssign=124, ModAssign=125, PlusAssign=126,
-		MinusAssign=127, LeftShiftAssign=128, RightShiftAssign=129, AndAssign=130,
-		OrAssign=131, XorAssign=132, Equal=133, NotEqual=134, QuestionQuestion=135,
-		Arrow=136, Dot=137, QuestionArrow=138, PipeThen=139, PipeError=140, Identifier=141,
-		IntegerLiteral=142, FloatingLiteral=143, CharLiteral=144, StringLiteral=145,
+		Abstract=1, Alias=2, As=3, Async=4, Await=5, Base=6, Bool=7, Break=8, 
+		Byte=9, Case=10, Catch=11, Char=12, Class=13, Concept=14, Const=15, Constructor=16, 
+		Continue=17, Decimal=18, Default=19, Delegate=20, Do=21, Double=22, Else=23, 
+		Enum=24, Extension=25, Extern=26, False=27, Final=28, Finally=29, Float=30, 
+		Float32=31, Float64=32, For=33, Foreach=34, Get=35, If=36, In=37, Int=38, 
+		Int8=39, Int16=40, Int32=41, Int64=42, Interface=43, Internal=44, Import=45, 
+		Is=46, Long=47, Nameof=48, Namespace=49, New=50, Null=51, Object=52, Operator=53, 
+		Out=54, Override=55, Params=56, Partial=57, Private=58, Protected=59, 
+		Ptr=60, Public=61, Ref=62, Return=63, Sbyte=64, Set=65, Short=66, Sizeof=67, 
+		Static=68, String=69, Struct=70, Switch=71, This=72, Throw=73, True=74, 
+		Try=75, Typedef=76, Typeof=77, Uint=78, UInt8=79, UInt16=80, UInt32=81, 
+		UInt64=82, Ulong=83, Ushort=84, Using=85, Var=86, Virtual=87, Void=88, 
+		When=89, While=90, LeftParen=91, RightParen=92, LeftBracket=93, RightBracket=94, 
+		LeftBrace=95, RightBrace=96, Less=97, LessEqual=98, Greater=99, GreaterEqual=100, 
+		LeftShift=101, RightShift=102, Plus=103, PlusPlus=104, Minus=105, MinusMinus=106, 
+		Star=107, Div=108, Mod=109, And=110, AndAnd=111, Or=112, OrOr=113, Xor=114, 
+		Not=115, At=116, Tilde=117, Question=118, Colon=119, Semicolon=120, Comma=121, 
+		Assign=122, StarAssign=123, DivAssign=124, ModAssign=125, PlusAssign=126, 
+		MinusAssign=127, LeftShiftAssign=128, RightShiftAssign=129, AndAssign=130, 
+		OrAssign=131, XorAssign=132, Equal=133, NotEqual=134, QuestionQuestion=135, 
+		Arrow=136, Dot=137, QuestionArrow=138, PipeThen=139, PipeError=140, Identifier=141, 
+		IntegerLiteral=142, FloatingLiteral=143, CharLiteral=144, StringLiteral=145, 
 		Whitespace=146, BlockComment=147, LineComment=148;
 	public const int
-		RULE_compilationUnit = 0, RULE_importStatements = 1, RULE_importStatement = 2,
-		RULE_namespaceDeclaration = 3, RULE_topLevelDeclarations = 4, RULE_topLevelDeclaration = 5,
-		RULE_classModifiers = 6, RULE_classModifier = 7, RULE_visibilityModifier = 8,
-		RULE_classBase = 9, RULE_classBaseList = 10, RULE_classType = 11, RULE_classDeclaration = 12,
-		RULE_classDeclarationBody = 13, RULE_memberModifiers = 14, RULE_memberModifier = 15,
-		RULE_memberDeclaration = 16, RULE_fieldsDeclaration = 17, RULE_fieldInitializers = 18,
-		RULE_fieldInitializer = 19, RULE_propertyDeclaration = 20, RULE_propertyAccessorDeclarations = 21,
-		RULE_propertyAccessorDeclaration = 22, RULE_propertyParams = 23, RULE_propertyParam = 24,
-		RULE_propertyAccessorBody = 25, RULE_constructorDeclaration = 26, RULE_constructorOrBaseInvocation = 27,
-		RULE_functionDeclaration = 28, RULE_functionParameters = 29, RULE_functionParameter = 30,
-		RULE_functionBody = 31, RULE_enumDeclaration = 32, RULE_enumDeclarationBody = 33,
-		RULE_enumMemberDeclaration = 34, RULE_typedefDeclaration = 35, RULE_extensionDeclaration = 36,
-		RULE_statements = 37, RULE_statement = 38, RULE_declarationStatement = 39,
-		RULE_localVariableDeclarationStatement = 40, RULE_localVariableDeclaration = 41,
-		RULE_variableDeclarations = 42, RULE_variableDeclaration = 43, RULE_embeddedStatement = 44,
-		RULE_expressionStatement = 45, RULE_ifStatement = 46, RULE_switchStatement = 47,
-		RULE_switchSection = 48, RULE_switchLabel = 49, RULE_switchLabelFilter = 50,
-		RULE_whileStatement = 51, RULE_doStatement = 52, RULE_forStatement = 53,
-		RULE_forInitializer = 54, RULE_forCheck = 55, RULE_forIterator = 56, RULE_foreachStatement = 57,
-		RULE_returnStatement = 58, RULE_breakStatement = 59, RULE_continueStatement = 60,
-		RULE_throwStatement = 61, RULE_tryStatement = 62, RULE_catchClauses = 63,
-		RULE_catchClause = 64, RULE_exceptionFilter = 65, RULE_finallyClause = 66,
-		RULE_usingStatement = 67, RULE_expression = 68, RULE_assignmentExpression = 69,
-		RULE_assignOperator = 70, RULE_nonAssignmentExpression = 71, RULE_conditionalExpression = 72,
-		RULE_nullCoalescingExpression = 73, RULE_conditionalOrExpression = 74,
-		RULE_conditionalAndExpression = 75, RULE_inclusiveOrExpression = 76, RULE_exclusiveOrExpression = 77,
-		RULE_andExpression = 78, RULE_equalityExpression = 79, RULE_relationalExpression = 80,
-		RULE_shiftExpression = 81, RULE_additiveExpression = 82, RULE_multiplicativeExpression = 83,
-		RULE_unaryExpression = 84, RULE_primaryExpression = 85, RULE_primaryExpressionStart = 86,
-		RULE_arrayCreationExpression = 87, RULE_arrayElementType = 88, RULE_arrayExpression = 89,
-		RULE_memberAccess = 90, RULE_functionInvocation = 91, RULE_genericFunctionInvocation = 92,
-		RULE_functionInvocationArguments = 93, RULE_functionInvocationArgument = 94,
-		RULE_throwableExpression = 95, RULE_throwExpression = 96, RULE_annotations = 97,
-		RULE_annotation = 98, RULE_typeNameOrVoid = 99, RULE_typeName = 100, RULE_arrayDimension = 101,
-		RULE_genericTypeParameters = 102, RULE_genericParamList = 103, RULE_genericTypeArguments = 104,
-		RULE_genericTypeArgumentList = 105, RULE_builtInType = 106, RULE_integerType = 107,
-		RULE_floatingType = 108, RULE_textualType = 109, RULE_qualifiedIdentifier = 110,
+		RULE_compilationUnit = 0, RULE_importStatements = 1, RULE_importStatement = 2, 
+		RULE_namespaceDeclaration = 3, RULE_topLevelDeclarations = 4, RULE_topLevelDeclaration = 5, 
+		RULE_classModifiers = 6, RULE_classModifier = 7, RULE_visibilityModifier = 8, 
+		RULE_classBase = 9, RULE_classBaseList = 10, RULE_classType = 11, RULE_classDeclaration = 12, 
+		RULE_classDeclarationBody = 13, RULE_memberModifiers = 14, RULE_memberModifier = 15, 
+		RULE_memberDeclaration = 16, RULE_fieldsDeclaration = 17, RULE_fieldInitializers = 18, 
+		RULE_fieldInitializer = 19, RULE_propertyDeclaration = 20, RULE_propertyAccessorDeclarations = 21, 
+		RULE_propertyAccessorDeclaration = 22, RULE_propertyParams = 23, RULE_propertyParam = 24, 
+		RULE_propertyAccessorBody = 25, RULE_constructorDeclaration = 26, RULE_constructorOrBaseInvocation = 27, 
+		RULE_functionDeclaration = 28, RULE_functionParameters = 29, RULE_functionParameter = 30, 
+		RULE_functionBody = 31, RULE_enumDeclaration = 32, RULE_enumDeclarationBody = 33, 
+		RULE_enumMemberDeclaration = 34, RULE_typedefDeclaration = 35, RULE_extensionDeclaration = 36, 
+		RULE_statements = 37, RULE_statement = 38, RULE_declarationStatement = 39, 
+		RULE_localVariableDeclarationStatement = 40, RULE_localVariableDeclaration = 41, 
+		RULE_variableDeclarations = 42, RULE_variableDeclaration = 43, RULE_embeddedStatement = 44, 
+		RULE_expressionStatement = 45, RULE_ifStatement = 46, RULE_switchStatement = 47, 
+		RULE_switchSection = 48, RULE_switchLabel = 49, RULE_switchLabelFilter = 50, 
+		RULE_whileStatement = 51, RULE_doStatement = 52, RULE_forStatement = 53, 
+		RULE_forInitializer = 54, RULE_forCheck = 55, RULE_forIterator = 56, RULE_foreachStatement = 57, 
+		RULE_returnStatement = 58, RULE_breakStatement = 59, RULE_continueStatement = 60, 
+		RULE_throwStatement = 61, RULE_tryStatement = 62, RULE_catchClauses = 63, 
+		RULE_catchClause = 64, RULE_exceptionFilter = 65, RULE_finallyClause = 66, 
+		RULE_usingStatement = 67, RULE_expression = 68, RULE_assignmentExpression = 69, 
+		RULE_assignOperator = 70, RULE_nonAssignmentExpression = 71, RULE_conditionalExpression = 72, 
+		RULE_nullCoalescingExpression = 73, RULE_conditionalOrExpression = 74, 
+		RULE_conditionalAndExpression = 75, RULE_inclusiveOrExpression = 76, RULE_exclusiveOrExpression = 77, 
+		RULE_andExpression = 78, RULE_equalityExpression = 79, RULE_relationalExpression = 80, 
+		RULE_shiftExpression = 81, RULE_additiveExpression = 82, RULE_multiplicativeExpression = 83, 
+		RULE_unaryExpression = 84, RULE_primaryExpression = 85, RULE_primaryExpressionStart = 86, 
+		RULE_arrayCreationExpression = 87, RULE_arrayElementType = 88, RULE_arrayExpression = 89, 
+		RULE_memberAccess = 90, RULE_functionInvocation = 91, RULE_genericFunctionInvocation = 92, 
+		RULE_functionInvocationArguments = 93, RULE_functionInvocationArgument = 94, 
+		RULE_throwableExpression = 95, RULE_throwExpression = 96, RULE_annotations = 97, 
+		RULE_annotation = 98, RULE_typeNameOrVoid = 99, RULE_typeName = 100, RULE_arrayDimension = 101, 
+		RULE_genericTypeParameters = 102, RULE_genericParamList = 103, RULE_genericTypeArguments = 104, 
+		RULE_genericTypeArgumentList = 105, RULE_builtInType = 106, RULE_integerType = 107, 
+		RULE_floatingType = 108, RULE_textualType = 109, RULE_qualifiedIdentifier = 110, 
 		RULE_literal = 111, RULE_booleanLiteral = 112;
 	public static readonly string[] ruleNames = {
-		"compilationUnit", "importStatements", "importStatement", "namespaceDeclaration",
-		"topLevelDeclarations", "topLevelDeclaration", "classModifiers", "classModifier",
-		"visibilityModifier", "classBase", "classBaseList", "classType", "classDeclaration",
-		"classDeclarationBody", "memberModifiers", "memberModifier", "memberDeclaration",
-		"fieldsDeclaration", "fieldInitializers", "fieldInitializer", "propertyDeclaration",
-		"propertyAccessorDeclarations", "propertyAccessorDeclaration", "propertyParams",
-		"propertyParam", "propertyAccessorBody", "constructorDeclaration", "constructorOrBaseInvocation",
-		"functionDeclaration", "functionParameters", "functionParameter", "functionBody",
-		"enumDeclaration", "enumDeclarationBody", "enumMemberDeclaration", "typedefDeclaration",
-		"extensionDeclaration", "statements", "statement", "declarationStatement",
-		"localVariableDeclarationStatement", "localVariableDeclaration", "variableDeclarations",
-		"variableDeclaration", "embeddedStatement", "expressionStatement", "ifStatement",
-		"switchStatement", "switchSection", "switchLabel", "switchLabelFilter",
-		"whileStatement", "doStatement", "forStatement", "forInitializer", "forCheck",
-		"forIterator", "foreachStatement", "returnStatement", "breakStatement",
-		"continueStatement", "throwStatement", "tryStatement", "catchClauses",
-		"catchClause", "exceptionFilter", "finallyClause", "usingStatement", "expression",
-		"assignmentExpression", "assignOperator", "nonAssignmentExpression", "conditionalExpression",
-		"nullCoalescingExpression", "conditionalOrExpression", "conditionalAndExpression",
-		"inclusiveOrExpression", "exclusiveOrExpression", "andExpression", "equalityExpression",
-		"relationalExpression", "shiftExpression", "additiveExpression", "multiplicativeExpression",
-		"unaryExpression", "primaryExpression", "primaryExpressionStart", "arrayCreationExpression",
-		"arrayElementType", "arrayExpression", "memberAccess", "functionInvocation",
-		"genericFunctionInvocation", "functionInvocationArguments", "functionInvocationArgument",
-		"throwableExpression", "throwExpression", "annotations", "annotation",
-		"typeNameOrVoid", "typeName", "arrayDimension", "genericTypeParameters",
-		"genericParamList", "genericTypeArguments", "genericTypeArgumentList",
-		"builtInType", "integerType", "floatingType", "textualType", "qualifiedIdentifier",
+		"compilationUnit", "importStatements", "importStatement", "namespaceDeclaration", 
+		"topLevelDeclarations", "topLevelDeclaration", "classModifiers", "classModifier", 
+		"visibilityModifier", "classBase", "classBaseList", "classType", "classDeclaration", 
+		"classDeclarationBody", "memberModifiers", "memberModifier", "memberDeclaration", 
+		"fieldsDeclaration", "fieldInitializers", "fieldInitializer", "propertyDeclaration", 
+		"propertyAccessorDeclarations", "propertyAccessorDeclaration", "propertyParams", 
+		"propertyParam", "propertyAccessorBody", "constructorDeclaration", "constructorOrBaseInvocation", 
+		"functionDeclaration", "functionParameters", "functionParameter", "functionBody", 
+		"enumDeclaration", "enumDeclarationBody", "enumMemberDeclaration", "typedefDeclaration", 
+		"extensionDeclaration", "statements", "statement", "declarationStatement", 
+		"localVariableDeclarationStatement", "localVariableDeclaration", "variableDeclarations", 
+		"variableDeclaration", "embeddedStatement", "expressionStatement", "ifStatement", 
+		"switchStatement", "switchSection", "switchLabel", "switchLabelFilter", 
+		"whileStatement", "doStatement", "forStatement", "forInitializer", "forCheck", 
+		"forIterator", "foreachStatement", "returnStatement", "breakStatement", 
+		"continueStatement", "throwStatement", "tryStatement", "catchClauses", 
+		"catchClause", "exceptionFilter", "finallyClause", "usingStatement", "expression", 
+		"assignmentExpression", "assignOperator", "nonAssignmentExpression", "conditionalExpression", 
+		"nullCoalescingExpression", "conditionalOrExpression", "conditionalAndExpression", 
+		"inclusiveOrExpression", "exclusiveOrExpression", "andExpression", "equalityExpression", 
+		"relationalExpression", "shiftExpression", "additiveExpression", "multiplicativeExpression", 
+		"unaryExpression", "primaryExpression", "primaryExpressionStart", "arrayCreationExpression", 
+		"arrayElementType", "arrayExpression", "memberAccess", "functionInvocation", 
+		"genericFunctionInvocation", "functionInvocationArguments", "functionInvocationArgument", 
+		"throwableExpression", "throwExpression", "annotations", "annotation", 
+		"typeNameOrVoid", "typeName", "arrayDimension", "genericTypeParameters", 
+		"genericParamList", "genericTypeArguments", "genericTypeArgumentList", 
+		"builtInType", "integerType", "floatingType", "textualType", "qualifiedIdentifier", 
 		"literal", "booleanLiteral"
 	};
 
 	private static readonly string[] _LiteralNames = {
-		null, "'abstract'", "'alias'", "'as'", "'async'", "'await'", "'base'",
-		"'bool'", "'break'", "'byte'", "'case'", "'catch'", "'char'", "'class'",
-		"'concept'", "'const'", "'constructor'", "'continue'", "'decimal'", "'default'",
-		"'delegate'", "'do'", "'double'", "'else'", "'enum'", "'extension'", "'extern'",
-		"'false'", "'final'", "'finally'", "'float'", "'float32'", "'float64'",
-		"'for'", "'foreach'", "'get'", "'if'", "'in'", "'int'", "'int8'", "'int16'",
-		"'int32'", "'int64'", "'interface'", "'internal'", "'import'", "'is'",
-		"'long'", "'nameof'", "'namespace'", "'new'", "'null'", "'object'", "'operator'",
-		"'out'", "'override'", "'params'", "'partial'", "'private'", "'protected'",
-		"'ptr'", "'public'", "'ref'", "'return'", "'sbyte'", "'set'", "'short'",
-		"'sizeof'", "'static'", "'string'", "'struct'", "'switch'", "'this'",
-		"'throw'", "'true'", "'try'", "'typedef'", "'typeof'", "'uint'", "'uint8'",
-		"'uint16'", "'uint32'", "'uint64'", "'ulong'", "'ushort'", "'using'",
-		"'var'", "'virtual'", "'void'", "'when'", "'while'", "'('", "')'", "'['",
-		"']'", "'{'", "'}'", "'<'", "'<='", "'>'", "'>='", "'<<'", "'>>'", "'+'",
-		"'++'", "'-'", "'--'", "'*'", "'/'", "'%'", "'&'", "'&&'", "'|'", "'||'",
-		"'^'", "'!'", "'@'", "'~'", "'?'", "':'", "';'", "','", "'='", "'*='",
-		"'/='", "'%='", "'+='", "'-='", "'<<='", "'>>='", "'&='", "'|='", "'^='",
+		null, "'abstract'", "'alias'", "'as'", "'async'", "'await'", "'base'", 
+		"'bool'", "'break'", "'byte'", "'case'", "'catch'", "'char'", "'class'", 
+		"'concept'", "'const'", "'constructor'", "'continue'", "'decimal'", "'default'", 
+		"'delegate'", "'do'", "'double'", "'else'", "'enum'", "'extension'", "'extern'", 
+		"'false'", "'final'", "'finally'", "'float'", "'float32'", "'float64'", 
+		"'for'", "'foreach'", "'get'", "'if'", "'in'", "'int'", "'int8'", "'int16'", 
+		"'int32'", "'int64'", "'interface'", "'internal'", "'import'", "'is'", 
+		"'long'", "'nameof'", "'namespace'", "'new'", "'null'", "'object'", "'operator'", 
+		"'out'", "'override'", "'params'", "'partial'", "'private'", "'protected'", 
+		"'ptr'", "'public'", "'ref'", "'return'", "'sbyte'", "'set'", "'short'", 
+		"'sizeof'", "'static'", "'string'", "'struct'", "'switch'", "'this'", 
+		"'throw'", "'true'", "'try'", "'typedef'", "'typeof'", "'uint'", "'uint8'", 
+		"'uint16'", "'uint32'", "'uint64'", "'ulong'", "'ushort'", "'using'", 
+		"'var'", "'virtual'", "'void'", "'when'", "'while'", "'('", "')'", "'['", 
+		"']'", "'{'", "'}'", "'<'", "'<='", "'>'", "'>='", "'<<'", "'>>'", "'+'", 
+		"'++'", "'-'", "'--'", "'*'", "'/'", "'%'", "'&'", "'&&'", "'|'", "'||'", 
+		"'^'", "'!'", "'@'", "'~'", "'?'", "':'", "';'", "','", "'='", "'*='", 
+		"'/='", "'%='", "'+='", "'-='", "'<<='", "'>>='", "'&='", "'|='", "'^='", 
 		"'=='", "'!='", "'??'", "'=>'", "'.'", "'?=>'", "'|=>'", "'!=>'"
 	};
 	private static readonly string[] _SymbolicNames = {
-		null, "Abstract", "Alias", "As", "Async", "Await", "Base", "Bool", "Break",
-		"Byte", "Case", "Catch", "Char", "Class", "Concept", "Const", "Constructor",
-		"Continue", "Decimal", "Default", "Delegate", "Do", "Double", "Else",
-		"Enum", "Extension", "Extern", "False", "Final", "Finally", "Float", "Float32",
-		"Float64", "For", "Foreach", "Get", "If", "In", "Int", "Int8", "Int16",
-		"Int32", "Int64", "Interface", "Internal", "Import", "Is", "Long", "Nameof",
-		"Namespace", "New", "Null", "Object", "Operator", "Out", "Override", "Params",
-		"Partial", "Private", "Protected", "Ptr", "Public", "Ref", "Return", "Sbyte",
-		"Set", "Short", "Sizeof", "Static", "String", "Struct", "Switch", "This",
-		"Throw", "True", "Try", "Typedef", "Typeof", "Uint", "UInt8", "UInt16",
-		"UInt32", "UInt64", "Ulong", "Ushort", "Using", "Var", "Virtual", "Void",
-		"When", "While", "LeftParen", "RightParen", "LeftBracket", "RightBracket",
-		"LeftBrace", "RightBrace", "Less", "LessEqual", "Greater", "GreaterEqual",
-		"LeftShift", "RightShift", "Plus", "PlusPlus", "Minus", "MinusMinus",
-		"Star", "Div", "Mod", "And", "AndAnd", "Or", "OrOr", "Xor", "Not", "At",
-		"Tilde", "Question", "Colon", "Semicolon", "Comma", "Assign", "StarAssign",
-		"DivAssign", "ModAssign", "PlusAssign", "MinusAssign", "LeftShiftAssign",
-		"RightShiftAssign", "AndAssign", "OrAssign", "XorAssign", "Equal", "NotEqual",
-		"QuestionQuestion", "Arrow", "Dot", "QuestionArrow", "PipeThen", "PipeError",
-		"Identifier", "IntegerLiteral", "FloatingLiteral", "CharLiteral", "StringLiteral",
+		null, "Abstract", "Alias", "As", "Async", "Await", "Base", "Bool", "Break", 
+		"Byte", "Case", "Catch", "Char", "Class", "Concept", "Const", "Constructor", 
+		"Continue", "Decimal", "Default", "Delegate", "Do", "Double", "Else", 
+		"Enum", "Extension", "Extern", "False", "Final", "Finally", "Float", "Float32", 
+		"Float64", "For", "Foreach", "Get", "If", "In", "Int", "Int8", "Int16", 
+		"Int32", "Int64", "Interface", "Internal", "Import", "Is", "Long", "Nameof", 
+		"Namespace", "New", "Null", "Object", "Operator", "Out", "Override", "Params", 
+		"Partial", "Private", "Protected", "Ptr", "Public", "Ref", "Return", "Sbyte", 
+		"Set", "Short", "Sizeof", "Static", "String", "Struct", "Switch", "This", 
+		"Throw", "True", "Try", "Typedef", "Typeof", "Uint", "UInt8", "UInt16", 
+		"UInt32", "UInt64", "Ulong", "Ushort", "Using", "Var", "Virtual", "Void", 
+		"When", "While", "LeftParen", "RightParen", "LeftBracket", "RightBracket", 
+		"LeftBrace", "RightBrace", "Less", "LessEqual", "Greater", "GreaterEqual", 
+		"LeftShift", "RightShift", "Plus", "PlusPlus", "Minus", "MinusMinus", 
+		"Star", "Div", "Mod", "And", "AndAnd", "Or", "OrOr", "Xor", "Not", "At", 
+		"Tilde", "Question", "Colon", "Semicolon", "Comma", "Assign", "StarAssign", 
+		"DivAssign", "ModAssign", "PlusAssign", "MinusAssign", "LeftShiftAssign", 
+		"RightShiftAssign", "AndAssign", "OrAssign", "XorAssign", "Equal", "NotEqual", 
+		"QuestionQuestion", "Arrow", "Dot", "QuestionArrow", "PipeThen", "PipeError", 
+		"Identifier", "IntegerLiteral", "FloatingLiteral", "CharLiteral", "StringLiteral", 
 		"Whitespace", "BlockComment", "LineComment"
 	};
 	public static readonly IVocabulary DefaultVocabulary = new Vocabulary(_LiteralNames, _SymbolicNames);
@@ -852,7 +852,7 @@ public partial class CxParser : Parser {
 					State = 282;
 					_localctx.name = typeName();
 					}
-					}
+					} 
 				}
 				State = 287;
 				ErrorHandler.Sync(this);
@@ -1442,7 +1442,7 @@ public partial class CxParser : Parser {
 					State = 347;
 					fieldInitializer();
 					}
-					}
+					} 
 				}
 				State = 352;
 				ErrorHandler.Sync(this);
@@ -2250,7 +2250,7 @@ public partial class CxParser : Parser {
 					State = 457;
 					functionParameter();
 					}
-					}
+					} 
 				}
 				State = 462;
 				ErrorHandler.Sync(this);
@@ -2545,7 +2545,7 @@ public partial class CxParser : Parser {
 							State = 492;
 							enumMemberDeclaration();
 							}
-							}
+							} 
 						}
 						State = 497;
 						ErrorHandler.Sync(this);
@@ -2821,7 +2821,7 @@ public partial class CxParser : Parser {
 					State = 530;
 					statement();
 					}
-					}
+					} 
 				}
 				State = 535;
 				ErrorHandler.Sync(this);
@@ -3081,7 +3081,7 @@ public partial class CxParser : Parser {
 					State = 553;
 					variableDeclaration();
 					}
-					}
+					} 
 				}
 				State = 558;
 				ErrorHandler.Sync(this);
@@ -5101,7 +5101,7 @@ public partial class CxParser : Parser {
 					State = 777;
 					conditionalAndExpression();
 					}
-					}
+					} 
 				}
 				State = 782;
 				ErrorHandler.Sync(this);
@@ -5166,7 +5166,7 @@ public partial class CxParser : Parser {
 					State = 785;
 					inclusiveOrExpression();
 					}
-					}
+					} 
 				}
 				State = 790;
 				ErrorHandler.Sync(this);
@@ -5231,7 +5231,7 @@ public partial class CxParser : Parser {
 					State = 793;
 					exclusiveOrExpression();
 					}
-					}
+					} 
 				}
 				State = 798;
 				ErrorHandler.Sync(this);
@@ -5296,7 +5296,7 @@ public partial class CxParser : Parser {
 					State = 801;
 					andExpression();
 					}
-					}
+					} 
 				}
 				State = 806;
 				ErrorHandler.Sync(this);
@@ -5361,7 +5361,7 @@ public partial class CxParser : Parser {
 					State = 809;
 					equalityExpression();
 					}
-					}
+					} 
 				}
 				State = 814;
 				ErrorHandler.Sync(this);
@@ -5438,7 +5438,7 @@ public partial class CxParser : Parser {
 					State = 817;
 					relationalExpression();
 					}
-					}
+					} 
 				}
 				State = 822;
 				ErrorHandler.Sync(this);
@@ -5552,7 +5552,7 @@ public partial class CxParser : Parser {
 					default:
 						throw new NoViableAltException(this);
 					}
-					}
+					} 
 				}
 				State = 832;
 				ErrorHandler.Sync(this);
@@ -5629,7 +5629,7 @@ public partial class CxParser : Parser {
 					State = 835;
 					additiveExpression();
 					}
-					}
+					} 
 				}
 				State = 840;
 				ErrorHandler.Sync(this);
@@ -5706,7 +5706,7 @@ public partial class CxParser : Parser {
 					State = 843;
 					multiplicativeExpression();
 					}
-					}
+					} 
 				}
 				State = 848;
 				ErrorHandler.Sync(this);
@@ -5787,7 +5787,7 @@ public partial class CxParser : Parser {
 					State = 851;
 					unaryExpression();
 					}
-					}
+					} 
 				}
 				State = 856;
 				ErrorHandler.Sync(this);
@@ -6011,7 +6011,7 @@ public partial class CxParser : Parser {
 					State = 880;
 					arrayExpression();
 					}
-					}
+					} 
 				}
 				State = 885;
 				ErrorHandler.Sync(this);
@@ -6070,14 +6070,14 @@ public partial class CxParser : Parser {
 							State = 893;
 							arrayExpression();
 							}
-							}
+							} 
 						}
 						State = 898;
 						ErrorHandler.Sync(this);
 						_alt = Interpreter.AdaptivePredict(TokenStream,89,Context);
 					}
 					}
-					}
+					} 
 				}
 				State = 903;
 				ErrorHandler.Sync(this);
@@ -6617,7 +6617,7 @@ public partial class CxParser : Parser {
 					State = 959;
 					functionInvocationArgument();
 					}
-					}
+					} 
 				}
 				State = 964;
 				ErrorHandler.Sync(this);
@@ -7077,7 +7077,7 @@ public partial class CxParser : Parser {
 						State = 997;
 						arrayDimension();
 						}
-						}
+						} 
 					}
 					State = 1002;
 					ErrorHandler.Sync(this);
@@ -7130,7 +7130,7 @@ public partial class CxParser : Parser {
 						State = 1013;
 						arrayDimension();
 						}
-						}
+						} 
 					}
 					State = 1018;
 					ErrorHandler.Sync(this);
@@ -7319,7 +7319,7 @@ public partial class CxParser : Parser {
 					State = 1038;
 					Match(Identifier);
 					}
-					}
+					} 
 				}
 				State = 1043;
 				ErrorHandler.Sync(this);
@@ -7444,7 +7444,7 @@ public partial class CxParser : Parser {
 					State = 1053;
 					typeName();
 					}
-					}
+					} 
 				}
 				State = 1058;
 				ErrorHandler.Sync(this);
@@ -7742,7 +7742,7 @@ public partial class CxParser : Parser {
 		{
 		}
 		public override int RuleIndex { get { return RULE_qualifiedIdentifier; } }
-
+	 
 		public QualifiedIdentifierContext() { }
 		public virtual void CopyFrom(QualifiedIdentifierContext context) {
 			base.CopyFrom(context);
@@ -7821,7 +7821,7 @@ public partial class CxParser : Parser {
 					State = 1080;
 					((CombinedQualifiedIdentifierContext)_localctx).identifier = Match(Identifier);
 					}
-					}
+					} 
 				}
 				State = 1085;
 				ErrorHandler.Sync(this);

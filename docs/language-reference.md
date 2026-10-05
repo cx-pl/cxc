@@ -39,10 +39,12 @@ that member. Properties and indexers use `get` and `set` accessors. Structs and
 classes use constructors; constructor initializers can call `this(...)` or
 `base(...)`.
 
-Locals may state their type or use `var` with an initializer. Fields currently
-support literal or zero initialization for static storage. Compatible partial
-declaration merging is not implemented. A complete declaration list and feature
-limits are enforced by the compiler rather than silently approximated.
+Locals may state their type or use `var` with an initializer. Instance fields
+are initialized to zero unless assigned by a constructor; static fields accept
+literal or zero initialization. Dynamic static initialization and static
+constructor ordering are not implemented. Compatible partial declaration
+merging is also not implemented. A complete declaration list and feature limits
+are enforced by the compiler rather than silently approximated.
 
 ## Expressions, conversions, and overloads
 
@@ -51,7 +53,8 @@ unary and binary operators, assignment and compound assignment, conditional
 expressions, `??`, `is`, and explicit `as` casts. `&&`, `||`, `??`, and the
 conditional expression evaluate only the selected operand/branch.
 
-Numeric operators require numeric operands. For mixed numeric operands, the
+Built-in operators require compatible operand types; user-defined operator
+overloads are not implemented. For mixed numeric operands, the
 compiler chooses a common type when one operand type accepts an implicit numeric
 conversion from the other; otherwise it reports an error. The current implicit
 numeric conversions are widening conversions among the built-in numeric types;
@@ -75,19 +78,21 @@ statements, `if`/`else`, `while`, `do`/`while`, `for`, `foreach`, `switch`,
 optional `when` filters, `throw`, `throw;` rethrow, and `finally`. A `finally`
 block executes when control leaves its protected region, including return, break,
 continue, and exception propagation. A transfer performed inside `finally`
-replaces the pending transfer.
+replaces the pending transfer. Switch statements accept integer, boolean, char,
+and enum selectors. String selectors, case filters, and switch expressions are
+not implemented.
 
 ## Initialization, dispatch, and errors
 
 Value fields have zero-initialized storage unless assigned by a constructor.
-Static fields currently have literal or zero initializers; there is no dynamic
-static constructor ordering. Cross-file and cross-project access follows
-visibility rules, and project-reference initialization order is deterministic.
+Cross-file and cross-project access follows visibility rules, and
+project-reference initialization order is deterministic.
 
 Virtual calls dispatch through class vtables. Interface values carry both a
 dispatch table and an instance pointer; generated interface tables support
 interface upcasts and method/property dispatch. Runtime type metadata supports
-type tests, checked casts, and read-only reflection enumeration.
+type tests, checked casts, and read-only reflection enumeration. Reflection
+invocation and dynamic object construction are not implemented.
 
 Lexical, parse, and semantic errors include source locations where available.
 Syntax errors are aggregated when parser recovery can safely continue; semantic
@@ -98,14 +103,25 @@ runtime contract; they are not specified as typed CX exceptions.
 
 ## Implementation-defined behavior and current limits
 
-CX currently targets C11 runtimes with fixed-width CX scalar typedefs. The only
-implemented platform runtime is Windows. Native behavior affected by C rules,
-including signed integer overflow and floating-point edge cases, is not yet
-specified as a portable CX guarantee. String data is UTF-8; `char` represents a
-32-bit Unicode scalar, while several `Char` classification helpers are ASCII-only.
-Heap ownership is manual and provisional pending the managed-memory milestone.
+CX currently targets C11 runtimes on Windows (MSVC, x86/x64) and Linux (GCC,
+x64); macOS is not implemented. Native behavior affected by C rules, including
+signed integer overflow and floating-point edge cases, is not yet specified as
+a portable CX guarantee. String data is UTF-8; `char` represents a 32-bit
+Unicode scalar, while several `Char` classification helpers are ASCII-only.
 
-The compiler rejects unsupported language constructs instead of defining their
-behavior. Async/await, delegates, operators, concepts, and several grammar
-productions remain unimplemented. Consult compiler diagnostics and the tests for
-the exact supported subset of a feature.
+The `cxcore` managed-memory collector is non-moving and conservative. It supports
+one OS thread per process; native C static roots that retain managed pointers
+must be registered, and dynamically unloading a module that registered roots is
+unsupported. See the linked runtime contracts and managed-memory design for
+ownership, `Memory.Free`, and rooting rules.
+
+The current compiler gaps include lambdas, closures, function types, delegates,
+`async`/`await`, user-defined operator overloads, concepts, local functions,
+extension declarations, `typedef` declarations, and partial declaration
+merging. The grammar accepts an `async` modifier, but it has no async semantics;
+`await` is not implemented. Generic support is restricted to the body and layout
+patterns in [`generics-design.md`](generics-design.md); generic property accessors
+and using generic properties in expressions remain limited. Field initializers
+are limited to literals, switch statements have the limits described above, and
+dynamic static initialization is not available. Consult compiler diagnostics
+and tests for the exact supported subset of each feature.

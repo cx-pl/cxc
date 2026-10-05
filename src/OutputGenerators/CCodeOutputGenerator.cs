@@ -1518,9 +1518,10 @@ public static partial class CCodeOutputGenerator
             {
                 return false;
             }
-            if (field.Type is ArrayType { ElementType: GenericType arrayParameter })
+            if (field.Type is ArrayType &&
+                IsGenericTypePattern(field.Type, declaration.GenericTypeNames))
             {
-                return declaration.GenericTypeNames.Contains(arrayParameter.Name);
+                return true;
             }
             if (field.Type is GenericType parameter)
             {
@@ -1536,7 +1537,7 @@ public static partial class CCodeOutputGenerator
             (method.ReturnType is VoidType && IsReferenceFieldSetter(method, fields) ||
                 IsReferenceFieldGetter(method, fields)));
         var supportedProperties = properties.All(property =>
-            !property.IsStatic && property.Type is GenericType &&
+            !property.IsStatic && IsGenericTypePattern(property.Type, declaration.GenericTypeNames) &&
             property.PropertyAccessorDeclarations.Count is >= 1 and <= 2 &&
             property.PropertyAccessorDeclarations.Select(accessor => accessor.Name)
                 .Distinct().Count() == property.PropertyAccessorDeclarations.Count &&
@@ -1552,12 +1553,12 @@ public static partial class CCodeOutputGenerator
         {
             throw new CxCompiler.Model.Errors.CompilationErrorException(
                 $"Closed runtime metadata for generic type '{declaration.FullName}' " +
-                "currently requires an empty class, T[] fields, or T fields with " +
+                "currently requires an empty class, recursively nested T-array fields, or T fields with " +
                 "class-reference arguments; it also requires at most an empty " +
                 "parameterless constructor, or one assignment per reference " +
                 "constructor parameter, or a void method with a " +
                 "single-field assignment, or a T getter returning a T field, " +
-                "or a T property reading and writing a T field, and no explicit bases.");
+                "or a field-backed generic property, and no explicit bases.");
         }
     }
 
@@ -1580,14 +1581,22 @@ public static partial class CCodeOutputGenerator
         var constructors = members.OfType<ConstructorDeclaration>().ToArray();
         var genericMethods = members.OfType<FunctionDeclaration>()
             .Where(function => function is not ConstructorDeclaration).ToArray();
+        var properties = members.OfType<PropertyDeclaration>().ToArray();
         if (declaration.ClassType != ClassType.Class || declaration.IsStatic ||
             declaration.GenericTypeNames.Length == 0 ||
-            members.Count != fields.Length + constructors.Length + genericMethods.Length ||
+            members.Count != fields.Length + constructors.Length + genericMethods.Length + properties.Length ||
             genericMethods.Any(method => method.IsStatic ||
                 method.VirtualSlotIndex is not null ||
                 (method.GenericTypeNames.Length == 0 &&
                     !IsReferenceFieldGetter(method, fields) &&
                     !IsReferenceFieldSetter(method, fields))) ||
+            properties.Any(property => property.IsStatic ||
+                !IsGenericTypePattern(property.Type, declaration.GenericTypeNames) ||
+                property.PropertyAccessorDeclarations.Count is < 1 or > 2 ||
+                property.PropertyAccessorDeclarations.Select(accessor => accessor.Name)
+                    .Distinct().Count() != property.PropertyAccessorDeclarations.Count ||
+                property.PropertyAccessorDeclarations.Any(accessor =>
+                    !IsReferenceFieldPropertyAccessor(property, accessor, fields))) ||
             constructors.Length > 1 ||
             fields.Any(field => field.IsStatic || field.Initializer is not null ||
                 !IsSupportedClosedValueFieldType(field.Type, declaration.GenericTypeNames)) ||
@@ -1598,9 +1607,10 @@ public static partial class CCodeOutputGenerator
         {
             throw new CxCompiler.Model.Errors.CompilationErrorException(
                 $"Closed value layout for generic type '{declaration.FullName}' " +
-                "requires an empty class or direct generic-parameter and generic-array fields, plus " +
-                "non-virtual generic methods or direct generic-field getters/setters, and either " +
-                "an empty parameterless constructor or one direct assignment per " +
+                "requires an empty class or direct generic-parameter and generic-array fields " +
+                "(including recursively nested arrays), " +
+                "plus non-virtual generic methods or field-backed generic properties/getters/setters, " +
+                "and either an empty parameterless constructor or one matching assignment per " +
                 "generic field constructor parameter.");
         }
     }
@@ -1657,9 +1667,9 @@ public static partial class CCodeOutputGenerator
                 item.Name == parameterName);
             if (!fieldByName.TryGetValue(fieldName, out var field) ||
                 parameter is null ||
-                field.Type is not GenericType fieldType ||
-                parameter.ParameterType is not GenericType parameterType ||
-                fieldType.Name != parameterType.Name ||
+                !IsGenericTypePattern(field.Type, declaration.GenericTypeNames) ||
+                !IsGenericTypePattern(parameter.ParameterType, declaration.GenericTypeNames) ||
+                !IsSameGenericTypePattern(field.Type, parameter.ParameterType) ||
                 !assignedFields.Add(fieldName) || !assignedParameters.Add(parameterName))
             {
                 return false;
@@ -1672,13 +1682,17 @@ public static partial class CCodeOutputGenerator
     private static bool IsSupportedClosedValueFieldType(
         TypeBase type,
         IReadOnlyCollection<string> genericTypeNames) =>
-        type switch
-        {
-            GenericType parameter => genericTypeNames.Contains(parameter.Name),
-            ArrayType { ElementType: GenericType parameter } =>
-                genericTypeNames.Contains(parameter.Name),
-            _ => false,
-        };
+        IsGenericTypePattern(type, genericTypeNames);
+
+    private static bool IsGenericTypePattern(
+        TypeBase type,
+        IReadOnlyCollection<string> genericTypeNames) => type switch
+    {
+        ConstType constant => IsGenericTypePattern(constant.UnderlyingType, genericTypeNames),
+        GenericType parameter => genericTypeNames.Contains(parameter.Name),
+        ArrayType array => IsGenericTypePattern(array.ElementType, genericTypeNames),
+        _ => false,
+    };
 
     private static void WriteClosedValueTypeDeclarations(
         IndentingWriter writer,
@@ -1710,7 +1724,9 @@ public static partial class CCodeOutputGenerator
         PropertyAccessorDeclaration accessor,
         IReadOnlyCollection<FieldDeclaration> fields)
     {
-        if (accessor.Parameters.Count != 0 || property.Type is not GenericType propertyType)
+        if (accessor.Parameters.Count != 0 ||
+            !IsGenericTypePattern(property.Type,
+                property.ParentClassDeclaration.GenericTypeNames))
         {
             return false;
         }
@@ -1733,7 +1749,7 @@ public static partial class CCodeOutputGenerator
             _ => null,
         };
         return field is not null && fields.Contains(field) &&
-            field.Type is GenericType fieldType && fieldType.Name == propertyType.Name;
+            IsSameGenericTypePattern(field.Type, property.Type);
     }
 
     private static bool IsReferenceFieldSetter(
@@ -1754,7 +1770,8 @@ public static partial class CCodeOutputGenerator
         for (var index = 0; index < function.Parameters.Count; index++)
         {
             var parameter = function.Parameters[index];
-            if (parameter.ParameterType is not GenericType parameterType ||
+            if (!IsGenericTypePattern(parameter.ParameterType,
+                    function.ParentClassDeclaration?.GenericTypeNames ?? []) ||
                 function.Body[index] is not ExpressionStatement
                 {
                     Expression: AssignmentExpression
@@ -1766,8 +1783,7 @@ public static partial class CCodeOutputGenerator
                 } ||
                 !fields.Contains(targetField.Declaration) ||
                 !assignedFields.Add(targetField.Declaration) ||
-                targetField.Declaration.Type is not GenericType fieldType ||
-                fieldType.Name != parameterType.Name ||
+                !IsSameGenericTypePattern(targetField.Declaration.Type, parameter.ParameterType) ||
                 initialValue.Identifier.ToString() != parameter.Name)
             {
                 return false;
@@ -1780,15 +1796,15 @@ public static partial class CCodeOutputGenerator
         FunctionDeclaration function,
         IReadOnlyCollection<FieldDeclaration> fields) =>
         function.Parameters.Count == 0 &&
-        function.ReturnType is GenericType returnType &&
+        IsGenericTypePattern(function.ReturnType,
+            function.ParentClassDeclaration?.GenericTypeNames ?? []) &&
         function.Body is
         [ReturnStatement
         {
             Expression: IdentifierExpression { TargetField: { } targetField },
         }] &&
         fields.Contains(targetField.Declaration) &&
-        targetField.Declaration.Type is GenericType fieldType &&
-        fieldType.Name == returnType.Name;
+        IsSameGenericTypePattern(targetField.Declaration.Type, function.ReturnType);
 
     private static void WriteClosedGenericTypeInfos(
         IndentingWriter writer,
