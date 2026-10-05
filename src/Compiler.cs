@@ -27,6 +27,7 @@ public class Compiler
           --cxcore-dir DIR          Path to a cxcore source checkout for --compile
           -v, --verbosity LEVEL     quiet, normal, or verbose (default: normal)
           --diagnostics-format FMT  text or json (default: text)
+          --version, -V             Show compiler version
           -h, --help                Show this help
         """;
 

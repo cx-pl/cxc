@@ -1,6 +1,17 @@
 # cxc
 cx language compiler
 
+The current supported language subset is summarized in the
+[`language reference`](docs/language-reference.md). CX and its generated-code
+ABI are still experimental; binary compatibility is not promised.
+
+Show compiler version and CLI usage with:
+
+```powershell
+cxc --version
+cxc --help
+```
+
 ## Runtime reference conversions
 
 CX uses C-style syntax for explicit checked reference casts, for example

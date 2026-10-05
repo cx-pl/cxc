@@ -143,6 +143,11 @@ public static partial class CCodeOutputGenerator
         fileWriter.WriteLine("    set(BUILD_TESTING OFF CACHE BOOL \"\" FORCE)");
         fileWriter.WriteLine("    add_subdirectory(\"${CXCORE_SOURCE_DIR}\" \"${CMAKE_CURRENT_BINARY_DIR}/cxcore\")");
         fileWriter.WriteLine("endif()");
+        fileWriter.WriteLine("if(NOT DEFINED CXCORE_ABI_VERSION)");
+        fileWriter.WriteLine("    message(FATAL_ERROR \"This generated project requires a cxcore runtime that publishes CXCORE_ABI_VERSION (required ABI 1).\")");
+        fileWriter.WriteLine("elseif(NOT CXCORE_ABI_VERSION EQUAL 1)");
+        fileWriter.WriteLine("    message(FATAL_ERROR \"This generated project requires cxcore ABI 1; found ABI ${CXCORE_ABI_VERSION}.\")");
+        fileWriter.WriteLine("endif()");
         fileWriter.WriteLine();
 
         switch (project.Type)
@@ -801,6 +806,9 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine($"#include \"{project.Name}.internal.h\"");
         writer.WriteLine("#include <stdlib.h>");
         writer.WriteLine("#include <string.h>");
+        writer.WriteLine("#if !defined(CX_RUNTIME_ABI_VERSION) || CX_RUNTIME_ABI_VERSION != 1");
+        writer.WriteLine("#error This generated code requires cxcore runtime ABI version 1.");
+        writer.WriteLine("#endif");
         writer.WriteLine("#if defined(_WIN32)");
         writer.WriteLine("#define NOMINMAX");
         writer.WriteLine("#define WIN32_LEAN_AND_MEAN");
@@ -903,6 +911,7 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine("#endif");
         writer.WriteLine("{");
         writer.IncreaseIndent();
+        writer.WriteLine("cx_runtime_require_abi(CX_RUNTIME_ABI_VERSION);");
         writer.WriteLine("#if !defined(CX_STATIC_LINK)");
         writer.WriteLine($"__cx_module_init_{moduleToken}();");
         writer.WriteLine("#endif");
@@ -1040,6 +1049,7 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine($"void {GetModuleApiName(project.Name)} __cx_module_init_{token}(void)");
         writer.WriteLine("{");
         writer.IncreaseIndent();
+        writer.WriteLine("cx_runtime_require_abi(CX_RUNTIME_ABI_VERSION);");
         writer.WriteLine($"while (atomic_flag_test_and_set_explicit(&__cx_module_init_lock_{token}, memory_order_acquire)) {{ }}");
         writer.WriteLine($"if (!__cx_module_initialized_{token})");
         writer.WriteLine("{");

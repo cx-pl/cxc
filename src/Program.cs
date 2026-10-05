@@ -12,6 +12,13 @@ if (args.Length == 1 && args[0] is "--help" or "-h" or "help")
     return 0;
 }
 
+if (args.Length == 1 && args[0] is "--version" or "-V")
+{
+    var version = typeof(Compiler).Assembly.GetName().Version?.ToString(3) ?? "unknown";
+    Console.WriteLine($"cxc {version}");
+    return 0;
+}
+
 try
 {
     new Compiler().Compile(args);
