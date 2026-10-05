@@ -12,6 +12,7 @@ namespace CxCompiler.Tests;
 public sealed class ArrayExpressionTests
 {
     [Fact]
+    [Trait("Area", "Syntax")]
     public void ParserPreservesArrayCreationAccessAndAssignment()
     {
         var project = CreateProject("""
@@ -36,6 +37,7 @@ public sealed class ArrayExpressionTests
     }
 
     [Fact]
+    [Trait("Area", "Binding")]
     public void BinderInfersArrayAndElementTypes()
     {
         var project = CreateProject("""
@@ -61,6 +63,7 @@ public sealed class ArrayExpressionTests
     }
 
     [Fact]
+    [Trait("Area", "NegativeDiagnostics")]
     public void BinderRejectsInvalidArrayLengthsAndIndices()
     {
         var invalidLength = CreateProject("""
@@ -92,6 +95,7 @@ public sealed class ArrayExpressionTests
     }
 
     [Fact]
+    [Trait("Area", "NegativeDiagnostics")]
     public void BinderRejectsNonArrayAccessAndElementAssignmentMismatch()
     {
         var nonArray = CreateProject("""
@@ -115,6 +119,7 @@ public sealed class ArrayExpressionTests
     }
 
     [Fact]
+    [Trait("Area", "Lowering")]
     public void EmitsCheckedArrayAllocationReadsAndWrites()
     {
         var project = CreateProject("""
@@ -154,6 +159,40 @@ public sealed class ArrayExpressionTests
             {
                 Directory.Delete(outputDirectory, recursive: true);
             }
+        }
+    }
+
+    [Fact]
+    [Trait("Area", "BindingAndLowering")]
+    public void BindsAndEmitsArrayLengthGetter()
+    {
+        var project = CreateProject("""
+            uint Count(string[] values) {
+                return values.Length;
+            }
+            """);
+        new SemanticBinder().Bind(project);
+        var outputDirectory = Path.Combine(
+            Path.GetTempPath(),
+            $"cxc-array-length-{Guid.NewGuid():N}");
+
+        try
+        {
+            Directory.CreateDirectory(outputDirectory);
+            CCodeOutputGenerator.GenerateOutput(
+                project,
+                Path.Combine(outputDirectory, "ArrayLength.cx"));
+            var generatedSource = File.ReadAllText(
+                Path.Combine(outputDirectory, "unnamed.c"));
+
+            Assert.Contains(
+                "return CX_ID_5(cxcore, System, Array, Length, __const_get)(values);",
+                generatedSource);
+        }
+        finally
+        {
+            if (Directory.Exists(outputDirectory))
+                Directory.Delete(outputDirectory, recursive: true);
         }
     }
 

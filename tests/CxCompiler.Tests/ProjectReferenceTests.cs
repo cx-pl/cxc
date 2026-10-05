@@ -8,6 +8,7 @@ namespace CxCompiler.Tests;
 public sealed class ProjectReferenceTests
 {
     [Fact]
+    [Trait("Area", "CrossModule")]
     public void ProjectReferenceBindsPublicSymbolsToTheirOwningModuleAndGeneratesSeparateUnits()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cxc-project-refs-{Guid.NewGuid():N}");

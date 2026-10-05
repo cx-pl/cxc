@@ -58,6 +58,16 @@ cxc --output-dir .build/generated --module-name SampleApp --compile app.cx
 `json` (JSON Lines on standard error). Command-line errors return exit code 2;
 source, generation, and native-build failures return exit code 1.
 
+## Executable entry point
+
+For executable projects, one top-level CX `Main` function generates the native
+C entry point. Supported signatures are `void Main()`, `int Main()`,
+`void Main(string[] args)`, and `int Main(string[] args)`. The `args` array
+contains command-line arguments without the executable path; on Windows,
+arguments are converted from UTF-16 to CX's UTF-8 string representation. An
+`int` result becomes the process exit code, while a `void` result exits with 0.
+Library projects do not generate a native entry point.
+
 ## Generated build files
 
 Compiling a `.cx` source or `.cxproj` writes the generated C source, header, and

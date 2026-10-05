@@ -2242,6 +2242,20 @@ public sealed class SemanticBinder
         }
 
         var targetType = BindExpression(memberAccess.Target, function, imports, scope);
+        if (UnwrapConst(targetType) is ArrayType && memberAccess.MemberName == "Length")
+        {
+            var arrayLength = new PropertySymbol(
+                "cxcore",
+                new QualifiedIdentifier("System", "Array", "Length"),
+                targetType,
+                ClassType.Class,
+                BuiltInSystemTypes.UInt,
+                false,
+                [new PropertyAccessorSymbol("get", true, [])]);
+            memberAccess.BindProperty(arrayLength, arrayLength.Accessors[0]);
+            return arrayLength.Type;
+        }
+
         var targetClass = GetMemberClassDeclaration(targetType);
         var field = targetClass is null
             ? _fields

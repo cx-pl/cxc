@@ -1,4 +1,5 @@
 using CxCompiler.Model.Project;
+using CxCompiler.Model.Errors;
 using CxCompiler.OutputGenerators;
 using CxCompiler.Semantics;
 
@@ -26,6 +27,39 @@ public sealed class CCodeOutputGeneratorTests
         Assert.Contains(
             "CX_ID_4(cxcore, System, Console, WriteLine)(&CX_ID_2(unnamed, __string_",
             generatedSource);
+    }
+
+    [Fact]
+    [Trait("Area", "Lowering")]
+    public void EmitsNativeMainWrapperForCxStringArrayArguments()
+    {
+        var generatedSource = GenerateSource("""
+            public uint Count(string[] args) {
+                return args.Length;
+            }
+
+            public int Main(string[] args) {
+                return 0;
+            }
+            """);
+
+        Assert.Contains("int wmain(int argc, wchar_t **argv)", generatedSource);
+        Assert.Contains("int main(int argc, char **argv)", generatedSource);
+        Assert.Contains("cx_array_new(__cx_argument_count", generatedSource);
+        Assert.Contains("CX_ID_5(cxcore, System, String, __constructor, _2)", generatedSource);
+        Assert.Contains("CX_ID_5(cxcore, System, Array, Length, __const_get)(args)", generatedSource);
+        Assert.Contains("CX_ID_2(unnamed, Main)(__cx_arguments)", generatedSource);
+        Assert.Contains("return (int)CX_ID_2(unnamed, Main)(__cx_arguments);", generatedSource);
+    }
+
+    [Fact]
+    [Trait("Area", "NegativeDiagnostics")]
+    public void RejectsUnsupportedNativeMainSignature()
+    {
+        var exception = Assert.Throws<CompilationErrorException>(
+            () => GenerateSource("public int Main(string argument) { return 0; }"));
+
+        Assert.Contains("must be a non-generic top-level function", exception.Message);
     }
 
     [Fact]

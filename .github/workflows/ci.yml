@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  conformance:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [msvc, clang]
+    steps:
+      - name: Check out cxc
+        uses: actions/checkout@v4
+        with:
+          path: cxc
+
+      - name: Check out cxcore
+        uses: actions/checkout@v4
+        with:
+          repository: cx-pl/cxcore
+          path: cxcore
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Run compiler tests
+        working-directory: cxc
+        run: dotnet test tests/CxCompiler.Tests/CxCompiler.Tests.csproj --configuration Release
+
+      - name: Locate Clang and Ninja
+        if: matrix.compiler == 'clang'
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products Microsoft.VisualStudio.Product.Enterprise,Microsoft.VisualStudio.Product.Professional,Microsoft.VisualStudio.Product.Community,Microsoft.VisualStudio.Product.BuildTools -property installationPath
+          $clangCandidates = @(
+            (Join-Path $vs 'VC\Tools\Llvm\x64\bin\clang.exe'),
+            (Join-Path $vs 'VC\Tools\Llvm\bin\clang.exe')
+          )
+          $clang = $clangCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $clang) { throw 'Clang is not installed in the selected Visual Studio instance.' }
+          "CLANG=$clang" >> $env:GITHUB_ENV
+
+          $ninjaDirectory = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja'
+          if (-not (Test-Path -LiteralPath (Join-Path $ninjaDirectory 'ninja.exe'))) {
+            throw 'Ninja is not installed in the selected Visual Studio instance.'
+          }
+          $ninjaDirectory >> $env:GITHUB_PATH
+
+      - name: Run native conformance with MSVC
+        if: matrix.compiler == 'msvc'
+        working-directory: cxc
+        run: >-
+          .\tests\native\run-entry-point-e2e.ps1
+          -Cxc .\src\bin\Release\net10.0\CxCompiler.dll
+          -CxCoreDir ..\cxcore
+          -Generator 'Visual Studio 17 2022'
+
+      - name: Run native conformance with Clang
+        if: matrix.compiler == 'clang'
+        working-directory: cxc
+        shell: pwsh
+        run: |
+          .\tests\native\run-entry-point-e2e.ps1 `
+            -Cxc .\src\bin\Release\net10.0\CxCompiler.dll `
+            -CxCoreDir ..\cxcore `
+            -Generator Ninja `
+            -CCompiler $env:CLANG
