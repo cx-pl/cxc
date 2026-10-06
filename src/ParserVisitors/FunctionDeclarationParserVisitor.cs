@@ -23,22 +23,25 @@ public class FunctionDeclarationParserVisitor : CxParserBaseVisitor<FunctionDecl
             new TypeNameContextVisitor().Visit(context.returnType));
         var memberModifiers = new MemberModifiersParserVisitor().Visit(context.memberModifiers());
 
+        var operatorToken = OperatorNames.GetToken(context.name.Text);
         _functionDeclaration = new FunctionDeclaration(
-            context.name.Text,
+            operatorToken is null ? context.name.Text : OperatorNames.GetDeclarationName(operatorToken),
             _namespace,
             returnType,
             memberModifiers,
             _parentClassDeclaration,
             context.Const() != null,
             new GenericParamsParserVisitor().VisitGenericTypeParameters(
-                context.genericTypeParameters())).WithSourceSpan(context);
+                context.genericTypeParameters()),
+            operatorToken).WithSourceSpan(context);
 
         base.VisitChildren(context);
 
         var functionBody = context.functionBody();
         if (functionBody.LeftBrace() is not null)
         {
-            _functionDeclaration.SetBody(StatementParserVisitor.ParseStatements(functionBody.statements()));
+            _functionDeclaration.SetBody(
+                StatementParserVisitor.ParseStatements(functionBody.statements(), _namespace));
         }
 
         return _functionDeclaration;

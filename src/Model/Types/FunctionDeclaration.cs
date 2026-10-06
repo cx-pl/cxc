@@ -16,6 +16,9 @@ public class FunctionDeclaration : DeclarationBase
 
     public bool Const { get; }
 
+    public string? OperatorToken { get; }
+    public string? LocalCName { get; private set; }
+
     public bool IsStatic => ParentClassDeclaration is null || MemberModifiers.Contains(MemberModifier.Static);
 
     public ClassDeclaration? ParentClassDeclaration { get; }
@@ -29,7 +32,8 @@ public class FunctionDeclaration : DeclarationBase
         string name, QualifiedIdentifier @namespace, TypeBase returnType,
         MemberModifier[] memberModifiers, ClassDeclaration? parentClassDeclaration,
         bool @const = false,
-        string[]? genericTypeNames = null)
+        string[]? genericTypeNames = null,
+        string? operatorToken = null)
         : base("function", @namespace, name)
     {
         ReturnType = returnType;
@@ -37,6 +41,7 @@ public class FunctionDeclaration : DeclarationBase
         ParentClassDeclaration = parentClassDeclaration;
         Const = @const;
         GenericTypeNames = genericTypeNames ?? [];
+        OperatorToken = operatorToken;
     }
 
     public void AddParameter(FunctionParameter parameter)
@@ -47,6 +52,11 @@ public class FunctionDeclaration : DeclarationBase
     public void SetBody(IReadOnlyList<StatementBase> body)
     {
         Body = body;
+    }
+
+    public void SetLocalCName(string cName)
+    {
+        LocalCName = cName;
     }
 
     public void BindVirtualSlot(int slotIndex, FunctionDeclaration contract)

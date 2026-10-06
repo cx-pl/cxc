@@ -207,7 +207,11 @@ statement
 
 declarationStatement
     : localVariableDeclarationStatement
-    // TODO: | localFunctionDeclarationStatement
+    | localFunctionDeclarationStatement
+    ;
+
+localFunctionDeclarationStatement
+    : functionDeclaration
     ;
 
 localVariableDeclarationStatement
@@ -449,10 +453,19 @@ primaryExpression
             memberAccess
             | functionInvocation
             | genericFunctionInvocation
+            | switchExpression
             | PlusPlus
             | MinusMinus
         ) arrayExpression*
     )*
+    ;
+
+switchExpression
+    : Switch LeftBrace switchExpressionArm (Comma switchExpressionArm)* Comma? RightBrace
+    ;
+
+switchExpressionArm
+    : expression switchLabelFilter? Arrow expression
     ;
 
 primaryExpressionStart
@@ -529,7 +542,15 @@ typeName
     | Const? namedType = qualifiedIdentifier namedTypeGenericArguments = genericTypeArguments? arrayDimension* Question?
     | autoVarType = Var
     | autoConstType = Const
-    // TODO: functionType
+    | functionType arrayDimension* Question?
+    ;
+
+functionType
+    : Delegate LeftParen functionTypeParameters? RightParen Arrow typeNameOrVoid
+    ;
+
+functionTypeParameters
+    : typeName (Comma typeName)*
     ;
 
 arrayDimension

@@ -8,7 +8,16 @@ namespace CxCompiler.ParserVisitors;
 
 public sealed class StatementParserVisitor : CxParserBaseVisitor<StatementBase>
 {
-    public static IReadOnlyList<StatementBase> ParseStatements(CxParser.StatementsContext? context)
+    private readonly QualifiedIdentifier _namespace;
+
+    public StatementParserVisitor(QualifiedIdentifier? @namespace = null)
+    {
+        _namespace = @namespace ?? QualifiedIdentifier.Empty;
+    }
+
+    public static IReadOnlyList<StatementBase> ParseStatements(
+        CxParser.StatementsContext? context,
+        QualifiedIdentifier? @namespace = null)
     {
         if (context is null)
         {
@@ -16,7 +25,7 @@ public sealed class StatementParserVisitor : CxParserBaseVisitor<StatementBase>
         }
 
         var statements = new List<StatementBase>();
-        AddStatements(context, statements);
+        new StatementParserVisitor(@namespace).AddStatements(context, statements);
         return statements;
     }
 
@@ -49,6 +58,21 @@ public sealed class StatementParserVisitor : CxParserBaseVisitor<StatementBase>
     {
         return ParseLocalVariableDeclaration(context.localVariableDeclaration())
             .WithSourceSpan(context);
+    }
+
+    public override StatementBase VisitLocalFunctionDeclarationStatement(
+        [NotNull] CxParser.LocalFunctionDeclarationStatementContext context)
+    {
+        var function = new FunctionDeclarationParserVisitor(
+            _namespace,
+            null).Visit(context.functionDeclaration());
+        var location = function.SourceSpan!.Value;
+        var pathHash = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(location.FilePath)))[..10];
+        function.SetLocalCName(
+            $"__cx_local_{pathHash}_{location.StartLine}_{location.StartColumn}_{function.Name}");
+        return new LocalFunctionDeclarationStatement(function).WithSourceSpan(context);
     }
 
     public override StatementBase VisitIfStatement([NotNull] CxParser.IfStatementContext context)
@@ -156,14 +180,14 @@ public sealed class StatementParserVisitor : CxParserBaseVisitor<StatementBase>
         return new LocalVariableDeclarationStatement(type, declarators).WithSourceSpan(declaration);
     }
 
-    private static SwitchSection ParseSwitchSection(CxParser.SwitchSectionContext context)
+    private SwitchSection ParseSwitchSection(CxParser.SwitchSectionContext context)
     {
         var labels = context.switchLabel().Select(label => new SwitchLabel(
             label.expression() is { } value ? ParseExpression(value) : null,
             label.switchLabelFilter()?.expression() is { } filter
                 ? ParseExpression(filter)
                 : null)).ToArray();
-        return new SwitchSection(labels, ParseStatements(context.statements()));
+        return new SwitchSection(labels, ParseStatements(context.statements(), _namespace));
     }
 
     private static ExpressionBase ParseExpression(
@@ -176,7 +200,7 @@ public sealed class StatementParserVisitor : CxParserBaseVisitor<StatementBase>
     {
         if (context.LeftBrace() is not null)
         {
-            return new BlockStatement(ParseStatements(context.statements())).WithSourceSpan(context);
+            return new BlockStatement(ParseStatements(context.statements(), _namespace)).WithSourceSpan(context);
         }
         if (context.Semicolon() is not null)
         {
@@ -186,7 +210,7 @@ public sealed class StatementParserVisitor : CxParserBaseVisitor<StatementBase>
         return base.VisitEmbeddedStatement(context);
     }
 
-    private static void AddStatements(
+    private void AddStatements(
         CxParser.StatementsContext context,
         ICollection<StatementBase> statements)
     {
@@ -195,7 +219,7 @@ public sealed class StatementParserVisitor : CxParserBaseVisitor<StatementBase>
             AddStatements(precedingStatements, statements);
         }
 
-        statements.Add(new StatementParserVisitor().Visit(context.statement()));
+        statements.Add(Visit(context.statement()));
     }
 
     private static void AddDeclarators(

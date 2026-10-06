@@ -414,6 +414,7 @@ public static partial class CCodeOutputGenerator
             writer.WriteLine($"struct {instance.Type.ConstructedIdentity!.CIdentifier};");
         }
         writer.WriteLine();
+        WriteFunctionTypeDeclarations(writer, declarations);
 
         writer.WriteLine("//");
         writer.WriteLine("// Type declarations");
@@ -3007,6 +3008,11 @@ public static partial class CCodeOutputGenerator
 
     private static string ToCIdentifier(this FunctionDeclaration functionDeclaration, string moduleName, int nameOverrideIndex)
     {
+        if (functionDeclaration.LocalCName is { } localCName)
+        {
+            return $"{functionDeclaration.ReturnType.ToCReturnType(false)} " +
+                new QualifiedIdentifier(moduleName, localCName).ToCIdentifier();
+        }
         var name = nameOverrideIndex > 1
             ? new QualifiedIdentifier(functionDeclaration.FullName, $"_{nameOverrideIndex}")
             : functionDeclaration.FullName;
@@ -3089,7 +3095,7 @@ public static partial class CCodeOutputGenerator
             StringType => $"{constString}struct CX_ID_3(cxcore, System, String)*",
             PtrType => $"{constString}cx_ptr",
 
-            FunctionType => throw new NotImplementedException(), // TODO
+            FunctionType functionType => GetFunctionTypeCIdentifier(functionType),
             VoidType => "void",
             NullType => "cx_ptr",
 
@@ -3132,6 +3138,14 @@ public static partial class CCodeOutputGenerator
         }
 
         return typeBase.ToCIdentifier(@const);
+    }
+
+    private static string GetFunctionTypeCIdentifier(FunctionType functionType)
+    {
+        var signature = $"{functionType.ReturnType.ToCReturnType(false)}(" +
+            string.Join(",", functionType.ParameterTypes.Select(ToCParameterType)) + ")";
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(signature)));
+        return $"CX_FN_{hash[..16]}";
     }
 
     private static string ToCParameterType(TypeBase typeBase)

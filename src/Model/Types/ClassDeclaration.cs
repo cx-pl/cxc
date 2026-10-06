@@ -115,6 +115,21 @@ public class ClassDeclaration : DeclarationBase
         _baseTypes.Add(baseType);
     }
 
+    public void MergePartialDeclaration(ClassDeclaration declaration)
+    {
+        if (!IsPartial || !declaration.IsPartial || ClassType != declaration.ClassType ||
+            !GenericTypeNames.SequenceEqual(declaration.GenericTypeNames, StringComparer.Ordinal) ||
+            CustomClassTypeName != declaration.CustomClassTypeName ||
+            Visibility != declaration.Visibility || IsAbstract != declaration.IsAbstract ||
+            IsFinal != declaration.IsFinal || IsStatic != declaration.IsStatic)
+        {
+            throw new ArgumentException("The class declaration is not compatible with this partial type.", nameof(declaration));
+        }
+
+        _baseTypes.AddRange(declaration._baseTypes);
+        MemberDeclarations.AddDeclarations(declaration.MemberDeclarations.Declarations.ToArray());
+    }
+
     public void SetBaseClass(TypeBase baseType, ClassDeclaration? declaration)
     {
         BaseClassType = baseType;

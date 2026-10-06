@@ -29,7 +29,6 @@ public static class BuiltInSystemTypes
     public static readonly NamedType Exception = new NamedType("Exception", []);
     public static readonly PtrType Ptr = new PtrType(SystemNamespace);
 
-    public static readonly FunctionType Function = new FunctionType(SystemNamespace);
     public static readonly VoidType Void = new VoidType(SystemNamespace);
     public static readonly NullType Null = new NullType();
 }

@@ -8,6 +8,7 @@ public sealed class InvocationExpression : ExpressionBase
     public IReadOnlyList<ExpressionBase> Arguments { get; }
     public IReadOnlyList<CxCompiler.Model.Types.TypeBase> ExplicitTypeArguments { get; }
     public FunctionSymbol? TargetSymbol { get; private set; }
+    public CxCompiler.Model.Types.BuiltInTypes.FunctionType? FunctionType { get; private set; }
     public ExpressionBase? Receiver { get; private set; }
     public int ReceiverBaseDepth { get; private set; }
     public int? DispatchSlotIndex { get; private set; }
@@ -35,5 +36,11 @@ public sealed class InvocationExpression : ExpressionBase
         ReceiverBaseDepth = receiverBaseDepth;
         DispatchSlotIndex = dispatchSlotIndex;
         ReceiverTemporaryName = receiverTemporaryName;
+    }
+
+    public void BindFunctionType(
+        CxCompiler.Model.Types.BuiltInTypes.FunctionType functionType)
+    {
+        FunctionType = functionType;
     }
 }

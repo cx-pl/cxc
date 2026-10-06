@@ -34,6 +34,11 @@ public class DeclarationScope
         _declarations.AddRange(declarations);
     }
 
+    public bool RemoveDeclaration(DeclarationBase declaration)
+    {
+        return _declarations.Remove(declaration);
+    }
+
     public IReadOnlyList<DeclarationBase> FindDeclarations(string name, bool searchInParent = true)
     {
         var declarations = _declarations

@@ -24,6 +24,8 @@ public sealed class SemanticBinder
     private int _objectCreationIndex;
     private int _propertyAssignmentIndex;
     private int _interfaceReceiverIndex;
+    private int _operatorTemporaryIndex;
+    private int _switchTemporaryIndex;
 
     public void Bind(CxProject project)
     {
@@ -36,9 +38,11 @@ public sealed class SemanticBinder
         _fields.Clear();
         _properties.Clear();
         _enums.Clear();
+        _operatorTemporaryIndex = 0;
+        _switchTemporaryIndex = 0;
         AddCoreSymbols();
 
-        ValidatePartialTypeDeclarations(project.CompilationContexts);
+        MergePartialTypeDeclarations(project.CompilationContexts);
         ValidateProjectReferenceTypeConflicts(project.CompilationContexts);
 
         foreach (var context in project.CompilationContexts)
@@ -94,41 +98,62 @@ public sealed class SemanticBinder
         ValidateConstructorInitializerCycles();
     }
 
-    private static void ValidatePartialTypeDeclarations(
+    private static void MergePartialTypeDeclarations(
         IReadOnlyList<CompilationContext> contexts)
     {
-        var duplicateTypes = contexts
-            .SelectMany(context => EnumerateClasses(context.DeclarationScope.Declarations)
-                .Select(declaration => (Module: context.ProjectName, Declaration: declaration)))
-            .GroupBy(item => (item.Module, item.Declaration.FullName))
-            .Where(group => group.Count() > 1);
-
-        foreach (var group in duplicateTypes)
+        // Merge from the outermost types inward. Merging an outer partial declaration can
+        // expose nested partial declarations that were previously in separate member scopes.
+        while (true)
         {
-            var declarations = group.Select(item => item.Declaration).ToArray();
-            if (declarations.Any(declaration => !declaration.IsPartial))
+            var duplicateTypes = contexts
+                .SelectMany(context => EnumerateClasses(context.DeclarationScope.Declarations)
+                    .Select(declaration => (Module: context.ProjectName, Declaration: declaration)))
+                .GroupBy(item => (item.Module, item.Declaration.FullName))
+                .Where(group => group.Count() > 1)
+                .ToArray();
+            if (duplicateTypes.Length == 0)
             {
-                throw new CompilationErrorException(
-                    $"Type '{group.Key.FullName}' is declared more than once; every declaration " +
-                    "must be partial to share a type name.",
-                    declarations[^1].SourceSpan);
+                return;
             }
 
-            var first = declarations[0];
-            if (declarations.Any(declaration => declaration.ClassType != first.ClassType ||
-                !declaration.GenericTypeNames.SequenceEqual(
-                    first.GenericTypeNames, StringComparer.Ordinal)))
+            foreach (var group in duplicateTypes)
             {
-                throw new CompilationErrorException(
-                    $"Partial declarations of type '{group.Key.FullName}' have conflicting " +
-                    "kind or generic parameters.",
-                    declarations[^1].SourceSpan);
-            }
+                var declarations = group.Select(item => item.Declaration).ToArray();
+                if (declarations.Any(declaration => !declaration.IsPartial))
+                {
+                    throw new CompilationErrorException(
+                        $"Type '{group.Key.FullName}' is declared more than once; every declaration " +
+                        "must be partial to share a type name.",
+                        declarations[^1].SourceSpan);
+                }
 
-            throw new CompilationErrorException(
-                $"Partial declarations of type '{group.Key.FullName}' cannot yet be merged; " +
-                "declare the type once.",
-                declarations[^1].SourceSpan);
+                var first = declarations[0];
+                if (declarations.Any(declaration => declaration.ClassType != first.ClassType ||
+                    !declaration.GenericTypeNames.SequenceEqual(
+                        first.GenericTypeNames, StringComparer.Ordinal)))
+                {
+                    throw new CompilationErrorException(
+                        $"Partial declarations of type '{group.Key.FullName}' have conflicting " +
+                        "kind or generic parameters.",
+                        declarations[^1].SourceSpan);
+                }
+
+                foreach (var declaration in declarations.Skip(1))
+                {
+                    try
+                    {
+                        first.MergePartialDeclaration(declaration);
+                    }
+                    catch (ArgumentException)
+                    {
+                        throw new CompilationErrorException(
+                            $"Partial declarations of type '{group.Key.FullName}' have conflicting " +
+                            "modifiers or base type declarations.",
+                            declaration.SourceSpan);
+                    }
+                    declaration.MemberDeclarations.Parent?.RemoveDeclaration(declaration);
+                }
+            }
         }
     }
 
@@ -220,9 +245,50 @@ public sealed class SemanticBinder
                         parameter.ParameterType = GenericTypeSubstitution.BindParameters(
                             parameter.ParameterType, functionParameters);
                     }
+                    if (function.OperatorToken is not null)
+                    {
+                        ValidateOperatorDeclaration(function);
+                    }
                     ValidateGenericFunctionShape(function);
                     break;
             }
+        }
+    }
+
+    private static void ValidateOperatorDeclaration(FunctionDeclaration function)
+    {
+        var token = function.OperatorToken!;
+        var typeName = function.ParentClassDeclaration?.FullName.ToString() ?? "<global>";
+        var memberName = $"operator {token}";
+        if (!OperatorNames.IsSupported(token) ||
+            function.ParentClassDeclaration is not { ClassType: ClassType.Class or ClassType.Struct } ||
+            function.IsStatic || function.GenericTypeNames.Length > 0 ||
+            function.ParentClassDeclaration.GenericTypeNames.Length > 0 ||
+            function.MemberModifiers.Any(modifier =>
+                modifier is MemberModifier.Virtual or MemberModifier.Override or MemberModifier.Abstract) ||
+            function.Body is null)
+        {
+            throw new CompilationErrorException(
+                $"Operator '{memberName}' on '{typeName}' must be a non-static, non-generic " +
+                "class or struct member with a body.");
+        }
+
+        var isIncrement = token is "++" or "--";
+        var isCompound = token.EndsWith('=') && token is not ("==" or "!=" or "<=" or ">=");
+        var isBinary = token is "+" or "-" or "*" or "/" or "%" or "&" or "|" or "^" or
+            "<<" or ">>" or "==" or "!=" or "<" or "<=" or ">" or ">=";
+        var expectedParameters = isBinary || isCompound ? 1 : 0;
+        var allowsUnaryOrBinaryForm = token is "+" or "-";
+        if ((!allowsUnaryOrBinaryForm && function.Parameters.Count != expectedParameters) ||
+            allowsUnaryOrBinaryForm && function.Parameters.Count is not (0 or 1) ||
+            isIncrement && (function.ReturnType is not VoidType || function.Const) ||
+            isCompound && (function.ReturnType is not VoidType || function.Const) ||
+            !isIncrement && !isCompound && function.ReturnType is VoidType ||
+            (token is "==" or "!=" or "<" or "<=" or ">" or ">=") &&
+                !IsType(function.ReturnType, BuiltInSystemTypes.Bool))
+        {
+            throw new CompilationErrorException(
+                $"Operator '{memberName}' on '{typeName}' has an invalid signature.");
         }
     }
 
@@ -488,6 +554,10 @@ public sealed class SemanticBinder
                 nullable.UnderlyingType, genericTypeNames),
             NamedType named => named.TypeArguments.Any(argument =>
                 ContainsFunctionTypeParameter(argument, genericTypeNames)),
+            FunctionType function => ContainsFunctionTypeParameter(
+                    function.ReturnType, genericTypeNames) ||
+                function.ParameterTypes.Any(parameter =>
+                    ContainsFunctionTypeParameter(parameter, genericTypeNames)),
             _ => false,
         };
 
@@ -1402,11 +1472,13 @@ public sealed class SemanticBinder
 
     private void BindFunction(
         FunctionDeclaration function,
-        IReadOnlyList<QualifiedIdentifier> imports)
+        IReadOnlyList<QualifiedIdentifier> imports,
+        FunctionSymbol? localFunctionSymbol = null,
+        IReadOnlyList<(string Name, FunctionSymbol Symbol)>? visibleLocalFunctions = null)
     {
         try
         {
-            BindFunctionCore(function, imports);
+            BindFunctionCore(function, imports, localFunctionSymbol, visibleLocalFunctions);
         }
         catch (CompilationErrorException exception) when (
             exception.SourceSpan is null && function.SourceSpan is not null)
@@ -1417,7 +1489,9 @@ public sealed class SemanticBinder
 
     private void BindFunctionCore(
         FunctionDeclaration function,
-        IReadOnlyList<QualifiedIdentifier> imports)
+        IReadOnlyList<QualifiedIdentifier> imports,
+        FunctionSymbol? localFunctionSymbol,
+        IReadOnlyList<(string Name, FunctionSymbol Symbol)>? visibleLocalFunctions)
     {
         if (function.Body is null)
         {
@@ -1437,6 +1511,20 @@ public sealed class SemanticBinder
             {
                 throw new CompilationErrorException(
                     $"Parameter '{parameter.Name}' is already declared in function '{function.FullName}'.");
+            }
+        }
+        if (localFunctionSymbol is not null &&
+            !scope.TryDeclareFunction(function.Name, localFunctionSymbol))
+        {
+            throw new CompilationErrorException(
+                $"Local function '{function.Name}' conflicts with a parameter in its body.");
+        }
+        foreach (var (name, symbol) in visibleLocalFunctions ?? [])
+        {
+            if (name != function.Name && !scope.TryDeclareFunction(name, symbol))
+            {
+                throw new CompilationErrorException(
+                    $"Local function '{name}' conflicts with a parameter in '{function.Name}'.");
             }
         }
 
@@ -1651,6 +1739,10 @@ public sealed class SemanticBinder
         IReadOnlyList<QualifiedIdentifier> imports,
         LocalScope scope)
     {
+        foreach (var localFunction in statements.OfType<LocalFunctionDeclarationStatement>())
+        {
+            DeclareLocalFunction(localFunction, function, imports, scope);
+        }
         foreach (var statement in statements)
         {
             BindStatement(statement, function, imports, scope);
@@ -1677,6 +1769,15 @@ public sealed class SemanticBinder
 
                 case LocalVariableDeclarationStatement declarationStatement:
                     BindLocalDeclaration(declarationStatement, function, imports, scope);
+                    break;
+
+                case LocalFunctionDeclarationStatement localFunction:
+                    BindFunction(
+                        localFunction.Function,
+                        imports,
+                        localFunction.Symbol ?? throw new InternalCompilerException(
+                            "Local function symbol was not declared before binding."),
+                        scope.GetVisibleFunctions());
                     break;
 
                 case BlockStatement blockStatement:
@@ -1765,6 +1866,50 @@ public sealed class SemanticBinder
         }
     }
 
+    private void DeclareLocalFunction(
+        LocalFunctionDeclarationStatement statement,
+        FunctionDeclaration enclosingFunction,
+        IReadOnlyList<QualifiedIdentifier> imports,
+        LocalScope scope)
+    {
+        var declaration = statement.Function;
+        var currentNamespace = enclosingFunction.ParentClassDeclaration?.Namespace ??
+            enclosingFunction.Namespace;
+        if (declaration.GenericTypeNames.Length != 0)
+        {
+            throw new CompilationErrorException(
+                $"Generic local function '{declaration.Name}' is not supported yet.",
+                declaration.SourceSpan);
+        }
+        ResolveTypeReference(declaration.ReturnType, currentNamespace, imports);
+        foreach (var parameter in declaration.Parameters)
+        {
+            ResolveTypeReference(parameter.ParameterType, currentNamespace, imports);
+        }
+        if (declaration.MemberModifiers.Length != 0)
+        {
+            throw new CompilationErrorException(
+                $"Local function '{declaration.Name}' cannot have member modifiers.",
+                declaration.SourceSpan);
+        }
+        var cName = declaration.LocalCName ?? throw new InternalCompilerException(
+            "Local function has no generated C name.");
+        var symbol = new FunctionSymbol(
+            enclosingFunction.ParentClassDeclaration?.ProjectName ??
+                enclosingFunction.Namespace.Parts.FirstOrDefault() ?? _project!.Name,
+            new QualifiedIdentifier(cName),
+            declaration.Parameters.Select(parameter => parameter.ParameterType).ToArray(),
+            declaration.ReturnType,
+            declaration: declaration);
+        if (!scope.TryDeclareFunction(declaration.Name, symbol))
+        {
+            throw new CompilationErrorException(
+                $"Local function '{declaration.Name}' is already declared in this scope.",
+                declaration.SourceSpan);
+        }
+        statement.BindSymbol(symbol);
+    }
+
     private void BindLoopBody(
         StatementBase statement,
         FunctionDeclaration function,
@@ -1815,6 +1960,16 @@ public sealed class SemanticBinder
                 $"Switch expression type '{GetTypeName(selectorType)}' is not supported.");
         }
 
+        if (IsStringSwitchType(selectorType) ||
+            statement.Sections.SelectMany(section => section.Labels)
+                .Any(label => label.Filter is not null))
+        {
+            var temporaryIndex = ++_switchTemporaryIndex;
+            statement.BindTemporaries(
+                $"__cx_switch_selector_{temporaryIndex}",
+                $"__cx_switch_case_{temporaryIndex}");
+        }
+
         var hasDefault = false;
         var caseValues = new HashSet<string>(StringComparer.Ordinal);
         foreach (var label in statement.Sections.SelectMany(section => section.Labels))
@@ -1828,10 +1983,6 @@ public sealed class SemanticBinder
                 hasDefault = true;
                 continue;
             }
-            if (label.Filter is not null)
-            {
-                throw new CompilationErrorException("Switch case filters are not supported yet.");
-            }
             var labelType = BindExpression(label.Value!, function, imports, scope);
             var caseValue = label.Value switch
             {
@@ -1841,16 +1992,28 @@ public sealed class SemanticBinder
                 _ => throw new CompilationErrorException(
                     "Switch case labels must be literals or enum members."),
             };
-            if (!IsType(selectorType, labelType))
+            var isNullStringLabel = label.Value is LiteralExpression { SourceText: "null" } &&
+                IsStringSwitchType(selectorType);
+            if (!isNullStringLabel && !IsType(selectorType, labelType))
             {
                 throw new CompilationErrorException(
                     $"Switch case type '{GetTypeName(labelType)}' does not match " +
                     $"selector type '{GetTypeName(selectorType)}'.");
             }
-            if (!caseValues.Add(caseValue))
+            var identity = $"{GetTypeName(labelType)}:{caseValue}";
+            if (label.Filter is null && !caseValues.Add(identity))
             {
                 throw new CompilationErrorException(
                     $"Switch case label '{caseValue}' is duplicated.");
+            }
+            if (label.Filter is not null)
+            {
+                var filterType = BindExpression(label.Filter, function, imports, scope);
+                if (!IsType(filterType, BuiltInSystemTypes.Bool))
+                {
+                    throw new CompilationErrorException(
+                        $"Switch case filter must have type 'System.Bool', but found '{GetTypeName(filterType)}'.");
+                }
             }
         }
 
@@ -1866,6 +2029,127 @@ public sealed class SemanticBinder
         {
             _breakableDepth--;
         }
+    }
+
+    private TypeBase BindSwitchExpression(
+        SwitchExpression expression,
+        FunctionDeclaration function,
+        IReadOnlyList<QualifiedIdentifier> imports,
+        LocalScope scope)
+    {
+        var selectorType = BindExpression(expression.Selector, function, imports, scope);
+        if (!IsSwitchType(selectorType))
+        {
+            throw new CompilationErrorException(
+                $"Switch expression type '{GetTypeName(selectorType)}' is not supported.");
+        }
+
+        var hasDefault = false;
+        var caseValues = new HashSet<string>(StringComparer.Ordinal);
+        var valueTypes = new List<TypeBase>(expression.Arms.Count);
+        for (var index = 0; index < expression.Arms.Count; index++)
+        {
+            var arm = expression.Arms[index];
+            if (arm.IsDefault)
+            {
+                if (hasDefault || arm.Filter is not null || index != expression.Arms.Count - 1)
+                {
+                    throw new CompilationErrorException(
+                        "A switch expression must have one unfiltered discard arm, and it must be last.");
+                }
+                hasDefault = true;
+            }
+            else
+            {
+                var labelType = BindExpression(arm.Label!, function, imports, scope);
+                var caseValue = arm.Label switch
+                {
+                    LiteralExpression literal => literal.SourceText,
+                    MemberAccessExpression { TargetEnumMember: not null } memberAccess =>
+                        memberAccess.TargetEnumMember.Declaration.FullName.ToString(),
+                    _ => throw new CompilationErrorException(
+                        "Switch expression labels must be literals, enum members, or '_'."),
+                };
+                var isNullStringLabel = arm.Label is LiteralExpression { SourceText: "null" } &&
+                    IsStringSwitchType(selectorType);
+                if (!isNullStringLabel && !IsType(selectorType, labelType))
+                {
+                    throw new CompilationErrorException(
+                        $"Switch case type '{GetTypeName(labelType)}' does not match " +
+                        $"selector type '{GetTypeName(selectorType)}'.");
+                }
+                var identity = $"{GetTypeName(labelType)}:{caseValue}";
+                if (arm.Filter is null && !caseValues.Add(identity))
+                {
+                    throw new CompilationErrorException(
+                        $"Switch case label '{caseValue}' is duplicated.");
+                }
+            }
+
+            if (arm.Filter is not null)
+            {
+                var filterType = BindExpression(arm.Filter, function, imports, scope);
+                if (!IsType(filterType, BuiltInSystemTypes.Bool))
+                {
+                    throw new CompilationErrorException(
+                        $"Switch case filter must have type 'System.Bool', but found '{GetTypeName(filterType)}'.");
+                }
+            }
+            valueTypes.Add(BindExpression(arm.Value, function, imports, scope));
+        }
+
+        if (!hasDefault)
+        {
+            throw new CompilationErrorException(
+                "A switch expression must end with an unfiltered discard arm '_'.");
+        }
+
+        TypeBase? resultType = null;
+        foreach (var valueType in valueTypes)
+        {
+            if (resultType is null || resultType is NullType && IsNullAssignable(valueType))
+            {
+                resultType = valueType;
+            }
+            else if (valueType is NullType && IsNullAssignable(resultType))
+            {
+                continue;
+            }
+            else if (CanAssign(resultType, valueType))
+            {
+                continue;
+            }
+            else if (CanAssign(valueType, resultType))
+            {
+                resultType = valueType;
+            }
+            else
+            {
+                throw new CompilationErrorException(
+                    $"Switch expression arms have incompatible types '{GetTypeName(resultType)}' " +
+                    $"and '{GetTypeName(valueType)}'.");
+            }
+        }
+
+        if (resultType is null or NullType)
+        {
+            throw new CompilationErrorException(
+                "A switch expression must produce a value with a determined type.");
+        }
+        foreach (var arm in expression.Arms)
+        {
+            var armType = arm.Value.InferredType!;
+            if (!CanAssign(resultType, armType))
+            {
+                throw new CompilationErrorException(
+                    $"Switch expression arm type '{GetTypeName(armType)}' cannot convert to " +
+                    $"'{GetTypeName(resultType)}'.");
+            }
+            ApplyContextualType(arm.Value, resultType);
+        }
+
+        expression.BindTemporary($"__cx_switch_value_{++_switchTemporaryIndex}");
+        return resultType;
     }
 
     private void BindCondition(
@@ -2159,7 +2443,7 @@ public sealed class SemanticBinder
                 break;
 
             case IdentifierExpression identifier:
-                type = BindIdentifier(identifier, function, scope);
+                type = BindIdentifier(identifier, function, imports, scope);
                 break;
 
             case ThisExpression:
@@ -2188,6 +2472,10 @@ public sealed class SemanticBinder
 
             case ConditionalExpression conditional:
                 type = BindConditional(conditional, function, imports, scope);
+                break;
+
+            case SwitchExpression switchExpression:
+                type = BindSwitchExpression(switchExpression, function, imports, scope);
                 break;
 
             case NullCoalescingExpression coalescing:
@@ -2226,12 +2514,29 @@ public sealed class SemanticBinder
     private TypeBase BindIdentifier(
         IdentifierExpression identifier,
         FunctionDeclaration function,
+        IReadOnlyList<QualifiedIdentifier> imports,
         LocalScope scope)
     {
         if (identifier.Identifier.Parts.Length == 1 &&
             scope.TryLookup(identifier.Identifier.Parts[0], out var localType))
         {
             return localType;
+        }
+
+        if (identifier.Identifier.Parts.Length == 1 &&
+            scope.TryLookupFunctions(identifier.Identifier.Parts[0], out var localFunctions))
+        {
+            if (localFunctions.Count != 1)
+            {
+                throw new CompilationErrorException(
+                    $"Function value '{identifier.Identifier}' is ambiguous.");
+            }
+            var localSymbol = localFunctions[0];
+            identifier.BindFunctionValue(localSymbol);
+            return new FunctionType(
+                QualifiedIdentifier.Empty,
+                localSymbol.ReturnType,
+                localSymbol.ParameterTypes);
         }
 
         if (identifier.Identifier.Parts.Length == 1 &&
@@ -2279,6 +2584,34 @@ public sealed class SemanticBinder
                     property.IsStatic ? 0 : propertyMatch.Value.BaseDepth);
                 return property.Type;
             }
+        }
+
+        var currentNamespace = function.ParentClassDeclaration?.Namespace ?? function.Namespace;
+        var functions = identifier.Identifier.Parts.Length == 1 &&
+            function.ParentClassDeclaration is { } declaringClass
+            ? FindFunctions(declaringClass, identifier.Identifier.Parts[0])
+                .Where(candidate => candidate.Symbol.Declaration?.IsStatic != false)
+                .ToArray()
+            : FindNamedFunctions(identifier.Identifier, currentNamespace, imports)
+                .Where(candidate => candidate.Symbol.Declaration?.IsStatic != false)
+                .ToArray();
+        functions = functions
+            .Where(candidate => candidate.Symbol.Declaration?.GenericTypeNames.Length is null or 0)
+            .ToArray();
+        if (functions.Length == 1)
+        {
+            var symbol = functions[0].Symbol;
+            identifier.BindFunctionValue(symbol);
+            return new FunctionType(
+                QualifiedIdentifier.Empty,
+                symbol.ReturnType,
+                symbol.ParameterTypes);
+        }
+        if (functions.Length > 1)
+        {
+            throw new CompilationErrorException(
+                $"Function value '{identifier.Identifier}' is ambiguous; select a function " +
+                "with an unambiguous name.");
         }
 
         throw new CompilationErrorException($"Cannot resolve value '{identifier.Identifier}'.");
@@ -2642,6 +2975,28 @@ public sealed class SemanticBinder
             argumentTypes.Add(BindExpression(argument, function, imports, scope));
         }
 
+        if (invocation.Target is IdentifierExpression functionValue &&
+            functionValue.Identifier.Parts.Length == 1 &&
+            scope.TryLookup(functionValue.Identifier.Parts[0], out var functionValueType) &&
+            UnwrapConst(functionValueType) is FunctionType functionType)
+        {
+            if (functionType.ParameterTypes.Count != argumentTypes.Count ||
+                !functionType.ParameterTypes.Zip(argumentTypes)
+                    .All(pair => CanAssign(pair.First, pair.Second)))
+            {
+                throw new CompilationErrorException(
+                    $"Function value '{functionValue.Identifier}' cannot be called with " +
+                    $"({string.Join(", ", argumentTypes.Select(GetTypeName))}).");
+            }
+            BindExpression(functionValue, function, imports, scope);
+            foreach (var pair in invocation.Arguments.Zip(functionType.ParameterTypes))
+            {
+                ApplyContextualType(pair.First, pair.Second);
+            }
+            invocation.BindFunctionType(functionType);
+            return functionType.ReturnType;
+        }
+
         var currentNamespace = function.ParentClassDeclaration?.Namespace ?? function.Namespace;
         foreach (var typeArgument in invocation.ExplicitTypeArguments)
         {
@@ -2652,7 +3007,14 @@ public sealed class SemanticBinder
         IReadOnlyList<(FunctionSymbol Symbol, int BaseDepth)> namedCandidates;
         string sourceDisplay;
 
-        if (invocation.Target is IdentifierExpression identifier &&
+        if (invocation.Target is IdentifierExpression localFunctionTarget &&
+            localFunctionTarget.Identifier.Parts.Length == 1 &&
+            scope.TryLookupFunctions(localFunctionTarget.Identifier.Parts[0], out var localFunctions))
+        {
+            sourceDisplay = localFunctionTarget.Identifier.ToString();
+            namedCandidates = localFunctions.Select(symbol => (symbol, 0)).ToArray();
+        }
+        else if (invocation.Target is IdentifierExpression identifier &&
             identifier.Identifier.Parts.Length == 1 &&
             function.ParentClassDeclaration is { } currentClass)
         {
@@ -3053,6 +3415,34 @@ public sealed class SemanticBinder
             .ToArray();
     }
 
+    private (FunctionSymbol Symbol, int BaseDepth)? FindOperator(
+        TypeBase receiverType,
+        string token,
+        IReadOnlyList<TypeBase> argumentTypes)
+    {
+        var isConstReceiver = receiverType is ConstType;
+        var receiverClass = GetMemberClassDeclaration(receiverType);
+        if (receiverClass is null)
+        {
+            return null;
+        }
+
+        var candidates = FindFunctions(receiverClass, OperatorNames.GetDeclarationName(token))
+            .Where(candidate =>
+                candidate.Symbol.Declaration is { } declaration &&
+                declaration.OperatorToken == token &&
+                !declaration.IsStatic &&
+                (!isConstReceiver || declaration.Const) &&
+                candidate.Symbol.ParameterTypes.Count == argumentTypes.Count &&
+                candidate.Symbol.ParameterTypes.Zip(argumentTypes)
+                    .All(pair => IsType(pair.First, pair.Second)))
+            .OrderBy(candidate => candidate.BaseDepth)
+            .ThenBy(candidate => candidate.Symbol.Declaration!.Const ? 1 : 0)
+            .ToArray();
+
+        return candidates.Length == 0 ? null : candidates[0];
+    }
+
     private static IEnumerable<(ClassDeclaration Declaration, int BaseDepth)>
         EnumerateBaseClasses(ClassDeclaration declaration)
     {
@@ -3256,6 +3646,13 @@ public sealed class SemanticBinder
             case NullableType nullableType:
                 ResolveTypeReference(nullableType.UnderlyingType, currentNamespace, imports);
                 return;
+            case FunctionType functionType:
+                ResolveTypeReference(functionType.ReturnType, currentNamespace, imports);
+                foreach (var parameterType in functionType.ParameterTypes)
+                {
+                    ResolveTypeReference(parameterType, currentNamespace, imports);
+                }
+                return;
             case NamedType namedType:
                 ResolveNamedTypeReference(namedType, currentNamespace, imports);
                 return;
@@ -3354,6 +3751,15 @@ public sealed class SemanticBinder
     {
         var leftType = BindExpression(binary.Left, function, imports, scope);
         var rightType = BindExpression(binary.Right, function, imports, scope);
+        if (FindOperator(leftType, binary.Operator, [rightType]) is { } op)
+        {
+            var receiverType = UnwrapConst(leftType);
+            var temporary = GetMemberClassDeclaration(receiverType)?.ClassType == ClassType.Struct
+                ? $"__cx_operator_receiver_{++_operatorTemporaryIndex}"
+                : null;
+            binary.BindOperator(op.Symbol, op.BaseDepth, temporary);
+            return op.Symbol.ReturnType;
+        }
         return GetBinaryResultType(binary.Operator, leftType, rightType);
     }
 
@@ -3552,6 +3958,23 @@ public sealed class SemanticBinder
             ValidateWritableField(unary.Operand);
         }
 
+        if (FindOperator(operandType, unary.Operator, []) is { } op)
+        {
+            var isMutating = unary.Operator is "++" or "--";
+            var operandClass = GetMemberClassDeclaration(valueType)?.ClassType;
+            var temporary = isMutating
+                ? $"__cx_operator_receiver_{++_operatorTemporaryIndex}"
+                : operandClass == ClassType.Struct
+                    ? $"__cx_operator_value_{++_operatorTemporaryIndex}"
+                    : null;
+            var oldValueTemporary = isMutating && unary.Postfix &&
+                operandClass == ClassType.Struct
+                    ? $"__cx_operator_old_{++_operatorTemporaryIndex}"
+                    : null;
+            unary.BindOperator(op.Symbol, op.BaseDepth, temporary, oldValueTemporary);
+            return isMutating ? operandType : op.Symbol.ReturnType;
+        }
+
         return unary.Operator switch
         {
             "+" or "-" when IsNumeric(valueType) => valueType,
@@ -3602,10 +4025,14 @@ public sealed class SemanticBinder
         }
         else
         {
-            var resultType = GetBinaryResultType(
-                assignment.Operator[..^1],
-                targetType,
-                valueType);
+            var operatorToken = assignment.Operator;
+            if (FindOperator(targetType, operatorToken, [valueType]) is { } op)
+            {
+                assignment.BindOperator(op.Symbol, op.BaseDepth);
+                return BuiltInSystemTypes.Void;
+            }
+
+            var resultType = GetBinaryResultType(operatorToken[..^1], targetType, valueType);
             if (!IsType(resultType, targetType))
             {
                 throw new CompilationErrorException(
@@ -3921,8 +4348,11 @@ public sealed class SemanticBinder
         return IsInteger(type) ||
             IsType(type, BuiltInSystemTypes.Bool) ||
             IsType(type, BuiltInSystemTypes.Char) ||
+            IsStringSwitchType(type) ||
             UnwrapConst(type) is NamedType { ClassType: ClassType.Enum };
     }
+
+    private static bool IsStringSwitchType(TypeBase type) => UnwrapConst(type) is StringType;
 
     private static bool AlwaysReturns(IEnumerable<StatementBase> statements)
     {
@@ -4089,7 +4519,7 @@ public sealed class SemanticBinder
     private static bool IsNullAssignable(TypeBase type)
     {
         type = UnwrapConst(type);
-        return type is NullType or ReferenceTypeBase or ArrayType or NullableType or PtrType ||
+        return type is NullType or ReferenceTypeBase or ArrayType or NullableType or PtrType or FunctionType ||
             type is NamedType { ClassType: ClassType.Class or ClassType.Interface };
     }
 
@@ -4117,6 +4547,12 @@ public sealed class SemanticBinder
                 ApplyContextualType(conditional.WhenTrue, type);
                 ApplyContextualType(conditional.WhenFalse, type);
                 break;
+            case SwitchExpression switchExpression:
+                foreach (var arm in switchExpression.Arms)
+                {
+                    ApplyContextualType(arm.Value, type);
+                }
+                break;
         }
     }
 
@@ -4128,6 +4564,14 @@ public sealed class SemanticBinder
         if (left is ArrayType leftArray && right is ArrayType rightArray)
         {
             return IsType(leftArray.ElementType, rightArray.ElementType);
+        }
+
+        if (left is FunctionType leftFunction && right is FunctionType rightFunction)
+        {
+            return IsType(leftFunction.ReturnType, rightFunction.ReturnType) &&
+                leftFunction.ParameterTypes.Count == rightFunction.ParameterTypes.Count &&
+                leftFunction.ParameterTypes.Zip(rightFunction.ParameterTypes)
+                    .All(pair => IsType(pair.First, pair.Second));
         }
 
         if (left is NamedType leftNamed && right is NamedType rightNamed)
@@ -4400,6 +4844,7 @@ public sealed class SemanticBinder
     {
         private readonly LocalScope? _parent;
         private readonly Dictionary<string, TypeBase> _locals = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, List<FunctionSymbol>> _functions = new(StringComparer.Ordinal);
 
         public LocalScope(LocalScope? parent = null)
         {
@@ -4408,7 +4853,59 @@ public sealed class SemanticBinder
 
         public bool TryDeclare(string name, TypeBase type)
         {
-            return _locals.TryAdd(name, type);
+            return !_functions.ContainsKey(name) && _locals.TryAdd(name, type);
+        }
+
+        public bool TryDeclareFunction(string name, FunctionSymbol symbol)
+        {
+            if (_locals.ContainsKey(name))
+            {
+                return false;
+            }
+            if (!_functions.TryGetValue(name, out var functions))
+            {
+                functions = [];
+                _functions.Add(name, functions);
+            }
+            functions.Add(symbol);
+            return true;
+        }
+
+        public bool TryLookupFunctions(string name, out IReadOnlyList<FunctionSymbol> functions)
+        {
+            if (_functions.TryGetValue(name, out var found))
+            {
+                functions = found;
+                return true;
+            }
+            if (_parent is not null)
+            {
+                return _parent.TryLookupFunctions(name, out functions);
+            }
+            functions = [];
+            return false;
+        }
+
+        public IReadOnlyList<(string Name, FunctionSymbol Symbol)> GetVisibleFunctions()
+        {
+            var result = new Dictionary<string, List<FunctionSymbol>>(StringComparer.Ordinal);
+            if (_parent is not null)
+            {
+                foreach (var (name, symbol) in _parent.GetVisibleFunctions())
+                {
+                    if (!result.TryGetValue(name, out var inherited))
+                    {
+                        inherited = [];
+                        result.Add(name, inherited);
+                    }
+                    inherited.Add(symbol);
+                }
+            }
+            foreach (var (name, symbols) in _functions)
+            {
+                result[name] = symbols.ToList();
+            }
+            return result.SelectMany(item => item.Value.Select(symbol => (item.Key, symbol))).ToArray();
         }
 
         public bool TryLookup(string name, out TypeBase type)

@@ -11,6 +11,7 @@ public sealed class IdentifierExpression : ExpressionBase
     public FieldSymbol? TargetField { get; private set; }
     public PropertySymbol? TargetProperty { get; private set; }
     public PropertyAccessorSymbol? PropertyGetter { get; private set; }
+    public FunctionSymbol? FunctionValueSymbol { get; private set; }
     public int ReceiverBaseDepth { get; private set; }
 
     public IdentifierExpression(QualifiedIdentifier identifier)
@@ -32,5 +33,10 @@ public sealed class IdentifierExpression : ExpressionBase
         TargetProperty = property;
         PropertyGetter = getter;
         ReceiverBaseDepth = receiverBaseDepth;
+    }
+
+    public void BindFunctionValue(FunctionSymbol symbol)
+    {
+        FunctionValueSymbol = symbol;
     }
 }

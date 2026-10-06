@@ -39,12 +39,18 @@ that member. Properties and indexers use `get` and `set` accessors. Structs and
 classes use constructors; constructor initializers can call `this(...)` or
 `base(...)`.
 
-Locals may state their type or use `var` with an initializer. Instance fields
-are initialized to zero unless assigned by a constructor; static fields accept
-literal or zero initialization. Dynamic static initialization and static
-constructor ordering are not implemented. Compatible partial declaration
-merging is also not implemented. A complete declaration list and feature limits
-are enforced by the compiler rather than silently approximated.
+Locals may state their type or use `var` with an initializer. Local functions
+are available inside blocks. They can call each other and recurse, but cannot
+capture local variables or parameters from the containing function. Instance
+fields are initialized to zero unless assigned by a constructor; static fields
+accept literal or zero initialization. Dynamic static initialization and static
+constructor ordering are not implemented.
+
+Compatible `partial` class, struct, and interface declarations merge their
+members into one type. The declarations must agree on kind, generic parameters,
+visibility, and type modifiers. Base types from each declaration are combined;
+the normal inheritance rules still reject conflicting class bases or duplicate
+interfaces.
 
 ## Expressions, conversions, and overloads
 
@@ -53,9 +59,26 @@ unary and binary operators, assignment and compound assignment, conditional
 expressions, `??`, `is`, and explicit `as` casts. `&&`, `||`, `??`, and the
 conditional expression evaluate only the selected operand/branch.
 
-Built-in operators require compatible operand types; user-defined operator
-overloads are not implemented. For mixed numeric operands, the
-compiler chooses a common type when one operand type accepts an implicit numeric
+Built-in operators require compatible operand types. User-defined operators are
+instance methods declared on a class or struct with `operator` followed by the
+operator token. Lookup uses only the left operand's type and requires an exact
+parameter-type match; implicit conversions do not select an overload. Unary
+operators have no explicit parameter, while binary operators have one. `++`
+and `--` have no explicit parameter, return `void`, and mutate the receiver;
+prefix expressions produce the updated value and postfix expressions produce
+the previous value for structs. Compound assignment operators such as `+=`
+have one explicit parameter, return `void`, and cannot be chained. Equality
+and comparison overloads return `bool`. Operator extension methods and generic
+operator declarations are not implemented. Supported tokens are `+`, `-`,
+`*`, `/`, `%`, `!`, `~`, `&`, `|`, `^`, `<<`, `>>`, `==`, `!=`, `<`, `<=`,
+`>`, `>=`, `++`, `--`, and compound assignment forms of the binary operators.
+Function types use the syntax `delegate(parameter-types) => return-type`, for
+example `delegate(int, string) => bool`. Function values can be passed,
+stored in locals, and invoked. A named function can be used as a function value
+when its name resolves to one non-generic static or top-level overload.
+Instance-method values, lambdas, closures, and delegate object semantics are
+not implemented. For mixed numeric operands, the compiler chooses a common type
+when one operand type accepts an implicit numeric
 conversion from the other; otherwise it reports an error. The current implicit
 numeric conversions are widening conversions among the built-in numeric types;
 an explicit cast is required where no such conversion applies. Reference
@@ -72,15 +95,20 @@ are supported. The compiler does not use declaration order to break ties.
 
 ## Statements and control flow
 
-The implemented statements include blocks, local declarations, expression
+The implemented statements include blocks, local declarations and local
+functions, expression
 statements, `if`/`else`, `while`, `do`/`while`, `for`, `foreach`, `switch`,
 `break`, `continue`, and `return`. Exceptions use `try`, typed `catch` clauses,
 optional `when` filters, `throw`, `throw;` rethrow, and `finally`. A `finally`
 block executes when control leaves its protected region, including return, break,
 continue, and exception propagation. A transfer performed inside `finally`
 replaces the pending transfer. Switch statements accept integer, boolean, char,
-and enum selectors. String selectors, case filters, and switch expressions are
-not implemented.
+enum, and string selectors. String cases compare string contents using an
+ordinal, case-sensitive comparison. A case label may use `when` followed by a
+boolean filter; the filter runs only after its case value matches. Switch
+expressions use `selector switch { label [when filter] => value, _ => fallback }`.
+Labels are literals or enum members, arm values must have a compatible common
+type, and an unfiltered `_` discard arm must appear last.
 
 ## Initialization, dispatch, and errors
 
@@ -115,13 +143,13 @@ must be registered, and dynamically unloading a module that registered roots is
 unsupported. See the linked runtime contracts and managed-memory design for
 ownership, `Memory.Free`, and rooting rules.
 
-The current compiler gaps include lambdas, closures, function types, delegates,
-`async`/`await`, user-defined operator overloads, concepts, local functions,
-extension declarations, `typedef` declarations, and partial declaration
-merging. The grammar accepts an `async` modifier, but it has no async semantics;
-`await` is not implemented. Generic support is restricted to the body and layout
+The current compiler gaps include lambdas, closures, instance-method function
+values, delegate object semantics, `async`/`await`, concepts, extension
+declarations, and `typedef` declarations. The grammar accepts an `async`
+modifier, but it has no async semantics; `await` is not implemented. Generic
+support is restricted to the body and layout
 patterns in [`generics-design.md`](generics-design.md); generic property accessors
 and using generic properties in expressions remain limited. Field initializers
-are limited to literals, switch statements have the limits described above, and
-dynamic static initialization is not available. Consult compiler diagnostics
+are limited to literals, and dynamic static initialization is not available.
+Consult compiler diagnostics
 and tests for the exact supported subset of each feature.

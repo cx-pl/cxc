@@ -10,11 +10,126 @@ namespace CxCompiler.OutputGenerators;
 
 public static partial class CCodeOutputGenerator
 {
+    private static void WriteFunctionTypeDeclarations(
+        IndentingWriter writer,
+        IEnumerable<DeclarationBase> declarations)
+    {
+        var functionTypes = EnumerateFunctionTypesFromDeclarations(declarations)
+            .DistinctBy(GetFunctionTypeCIdentifier)
+            .ToArray();
+        foreach (var functionType in functionTypes)
+        {
+            var returnType = functionType.ReturnType.ToCReturnType(false);
+            var parameters = functionType.ParameterTypes.Count == 0
+                ? "void"
+                : string.Join(", ", functionType.ParameterTypes.Select(ToCParameterType));
+            writer.WriteLine(
+                $"typedef {returnType} (*{GetFunctionTypeCIdentifier(functionType)})({parameters});");
+        }
+        if (functionTypes.Length > 0)
+        {
+            writer.WriteLine();
+        }
+    }
+
+    private static IEnumerable<FunctionType> EnumerateFunctionTypesFromDeclarations(
+        IEnumerable<DeclarationBase> declarations)
+    {
+        foreach (var declaration in declarations)
+        {
+            switch (declaration)
+            {
+                case ClassDeclaration classDeclaration:
+                    foreach (var nested in EnumerateFunctionTypesFromDeclarations(
+                        classDeclaration.MemberDeclarations.Declarations))
+                    {
+                        yield return nested;
+                    }
+                    break;
+                case FieldDeclaration field:
+                    foreach (var functionType in EnumerateFunctionTypes(field.Type))
+                        yield return functionType;
+                    break;
+                case PropertyDeclaration property:
+                    foreach (var functionType in EnumerateFunctionTypes(property.Type))
+                        yield return functionType;
+                    break;
+                case FunctionDeclaration function:
+                    foreach (var functionType in EnumerateFunctionTypes(function.ReturnType))
+                        yield return functionType;
+                    foreach (var parameter in function.Parameters)
+                    {
+                        foreach (var functionType in EnumerateFunctionTypes(parameter.ParameterType))
+                            yield return functionType;
+                    }
+                    if (function.Body is { } body)
+                    {
+                        foreach (var localFunction in EnumerateLocalFunctions(body))
+                        {
+                            foreach (var functionType in EnumerateFunctionTypes(localFunction.ReturnType))
+                                yield return functionType;
+                            foreach (var parameter in localFunction.Parameters)
+                            {
+                                foreach (var functionType in EnumerateFunctionTypes(parameter.ParameterType))
+                                    yield return functionType;
+                            }
+                        }
+                    }
+                    break;
+            }
+        }
+    }
+
+    private static IEnumerable<FunctionType> EnumerateFunctionTypes(TypeBase type)
+    {
+        switch (type)
+        {
+            case ConstType constant:
+                return EnumerateFunctionTypes(constant.UnderlyingType);
+            case ArrayType array:
+                return EnumerateFunctionTypes(array.ElementType);
+            case NullableType nullable:
+                return EnumerateFunctionTypes(nullable.UnderlyingType);
+            case FunctionType function:
+                return function.ParameterTypes.SelectMany(EnumerateFunctionTypes)
+                    .Concat(EnumerateFunctionTypes(function.ReturnType))
+                    .Append(function);
+            case NamedType named:
+                return named.TypeArguments.SelectMany(EnumerateFunctionTypes);
+            default:
+                return [];
+        }
+    }
+
     private static void WriteFunctionDefinitions(
         IndentingWriter writer,
         IReadOnlyCollection<DeclarationBase> declarations,
-        string moduleName)
+        string moduleName,
+        bool includeLocalFunctions = true)
     {
+        if (includeLocalFunctions)
+        {
+            var localFunctions = EnumerateLocalFunctions(declarations).ToArray();
+            foreach (var localFunction in localFunctions)
+            {
+                var parameters = localFunction.Parameters.Count == 0
+                    ? "void"
+                    : string.Join(", ", localFunction.Parameters.Select(parameter =>
+                        $"{ToCParameterType(parameter.ParameterType)} {parameter.Name}"));
+                writer.WriteLine(
+                    $"static {localFunction.ReturnType.ToCReturnType(false)} " +
+                    $"{new QualifiedIdentifier(moduleName, localFunction.LocalCName!).ToCIdentifier()}({parameters});");
+            }
+            if (localFunctions.Length > 0)
+            {
+                writer.WriteLine();
+                WriteFunctionDefinitions(
+                    writer,
+                    localFunctions.Cast<DeclarationBase>().ToArray(),
+                    moduleName,
+                    includeLocalFunctions: false);
+            }
+        }
         foreach (var declaration in declarations)
         {
             if (declaration is ClassDeclaration classDeclaration)
@@ -22,7 +137,8 @@ public static partial class CCodeOutputGenerator
                 WriteFunctionDefinitions(
                     writer,
                     classDeclaration.MemberDeclarations.Declarations,
-                    moduleName);
+                    moduleName,
+                    includeLocalFunctions: false);
                 continue;
             }
 
@@ -43,7 +159,8 @@ public static partial class CCodeOutputGenerator
 
             var nameOverrideIndex = GetNameOverrideIndex(functionDeclaration, declarations);
             WriteSourceLocation(writer, functionDeclaration.SourceSpan);
-            writer.Write($"{functionDeclaration.ToCIdentifier(moduleName, nameOverrideIndex)}(");
+            writer.Write($"{(functionDeclaration.LocalCName is null ? string.Empty : "static ")}" +
+                $"{functionDeclaration.ToCIdentifier(moduleName, nameOverrideIndex)}(");
 
             var parameters = new List<string>();
             if (!functionDeclaration.IsStatic)
@@ -117,6 +234,87 @@ public static partial class CCodeOutputGenerator
             writer.DecreaseIndent();
             writer.WriteLine("}");
             writer.WriteLine();
+        }
+    }
+
+    private static IEnumerable<FunctionDeclaration> EnumerateLocalFunctions(
+        IEnumerable<DeclarationBase> declarations)
+    {
+        foreach (var function in EnumerateFunctions(declarations))
+        {
+            if (function.Body is null)
+                continue;
+            foreach (var local in EnumerateLocalFunctions(function.Body))
+                yield return local;
+        }
+    }
+
+    private static IEnumerable<FunctionDeclaration> EnumerateLocalFunctions(
+        IEnumerable<StatementBase> statements)
+    {
+        foreach (var statement in statements)
+        {
+            switch (statement)
+            {
+                case LocalFunctionDeclarationStatement local:
+                    yield return local.Function;
+                    if (local.Function.Body is { } localBody)
+                    {
+                        foreach (var nested in EnumerateLocalFunctions(localBody))
+                            yield return nested;
+                    }
+                    break;
+                case BlockStatement block:
+                    foreach (var nested in EnumerateLocalFunctions(block.Statements))
+                        yield return nested;
+                    break;
+                case IfStatement conditional:
+                    foreach (var nested in EnumerateLocalFunctions([conditional.ThenStatement]))
+                        yield return nested;
+                    if (conditional.ElseStatement is { } alternate)
+                    {
+                        foreach (var nested in EnumerateLocalFunctions([alternate]))
+                            yield return nested;
+                    }
+                    break;
+                case WhileStatement loop:
+                    foreach (var nested in EnumerateLocalFunctions([loop.Body]))
+                        yield return nested;
+                    break;
+                case DoWhileStatement loop:
+                    foreach (var nested in EnumerateLocalFunctions([loop.Body]))
+                        yield return nested;
+                    break;
+                case ForStatement loop:
+                    foreach (var nested in EnumerateLocalFunctions([loop.Body]))
+                        yield return nested;
+                    break;
+                case ForeachStatement loop:
+                    foreach (var nested in EnumerateLocalFunctions([loop.Body]))
+                        yield return nested;
+                    break;
+                case SwitchStatement switchStatement:
+                    foreach (var section in switchStatement.Sections)
+                    {
+                        foreach (var nested in EnumerateLocalFunctions(section.Statements))
+                            yield return nested;
+                    }
+                    break;
+                case TryStatement tryStatement:
+                    foreach (var nested in EnumerateLocalFunctions([tryStatement.Body]))
+                        yield return nested;
+                    foreach (var clause in tryStatement.CatchClauses)
+                    {
+                        foreach (var nested in EnumerateLocalFunctions([clause.Body]))
+                            yield return nested;
+                    }
+                    if (tryStatement.FinallyBody is { } finallyBody)
+                    {
+                        foreach (var nested in EnumerateLocalFunctions([finallyBody]))
+                            yield return nested;
+                    }
+                    break;
+            }
         }
     }
 
@@ -398,6 +596,9 @@ public static partial class CCodeOutputGenerator
     {
         switch (statement)
         {
+            case LocalFunctionDeclarationStatement:
+                break;
+
             case ReturnStatement { Expression: IdentifierExpression identifier }:
                 writer.WriteLine($"return {identifier.Identifier.Parts[0]};");
                 break;
@@ -707,6 +908,46 @@ public static partial class CCodeOutputGenerator
                 : receiverType;
             writer.WriteLine(
                 $"{temporaryType.ToCIdentifier(false)} {GetInterfacePropertyTemporaryName(propertyExpression)};");
+        }
+        foreach (var binary in expressionList.SelectMany(EnumerateOperatorExpressions<BinaryExpression>)
+            .Where(expression => expression.OperatorSymbol is not null &&
+                expression.OperatorReceiverTemporaryName is not null))
+        {
+            var type = binary.Left.InferredType ?? throw new InternalCompilerException(
+                "Operator receiver type is not bound.");
+            var temporaryType = type is ConstType constType ? constType.UnderlyingType : type;
+            writer.WriteLine(
+                $"{temporaryType.ToCIdentifier(false)} {binary.OperatorReceiverTemporaryName};");
+        }
+        foreach (var unary in expressionList.SelectMany(EnumerateOperatorExpressions<UnaryExpression>)
+            .Where(expression => expression.OperatorSymbol is not null &&
+                expression.OperatorTemporaryName is not null))
+        {
+            var type = unary.Operand.InferredType ?? throw new InternalCompilerException(
+                "Operator operand type is not bound.");
+            var valueType = type is ConstType constType ? constType.UnderlyingType : type;
+            var classType = valueType is NamedType namedType ? namedType.ClassType : (ClassType?)null;
+            var cType = valueType.ToCIdentifier(false);
+            if (unary.Operator is "++" or "--")
+            {
+                if (classType == ClassType.Struct)
+                {
+                    cType += "*";
+                }
+            }
+            writer.WriteLine($"{cType} {unary.OperatorTemporaryName};");
+            if (unary.OperatorOldValueTemporaryName is { } oldValueTemporary)
+            {
+                writer.WriteLine($"{valueType.ToCIdentifier(false)} {oldValueTemporary};");
+            }
+        }
+        foreach (var switchExpression in expressionList
+            .SelectMany(EnumerateOperatorExpressions<SwitchExpression>))
+        {
+            var selectorType = switchExpression.Selector.InferredType ??
+                throw new InternalCompilerException("Switch expression selector is not bound.");
+            writer.WriteLine(
+                $"{selectorType.ToCIdentifier(false)} {switchExpression.TemporaryName};");
         }
 
     }
@@ -1235,14 +1476,86 @@ public static partial class CCodeOutputGenerator
         StatementWriteContext context)
     {
         var switchTarget = context.PushSwitch();
-        writer.WriteLine(
-            $"switch ({ToCExpression(statement.Expression, functionDeclaration, moduleName)})");
+        if (statement.SelectorTemporaryName is { } selectorTemporary &&
+            statement.CaseIndexTemporaryName is { } caseIndexTemporary)
+        {
+            var selectorType = statement.Expression.InferredType ??
+                throw new InternalCompilerException("Switch selector is not bound.");
+            writer.WriteLine("{");
+            writer.IncreaseIndent();
+            writer.WriteLine(
+                $"{selectorType.ToCIdentifier(false)} {selectorTemporary} = " +
+                $"{ToCExpressionAsType(statement.Expression, selectorType, functionDeclaration, moduleName)};");
+            writer.WriteLine($"cx_int {caseIndexTemporary} = -1;");
+            for (var sectionIndex = 0; sectionIndex < statement.Sections.Count; sectionIndex++)
+            {
+                var section = statement.Sections[sectionIndex];
+                foreach (var label in section.Labels.Where(label => !label.IsDefault))
+                {
+                    var match = ToCSwitchLabelMatch(
+                        selectorTemporary,
+                        selectorType,
+                        label.Value!,
+                        functionDeclaration,
+                        moduleName);
+                    if (label.Filter is not null)
+                    {
+                        match = $"({match}) && ({ToCExpression(label.Filter, functionDeclaration, moduleName)})";
+                    }
+                    writer.WriteLine(
+                        $"if ({caseIndexTemporary} == -1 && ({match})) {caseIndexTemporary} = {sectionIndex};");
+                }
+            }
+            var defaultIndex = statement.Sections
+                .Select((section, index) => (section, index))
+                .FirstOrDefault(pair => pair.section.Labels.Any(label => label.IsDefault));
+            if (defaultIndex.section is not null)
+            {
+                writer.WriteLine(
+                    $"if ({caseIndexTemporary} == -1) {caseIndexTemporary} = {defaultIndex.index};");
+            }
+            writer.WriteLine($"switch ({caseIndexTemporary})");
+            WriteSwitchSections(writer, statement, functionDeclaration, moduleName, context, useIndices: true);
+            writer.DecreaseIndent();
+            writer.WriteLine("}");
+        }
+        else
+        {
+            writer.WriteLine(
+                $"switch ({ToCExpression(statement.Expression, functionDeclaration, moduleName)})");
+            WriteSwitchSections(writer, statement, functionDeclaration, moduleName, context, useIndices: false);
+        }
+
+        if (switchTarget.BreakLabelUsed)
+        {
+            writer.WriteLine($"{switchTarget.BreakLabel}:;");
+        }
+        context.PopSwitch(switchTarget);
+    }
+
+    private static void WriteSwitchSections(
+        IndentingWriter writer,
+        SwitchStatement statement,
+        FunctionDeclaration functionDeclaration,
+        string moduleName,
+        StatementWriteContext context,
+        bool useIndices)
+    {
         writer.WriteLine("{");
         writer.IncreaseIndent();
-        foreach (var section in statement.Sections)
+        for (var sectionIndex = 0; sectionIndex < statement.Sections.Count; sectionIndex++)
         {
+            var section = statement.Sections[sectionIndex];
+            if (useIndices)
+            {
+                writer.WriteLine($"case {sectionIndex}:");
+            }
             foreach (var label in section.Labels)
             {
+                if (useIndices)
+                {
+                    continue;
+                }
                 if (label.Filter is not null)
                 {
                     throw new InternalCompilerException("A filtered switch label reached C generation.");
@@ -1264,11 +1577,60 @@ public static partial class CCodeOutputGenerator
         }
         writer.DecreaseIndent();
         writer.WriteLine("}");
-        if (switchTarget.BreakLabelUsed)
+    }
+
+    private static string ToCSwitchLabelMatch(
+        string selector,
+        TypeBase selectorType,
+        ExpressionBase label,
+        FunctionDeclaration functionDeclaration,
+        string moduleName)
+    {
+        var labelExpression = ToCExpression(label, functionDeclaration, moduleName);
+        if (selectorType is ConstType constType)
         {
-            writer.WriteLine($"{switchTarget.BreakLabel}:;");
+            selectorType = constType.UnderlyingType;
         }
-        context.PopSwitch(switchTarget);
+        if (selectorType is StringType)
+        {
+            var selectorReference = $"({selector})";
+            var labelReference = $"({labelExpression})";
+            return $"(({selectorReference} == {labelReference}) || " +
+                $"({selectorReference} != CX_NULL && {labelReference} != CX_NULL && " +
+                $"{selectorReference}->_length == {labelReference}->_length && " +
+                $"({selectorReference}->_length == 0 || memcmp({selectorReference}->_data, " +
+                $"{labelReference}->_data, {selectorReference}->_length) == 0)))";
+        }
+        return $"({selector} == {labelExpression})";
+    }
+
+    private static string ToCSwitchExpression(
+        SwitchExpression expression,
+        FunctionDeclaration functionDeclaration,
+        string moduleName)
+    {
+        var selectorType = expression.Selector.InferredType ??
+            throw new InternalCompilerException("Switch expression selector is not bound.");
+        var resultType = expression.InferredType ??
+            throw new InternalCompilerException("Switch expression result type is not bound.");
+        var temporary = expression.TemporaryName ??
+            throw new InternalCompilerException("Switch expression temporary is not bound.");
+        var result = ToCExpressionAsType(
+            expression.Arms[^1].Value, resultType, functionDeclaration, moduleName);
+        for (var index = expression.Arms.Count - 2; index >= 0; index--)
+        {
+            var arm = expression.Arms[index];
+            var match = ToCSwitchLabelMatch(
+                temporary, selectorType, arm.Label!, functionDeclaration, moduleName);
+            if (arm.Filter is not null)
+            {
+                match = $"({match}) && ({ToCExpression(arm.Filter, functionDeclaration, moduleName)})";
+            }
+            var value = ToCExpressionAsType(arm.Value, resultType, functionDeclaration, moduleName);
+            result = $"(({match}) ? {value} : {result})";
+        }
+        return $"({temporary} = " +
+            $"{ToCExpressionAsType(expression.Selector, selectorType, functionDeclaration, moduleName)}, {result})";
     }
 
     private static string ToCForDeclaration(
@@ -1327,6 +1689,8 @@ public static partial class CCodeOutputGenerator
                     null,
                     functionDeclaration,
                     moduleName),
+            IdentifierExpression { FunctionValueSymbol: not null } identifier =>
+                $"(&{ToCIdentifier(identifier.FunctionValueSymbol)})",
             IdentifierExpression identifier => identifier.TargetField is null
                 ? identifier.Identifier.ToCIdentifier()
                 : ToCFieldAccess(
@@ -1338,6 +1702,8 @@ public static partial class CCodeOutputGenerator
             ThisExpression => "__this",
             BinaryExpression binary =>
                 ToCBinaryExpression(binary, functionDeclaration, moduleName),
+            SwitchExpression switchExpression =>
+                ToCSwitchExpression(switchExpression, functionDeclaration, moduleName),
             CastExpression cast =>
                 ToCCastExpression(cast, functionDeclaration, moduleName),
             TypeTestExpression typeTest =>
@@ -1349,11 +1715,17 @@ public static partial class CCodeOutputGenerator
                 $"{ToCExpressionAsType(conditional.WhenTrue, conditional.InferredType!, functionDeclaration, moduleName)} : " +
                 $"{ToCExpressionAsType(conditional.WhenFalse, conditional.InferredType!, functionDeclaration, moduleName)})",
             UnaryExpression unary when unary.Postfix =>
-                $"({ToCExpression(unary.Operand, functionDeclaration, moduleName)}{unary.Operator})",
+                unary.OperatorSymbol is not null
+                    ? ToCOperatorUnaryExpression(unary, functionDeclaration, moduleName)
+                    : $"({ToCExpression(unary.Operand, functionDeclaration, moduleName)}{unary.Operator})",
             UnaryExpression unary =>
-                $"({unary.Operator}{ToCExpression(unary.Operand, functionDeclaration, moduleName)})",
+                unary.OperatorSymbol is not null
+                    ? ToCOperatorUnaryExpression(unary, functionDeclaration, moduleName)
+                    : $"({unary.Operator}{ToCExpression(unary.Operand, functionDeclaration, moduleName)})",
             AssignmentExpression { PropertySetter: not null } assignment =>
                 ToCPropertyAssignment(assignment, functionDeclaration, moduleName),
+            AssignmentExpression { OperatorSymbol: not null } assignment =>
+                ToCOperatorAssignment(assignment, functionDeclaration, moduleName),
             AssignmentExpression assignment =>
                 $"{ToCExpression(assignment.Target, functionDeclaration, moduleName)} {assignment.Operator} " +
                 (assignment.Operator == "=" && assignment.Target.InferredType is { } targetType
@@ -1427,6 +1799,12 @@ public static partial class CCodeOutputGenerator
         FunctionDeclaration functionDeclaration,
         string moduleName)
     {
+        if (invocation.FunctionType is not null)
+        {
+            return $"{ToCExpression(invocation.Target, functionDeclaration, moduleName)}(" +
+                string.Join(", ", invocation.Arguments.Select(argument =>
+                    ToCExpression(argument, functionDeclaration, moduleName))) + ")";
+        }
         var target = invocation.TargetSymbol ?? throw new InternalCompilerException(
             "Invocation target is not bound.");
         if (invocation.DispatchSlotIndex is { } interfaceSlotIndex)
@@ -1886,6 +2264,28 @@ public static partial class CCodeOutputGenerator
         FunctionDeclaration functionDeclaration,
         string moduleName)
     {
+        if (expression.OperatorSymbol is { } operatorSymbol)
+        {
+            var receiverTemporary = expression.OperatorReceiverTemporaryName;
+            var receiverType = expression.Left.InferredType ?? throw new InternalCompilerException(
+                "Operator receiver type is not bound.");
+            var receiverIsPointer = IsCReferenceType(receiverType);
+            var receiverExpression = receiverTemporary ??
+                ToCExpression(expression.Left, functionDeclaration, moduleName);
+            var receiverArgument = ToCBaseReceiver(
+                receiverExpression,
+                receiverTemporary is null && receiverIsPointer,
+                expression.OperatorBaseDepth);
+            var argumentType = operatorSymbol.ParameterTypes.Single();
+            var argument = ToCExpressionAsType(
+                expression.Right, argumentType, functionDeclaration, moduleName);
+            var call = $"{ToCIdentifier(operatorSymbol)}({receiverArgument}, {argument})";
+            return receiverTemporary is null
+                ? call
+                : $"({receiverTemporary} = " +
+                    $"{ToCExpressionAsType(expression.Left, receiverType, functionDeclaration, moduleName)}, {call})";
+        }
+
         if (expression.Operator is "==" or "!=")
         {
             if (expression.Left is LiteralExpression { SourceText: "null" } &&
@@ -1923,6 +2323,74 @@ public static partial class CCodeOutputGenerator
 
         return $"({ToCExpression(expression.Left, functionDeclaration, moduleName)} {expression.Operator} " +
             $"{ToCExpression(expression.Right, functionDeclaration, moduleName)})";
+    }
+
+    private static string ToCOperatorUnaryExpression(
+        UnaryExpression expression,
+        FunctionDeclaration functionDeclaration,
+        string moduleName)
+    {
+        var symbol = expression.OperatorSymbol ?? throw new InternalCompilerException(
+            "Operator unary expression is not bound.");
+        var temporary = expression.OperatorTemporaryName;
+        var operandType = expression.Operand.InferredType ?? throw new InternalCompilerException(
+            "Operator operand type is not bound.");
+        var unwrappedOperandType = operandType is ConstType constType
+            ? constType.UnderlyingType
+            : operandType;
+        var classType = unwrappedOperandType is NamedType named
+            ? named.ClassType
+            : (ClassType?)null;
+
+        if (expression.Operator is "++" or "--")
+        {
+            if (temporary is null)
+            {
+                throw new InternalCompilerException("Mutating operator has no receiver temporary.");
+            }
+            var receiverSetup = classType == ClassType.Struct
+                ? $"{temporary} = &({ToCExpression(expression.Operand, functionDeclaration, moduleName)})"
+                : $"{temporary} = {ToCExpression(expression.Operand, functionDeclaration, moduleName)}";
+            var call = $"{ToCIdentifier(symbol)}(" +
+                $"{ToCBaseReceiver(temporary, true, expression.OperatorBaseDepth)})";
+            var result = classType == ClassType.Struct ? $"*{temporary}" : temporary;
+            if (expression.Postfix && expression.OperatorOldValueTemporaryName is { } oldValue)
+            {
+                return $"({receiverSetup}, {oldValue} = *{temporary}, {call}, {oldValue})";
+            }
+            return $"({receiverSetup}, {call}, {result})";
+        }
+
+        var receiverExpression = temporary ?? ToCExpression(
+            expression.Operand, functionDeclaration, moduleName);
+        var receiverArgument = ToCBaseReceiver(
+            receiverExpression,
+            temporary is null && IsCReferenceType(operandType),
+            expression.OperatorBaseDepth);
+        var callExpression = $"{ToCIdentifier(symbol)}({receiverArgument})";
+        return temporary is null
+            ? callExpression
+            : $"({temporary} = " +
+                $"{ToCExpressionAsType(expression.Operand, operandType, functionDeclaration, moduleName)}, {callExpression})";
+    }
+
+    private static string ToCOperatorAssignment(
+        AssignmentExpression expression,
+        FunctionDeclaration functionDeclaration,
+        string moduleName)
+    {
+        var symbol = expression.OperatorSymbol ?? throw new InternalCompilerException(
+            "Operator assignment is not bound.");
+        var receiverType = expression.Target.InferredType ?? throw new InternalCompilerException(
+            "Operator assignment target type is not bound.");
+        var receiver = ToCExpression(expression.Target, functionDeclaration, moduleName);
+        var receiverArgument = ToCBaseReceiver(
+            receiver,
+            IsCReferenceType(receiverType),
+            expression.OperatorBaseDepth);
+        var value = ToCExpressionAsType(
+            expression.Value, symbol.ParameterTypes.Single(), functionDeclaration, moduleName);
+        return $"{ToCIdentifier(symbol)}({receiverArgument}, {value})";
     }
 
     private static string ToCNullCoalescingExpression(
@@ -2015,6 +2483,10 @@ public static partial class CCodeOutputGenerator
 
     private static string ToCIdentifier(FunctionSymbol symbol)
     {
+        if (symbol.Declaration?.LocalCName is { } localCName)
+        {
+            return new QualifiedIdentifier(symbol.ModuleName, localCName).ToCIdentifier();
+        }
         if (symbol.SpecializationName is { } specializedName)
         {
             return specializedName;
@@ -2106,6 +2578,34 @@ public static partial class CCodeOutputGenerator
                 foreach (var literal in EnumerateStringLiterals(conditional.WhenFalse))
                 {
                     yield return literal;
+                }
+                break;
+
+            case SwitchExpression switchExpression:
+                foreach (var literal in EnumerateStringLiterals(switchExpression.Selector))
+                {
+                    yield return literal;
+                }
+                foreach (var arm in switchExpression.Arms)
+                {
+                    if (arm.Label is not null)
+                    {
+                        foreach (var literal in EnumerateStringLiterals(arm.Label))
+                        {
+                            yield return literal;
+                        }
+                    }
+                    if (arm.Filter is not null)
+                    {
+                        foreach (var literal in EnumerateStringLiterals(arm.Filter))
+                        {
+                            yield return literal;
+                        }
+                    }
+                    foreach (var literal in EnumerateStringLiterals(arm.Value))
+                    {
+                        yield return literal;
+                    }
                 }
                 break;
 
@@ -2294,6 +2794,10 @@ public static partial class CCodeOutputGenerator
             TypeTestExpression typeTest => [typeTest.Operand],
             ConditionalExpression conditional =>
                 [conditional.Condition, conditional.WhenTrue, conditional.WhenFalse],
+            SwitchExpression switchExpression => [switchExpression.Selector,
+                .. switchExpression.Arms.SelectMany(arm => new[] { arm.Label, arm.Filter, arm.Value }
+                    .Where(child => child is not null)
+                    .Select(child => child!))],
             NullCoalescingExpression coalescing => [coalescing.Left, coalescing.Right],
             UnaryExpression unary => [unary.Operand],
             AssignmentExpression assignment => [assignment.Target, assignment.Value],
@@ -2302,6 +2806,23 @@ public static partial class CCodeOutputGenerator
             ObjectCreationExpression creation => creation.Arguments,
             _ => [],
         };
+    }
+
+    private static IEnumerable<TExpression> EnumerateOperatorExpressions<TExpression>(
+        ExpressionBase expression)
+        where TExpression : ExpressionBase
+    {
+        if (expression is TExpression matchingExpression)
+        {
+            yield return matchingExpression;
+        }
+        foreach (var child in GetExpressionChildren(expression))
+        {
+            foreach (var nested in EnumerateOperatorExpressions<TExpression>(child))
+            {
+                yield return nested;
+            }
+        }
     }
 
     private static IEnumerable<ExpressionBase> GetDirectExpressions(StatementBase statement)

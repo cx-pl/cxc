@@ -32,15 +32,24 @@ public sealed class PartialDeclarationTests
     }
 
     [Fact]
-    public void ExplainsWhenCompatiblePartialDeclarationsCannotBeMerged()
+    public void MergesCompatiblePartialDeclarationsAcrossSourceContexts()
     {
         var project = CxProject.CreateDefaultApplicationProject("partial_type");
-        project.AddCompilationContext(CompilerTestHelper.Parse("public partial class Item {}"));
-        project.AddCompilationContext(CompilerTestHelper.Parse("public partial class Item {}"));
+        project.AddCompilationContext(CompilerTestHelper.Parse(
+            "public partial class Item { public int First; }"));
+        project.AddCompilationContext(CompilerTestHelper.Parse(
+            "public partial class Item { public int Second; }"));
 
-        var error = Assert.Throws<CxCompiler.Model.Errors.CompilationErrorException>(
-            () => new SemanticBinder().Bind(project));
+        new SemanticBinder().Bind(project);
 
-        Assert.Contains("cannot yet be merged", error.Message);
+        var declarations = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<CxCompiler.Model.Types.ClassDeclaration>()
+            .ToArray();
+        var item = Assert.Single(declarations);
+        Assert.Contains(item.MemberDeclarations.Declarations,
+            declaration => declaration.Name == "First");
+        Assert.Contains(item.MemberDeclarations.Declarations,
+            declaration => declaration.Name == "Second");
     }
 }

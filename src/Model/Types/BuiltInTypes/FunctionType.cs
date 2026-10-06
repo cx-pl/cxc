@@ -4,8 +4,16 @@ namespace CxCompiler.Model.Types.BuiltInTypes;
 
 public class FunctionType : TypeBase
 {
-    public FunctionType(QualifiedIdentifier @namespace)
+    public TypeBase ReturnType { get; }
+    public IReadOnlyList<TypeBase> ParameterTypes { get; }
+
+    public FunctionType(
+        QualifiedIdentifier @namespace,
+        TypeBase returnType,
+        IReadOnlyList<TypeBase> parameterTypes)
         : base("Function", @namespace)
     {
+        ReturnType = returnType;
+        ParameterTypes = parameterTypes;
     }
 }

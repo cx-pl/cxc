@@ -39,6 +39,10 @@ public class TypeNameContextVisitor : CxParserBaseVisitor<TypeBase>
         {
             underlyingType = new AutoType(true);
         }
+        else if (context.functionType() is { } functionType)
+        {
+            underlyingType = Visit(functionType);
+        }
         else
         {
             underlyingType = Visit(context.builtInType());
@@ -60,6 +64,17 @@ public class TypeNameContextVisitor : CxParserBaseVisitor<TypeBase>
         }
 
         return underlyingType;
+    }
+
+    public override TypeBase VisitFunctionType([NotNull] CxParser.FunctionTypeContext context)
+    {
+        var parameters = context.functionTypeParameters()?.typeName()
+            .Select(type => Visit(type))
+            .ToArray() ?? [];
+        return new FunctionType(
+            CxCompiler.Model.Common.QualifiedIdentifier.Empty,
+            Visit(context.typeNameOrVoid()),
+            parameters);
     }
 
     public override TypeBase VisitBuiltInType([NotNull] CxParser.BuiltInTypeContext context)

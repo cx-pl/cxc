@@ -81,8 +81,9 @@ public class PropertyDeclarationParserVisitor : CxParserBaseVisitor<PropertyDecl
         if (context.propertyAccessorBody() is { } body && body.Semicolon() is null)
         {
             var statements = body.LeftBrace() is not null
-                ? StatementParserVisitor.ParseStatements(body.statements())
-                : [new StatementParserVisitor().Visit(body.statement())];
+                ? StatementParserVisitor.ParseStatements(
+                    body.statements(), _classDeclaration.FullName)
+                : [new StatementParserVisitor(_classDeclaration.FullName).Visit(body.statement())];
             propertyAccessorDeclaration.SetBody(statements);
         }
 

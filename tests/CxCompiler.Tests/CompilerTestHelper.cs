@@ -11,7 +11,7 @@ internal static class CompilerTestHelper
     {
         var listener = new ParserErrorListener(sourcePath);
         var input = new AntlrInputStream(source) { name = sourcePath };
-        var lexer = new CxLexer(input);
+        var lexer = new OperatorAwareCxLexer(input);
         lexer.RemoveErrorListeners();
         lexer.AddErrorListener(listener);
         var parser = new CxParser(new CommonTokenStream(lexer));

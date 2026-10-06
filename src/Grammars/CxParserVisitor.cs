@@ -273,6 +273,12 @@ public interface ICxParserVisitor<Result> : IParseTreeVisitor<Result> {
 	/// <return>The visitor result.</return>
 	Result VisitDeclarationStatement([NotNull] CxParser.DeclarationStatementContext context);
 	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.localFunctionDeclarationStatement"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitLocalFunctionDeclarationStatement([NotNull] CxParser.LocalFunctionDeclarationStatementContext context);
+	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.localVariableDeclarationStatement"/>.
 	/// </summary>
 	/// <param name="context">The parse tree.</param>
@@ -549,6 +555,18 @@ public interface ICxParserVisitor<Result> : IParseTreeVisitor<Result> {
 	/// <return>The visitor result.</return>
 	Result VisitPrimaryExpression([NotNull] CxParser.PrimaryExpressionContext context);
 	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.switchExpression"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitSwitchExpression([NotNull] CxParser.SwitchExpressionContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.switchExpressionArm"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitSwitchExpressionArm([NotNull] CxParser.SwitchExpressionArmContext context);
+	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.primaryExpressionStart"/>.
 	/// </summary>
 	/// <param name="context">The parse tree.</param>
@@ -638,6 +656,18 @@ public interface ICxParserVisitor<Result> : IParseTreeVisitor<Result> {
 	/// <param name="context">The parse tree.</param>
 	/// <return>The visitor result.</return>
 	Result VisitTypeName([NotNull] CxParser.TypeNameContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.functionType"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitFunctionType([NotNull] CxParser.FunctionTypeContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.functionTypeParameters"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitFunctionTypeParameters([NotNull] CxParser.FunctionTypeParametersContext context);
 	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.arrayDimension"/>.
 	/// </summary>

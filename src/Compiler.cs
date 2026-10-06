@@ -449,7 +449,7 @@ public class Compiler
         var inputStream = new AntlrInputStream(preprocessed.Source) { name = filePath };
         var errorListener = new ParserErrorListener(filePath);
 
-        var lexer = new CxLexer(inputStream);
+        var lexer = new OperatorAwareCxLexer(inputStream);
         lexer.RemoveErrorListeners();
         lexer.AddErrorListener(errorListener);
         var tokenStream = new CommonTokenStream(lexer);

@@ -30,6 +30,11 @@ public static class GenericTypeSubstitution
             ConstType item => new ConstType(Replace(item.UnderlyingType, replaceNamed, replaceGeneric)),
             ArrayType item => new ArrayType(Replace(item.ElementType, replaceNamed, replaceGeneric)),
             NullableType item => new NullableType(Replace(item.UnderlyingType, replaceNamed, replaceGeneric)),
+            BuiltInTypes.FunctionType item => new BuiltInTypes.FunctionType(
+                item.Namespace,
+                Replace(item.ReturnType, replaceNamed, replaceGeneric),
+                item.ParameterTypes.Select(parameter =>
+                    Replace(parameter, replaceNamed, replaceGeneric)).ToArray()),
             NamedType item => ReplaceNamed(item, replaceNamed, replaceGeneric),
             GenericType item => replaceGeneric?.Invoke(item) ?? item,
             _ => type,

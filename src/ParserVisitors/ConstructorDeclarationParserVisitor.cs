@@ -41,7 +41,7 @@ public class ConstructorDeclarationParserVisitor : CxParserBaseVisitor<Construct
         if (functionBody.LeftBrace() is not null)
         {
             _constructorDeclaration.SetBody(
-                StatementParserVisitor.ParseStatements(functionBody.statements()));
+                StatementParserVisitor.ParseStatements(functionBody.statements(), _namespace));
         }
 
         return _constructorDeclaration;

@@ -120,6 +120,8 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
                         GetArguments(genericInvocation.functionInvocation()),
                         new GenericTypeArgumentsParserVisitor().VisitGenericTypeArguments(
                             genericInvocation.genericTypeArguments())),
+                CxParser.SwitchExpressionContext switchExpression =>
+                    ParseSwitchExpression(expression, switchExpression),
                 CxParser.ArrayExpressionContext arrayAccess =>
                     new ArrayAccessExpression(
                         expression,
@@ -134,6 +136,26 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
         }
 
         return expression.WithSourceSpan(context);
+    }
+
+    private SwitchExpression ParseSwitchExpression(
+        ExpressionBase selector,
+        CxParser.SwitchExpressionContext context)
+    {
+        var arms = context.switchExpressionArm().Select(arm =>
+        {
+            var expressions = arm.expression();
+            ExpressionBase? label = Visit(expressions[0]);
+            if (label is IdentifierExpression { Identifier.Parts: ["_"] })
+            {
+                label = null;
+            }
+            var filter = arm.switchLabelFilter() is { } filterContext
+                ? Visit(filterContext.expression())
+                : null;
+            return new SwitchExpressionArm(label, filter, Visit(expressions[1]));
+        }).ToArray();
+        return new SwitchExpression(selector, arms).WithSourceSpan(context);
     }
 
     public override ExpressionBase VisitPrimaryExpressionStart([NotNull] CxParser.PrimaryExpressionStartContext context)

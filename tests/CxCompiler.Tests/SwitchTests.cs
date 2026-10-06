@@ -64,7 +64,7 @@ public sealed class SwitchTests
     public void BinderChecksSelectorAndCaseTypes()
     {
         var invalidSelector = CreateProject("""
-            void Select(string value) {
+            void Select(object value) {
                 switch (value) {
                     default:
                         break;
@@ -73,7 +73,7 @@ public sealed class SwitchTests
             """);
         var selectorException = Assert.Throws<CompilationErrorException>(
             () => new SemanticBinder().Bind(invalidSelector));
-        Assert.Contains("Switch expression type 'System.String' is not supported", selectorException.Message);
+        Assert.Contains("Switch expression type 'System.Object' is not supported", selectorException.Message);
 
         var invalidCase = CreateProject("""
             void Select(int value) {
@@ -86,6 +86,70 @@ public sealed class SwitchTests
         var caseException = Assert.Throws<CompilationErrorException>(
             () => new SemanticBinder().Bind(invalidCase));
         Assert.Contains("Switch case type 'System.String' does not match selector type 'System.Int'", caseException.Message);
+    }
+
+    [Fact]
+    public void BinderAcceptsStringSwitchesAndBooleanFilters()
+    {
+        var project = CreateProject("""
+            int Select(string value, bool enabled) {
+                switch (value) {
+                    case "ready" when enabled:
+                        return 1;
+                    case null:
+                        return 2;
+                    default:
+                        return 3;
+                }
+            }
+            """);
+        new SemanticBinder().Bind(project);
+
+        var invalidFilter = CreateProject("""
+            void Select(int value) {
+                switch (value) {
+                    case 1 when 2:
+                        break;
+                    default:
+                        break;
+                }
+            }
+            """);
+        var exception = Assert.Throws<CompilationErrorException>(
+            () => new SemanticBinder().Bind(invalidFilter));
+        Assert.Contains("Switch case filter must have type 'System.Bool'", exception.Message);
+    }
+
+    [Fact]
+    public void BinderChecksSwitchExpressionFallbackAndArmTypes()
+    {
+        var validProject = CreateProject("""
+            int Select(string value) {
+                return value switch {
+                    "ready" => 1,
+                    _ => 0,
+                };
+            }
+            """);
+        new SemanticBinder().Bind(validProject);
+
+        var missingFallback = CreateProject("""
+            int Select(int value) {
+                return value switch { 1 => 1 };
+            }
+            """);
+        var fallbackException = Assert.Throws<CompilationErrorException>(
+            () => new SemanticBinder().Bind(missingFallback));
+        Assert.Contains("must end with an unfiltered discard arm '_'", fallbackException.Message);
+
+        var invalidArms = CreateProject("""
+            int Select(int value) {
+                return value switch { 1 => true, _ => 0 };
+            }
+            """);
+        var armException = Assert.Throws<CompilationErrorException>(
+            () => new SemanticBinder().Bind(invalidArms));
+        Assert.Contains("Switch expression arms have incompatible types", armException.Message);
     }
 
     [Fact]
@@ -151,6 +215,51 @@ public sealed class SwitchTests
             Assert.Contains("case 1:", generatedSource);
             Assert.Contains("default:", generatedSource);
             Assert.Contains("cx_int result = 10;", generatedSource);
+        }
+        finally
+        {
+            if (Directory.Exists(outputDirectory))
+            {
+                Directory.Delete(outputDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void EmitsStringSwitchDispatchAndSwitchExpression()
+    {
+        var project = CreateProject("""
+            int Select(string value, bool enabled) {
+                switch (value) {
+                    case "ready" when enabled:
+                        break;
+                    default:
+                        break;
+                }
+                return value switch {
+                    "ready" when enabled => 1,
+                    _ => 0,
+                };
+            }
+            """);
+        new SemanticBinder().Bind(project);
+        var outputDirectory = Path.Combine(
+            Path.GetTempPath(),
+            $"cxc-tests-{Guid.NewGuid():N}");
+
+        try
+        {
+            Directory.CreateDirectory(outputDirectory);
+            CCodeOutputGenerator.GenerateOutput(
+                project,
+                Path.Combine(outputDirectory, "Switch.cx"));
+            var generatedSource = File.ReadAllText(
+                Path.Combine(outputDirectory, "unnamed.c"));
+
+            Assert.Contains("memcmp(", generatedSource);
+            Assert.Contains("__cx_switch_case_", generatedSource);
+            Assert.Contains("case 0:", generatedSource);
+            Assert.Contains("__cx_switch_value_", generatedSource);
         }
         finally
         {
