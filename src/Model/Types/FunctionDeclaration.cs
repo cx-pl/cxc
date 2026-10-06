@@ -1,6 +1,7 @@
 using CxCompiler.Model.Common;
 
 using CxCompiler.Model.Statements;
+using CxCompiler.Model.Expressions;
 
 namespace CxCompiler.Model.Types;
 
@@ -18,6 +19,7 @@ public class FunctionDeclaration : DeclarationBase
 
     public string? OperatorToken { get; }
     public string? LocalCName { get; private set; }
+    public LambdaExpression? LambdaOwner { get; private set; }
 
     public bool IsStatic => ParentClassDeclaration is null || MemberModifiers.Contains(MemberModifier.Static);
 
@@ -58,6 +60,8 @@ public class FunctionDeclaration : DeclarationBase
     {
         LocalCName = cName;
     }
+
+    public void SetLambdaOwner(LambdaExpression lambda) => LambdaOwner = lambda;
 
     public void BindVirtualSlot(int slotIndex, FunctionDeclaration contract)
     {

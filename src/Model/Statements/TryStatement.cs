@@ -26,6 +26,7 @@ public sealed class CatchClause
     public string? VariableName { get; }
     public ExpressionBase? Filter { get; }
     public StatementBase Body { get; }
+    public LocalVariableSymbol? VariableSymbol { get; private set; }
 
     public CatchClause(
         TypeBase exceptionType,
@@ -38,4 +39,6 @@ public sealed class CatchClause
         Filter = filter;
         Body = body;
     }
+
+    public void BindVariableSymbol(LocalVariableSymbol symbol) => VariableSymbol = symbol;
 }

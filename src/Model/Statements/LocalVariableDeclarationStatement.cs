@@ -1,5 +1,5 @@
-using CxCompiler.Model.Expressions;
 using CxCompiler.Model.Types;
+using CxCompiler.Model.Expressions;
 
 namespace CxCompiler.Model.Statements;
 
@@ -22,6 +22,7 @@ public sealed class LocalVariableDeclarator
     public string Name { get; }
     public ExpressionBase? Initializer { get; }
     public TypeBase? Type { get; private set; }
+    public LocalVariableSymbol? Symbol { get; private set; }
 
     public LocalVariableDeclarator(string name, ExpressionBase? initializer)
     {
@@ -29,8 +30,9 @@ public sealed class LocalVariableDeclarator
         Initializer = initializer;
     }
 
-    public void BindType(TypeBase type)
+    public void BindType(TypeBase type, LocalVariableSymbol symbol)
     {
         Type = type;
+        Symbol = symbol;
     }
 }

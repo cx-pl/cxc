@@ -2,6 +2,7 @@ using Antlr4.Runtime.Misc;
 using CxCompiler.Grammar;
 using CxCompiler.Model;
 using CxCompiler.Model.Common;
+using CxCompiler.Model.Types;
 
 namespace CxCompiler.ParserVisitors;
 
@@ -53,6 +54,15 @@ public class CompilationUnitParserVisitor : CxParserBaseVisitor<CompilationConte
         var enumDeclaration = new EnumDeclarationParserVisitor(
             compilationContext.Namespace).Visit(context).WithSourceSpan(context);
         compilationContext.DeclarationScope.AddDeclaration(enumDeclaration);
+        return compilationContext;
+    }
+
+    public override CompilationContext VisitDelegateDeclaration(
+        [NotNull] CxParser.DelegateDeclarationContext context)
+    {
+        var declaration = new DelegateDeclarationParserVisitor(compilationContext.Namespace)
+            .Visit(context);
+        compilationContext.DeclarationScope.AddDeclaration(declaration);
         return compilationContext;
     }
 

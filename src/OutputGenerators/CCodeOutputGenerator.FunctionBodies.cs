@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using CxCompiler.Model;
 using CxCompiler.Model.Common;
 using CxCompiler.Model.Expressions;
@@ -12,7 +14,8 @@ public static partial class CCodeOutputGenerator
 {
     private static void WriteFunctionTypeDeclarations(
         IndentingWriter writer,
-        IEnumerable<DeclarationBase> declarations)
+        IEnumerable<DeclarationBase> declarations,
+        string moduleName)
     {
         var functionTypes = EnumerateFunctionTypesFromDeclarations(declarations)
             .DistinctBy(GetFunctionTypeCIdentifier)
@@ -20,11 +23,29 @@ public static partial class CCodeOutputGenerator
         foreach (var functionType in functionTypes)
         {
             var returnType = functionType.ReturnType.ToCReturnType(false);
-            var parameters = functionType.ParameterTypes.Count == 0
-                ? "void"
-                : string.Join(", ", functionType.ParameterTypes.Select(ToCParameterType));
+            var cType = GetFunctionTypeCIdentifier(functionType);
+            var nodeType = GetFunctionTypeNodeCIdentifier(functionType);
+            var parameters = "void *__environment" +
+                (functionType.ParameterTypes.Count == 0
+                    ? string.Empty
+                    : $", {string.Join(", ", functionType.ParameterTypes.Select(ToCParameterType))}");
+            writer.WriteLine($"struct {nodeType};");
+            writer.WriteLine($"typedef struct {cType} {{");
+            writer.IncreaseIndent();
+            writer.WriteLine($"{returnType} (*__function)({parameters});");
+            writer.WriteLine("void *__environment;");
+            writer.WriteLine($"struct {nodeType} *__invocation_list;");
+            writer.DecreaseIndent();
+            writer.WriteLine($"}} {cType};");
+        }
+        foreach (var delegateDeclaration in declarations.OfType<DelegateDeclaration>())
+        {
+            var delegateName = new QualifiedIdentifier(
+                moduleName,
+                delegateDeclaration.FullName).ToCIdentifier();
             writer.WriteLine(
-                $"typedef {returnType} (*{GetFunctionTypeCIdentifier(functionType)})({parameters});");
+                $"typedef {GetFunctionTypeCIdentifier(delegateDeclaration.Signature)} " +
+                $"{delegateName};");
         }
         if (functionTypes.Length > 0)
         {
@@ -46,6 +67,13 @@ public static partial class CCodeOutputGenerator
                         yield return nested;
                     }
                     break;
+                case DelegateDeclaration delegateDeclaration:
+                    foreach (var functionType in EnumerateFunctionTypes(
+                        delegateDeclaration.Signature))
+                    {
+                        yield return functionType;
+                    }
+                    break;
                 case FieldDeclaration field:
                     foreach (var functionType in EnumerateFunctionTypes(field.Type))
                         yield return functionType;
@@ -64,6 +92,23 @@ public static partial class CCodeOutputGenerator
                     }
                     if (function.Body is { } body)
                     {
+                        foreach (var statement in EnumerateStatements(body))
+                        {
+                            if (statement is LocalVariableDeclarationStatement local)
+                            {
+                                foreach (var functionType in EnumerateFunctionTypes(local.DeclaredType))
+                                    yield return functionType;
+                            }
+                            foreach (var expression in GetDirectExpressions(statement)
+                                .SelectMany(EnumerateAllExpressions))
+                            {
+                                if (expression.InferredType is { } inferred)
+                                {
+                                    foreach (var functionType in EnumerateFunctionTypes(inferred))
+                                        yield return functionType;
+                                }
+                            }
+                        }
                         foreach (var localFunction in EnumerateLocalFunctions(body))
                         {
                             foreach (var functionType in EnumerateFunctionTypes(localFunction.ReturnType))
@@ -72,6 +117,23 @@ public static partial class CCodeOutputGenerator
                             {
                                 foreach (var functionType in EnumerateFunctionTypes(parameter.ParameterType))
                                     yield return functionType;
+                            }
+                            foreach (var localStatement in EnumerateStatements(localFunction.Body ?? []))
+                            {
+                                if (localStatement is LocalVariableDeclarationStatement local)
+                                {
+                                    foreach (var functionType in EnumerateFunctionTypes(local.DeclaredType))
+                                        yield return functionType;
+                                }
+                                foreach (var expression in GetDirectExpressions(localStatement)
+                                    .SelectMany(EnumerateAllExpressions))
+                                {
+                                    if (expression.InferredType is { } inferred)
+                                    {
+                                        foreach (var functionType in EnumerateFunctionTypes(inferred))
+                                            yield return functionType;
+                                    }
+                                }
                             }
                         }
                     }
@@ -94,10 +156,55 @@ public static partial class CCodeOutputGenerator
                 return function.ParameterTypes.SelectMany(EnumerateFunctionTypes)
                     .Concat(EnumerateFunctionTypes(function.ReturnType))
                     .Append(function);
+            case NamedType { IsDelegate: true, DelegateSignature: { } signature }:
+                return EnumerateFunctionTypes(signature);
             case NamedType named:
                 return named.TypeArguments.SelectMany(EnumerateFunctionTypes);
             default:
                 return [];
+        }
+    }
+
+    private static IEnumerable<StatementBase> EnumerateStatements(
+        IEnumerable<StatementBase> statements)
+    {
+        foreach (var statement in statements)
+        {
+            yield return statement;
+            IEnumerable<StatementBase> children = statement switch
+            {
+                BlockStatement block => block.Statements,
+                IfStatement conditional => new[] { conditional.ThenStatement }
+                    .Concat(conditional.ElseStatement is null
+                        ? []
+                        : [conditional.ElseStatement]),
+                WhileStatement loop => [loop.Body],
+                DoWhileStatement loop => [loop.Body],
+                ForStatement loop => [loop.Body],
+                ForeachStatement loop => [loop.Body],
+                SwitchStatement switchStatement => switchStatement.Sections
+                    .SelectMany(section => section.Statements),
+                TryStatement tryStatement => new[] { tryStatement.Body }
+                    .Concat(tryStatement.CatchClauses.Select(clause => clause.Body))
+                    .Concat(tryStatement.FinallyBody is null
+                        ? []
+                        : [tryStatement.FinallyBody]),
+                LocalFunctionDeclarationStatement local when local.Function.Body is { } body =>
+                    body,
+                _ => [],
+            };
+            foreach (var nested in EnumerateStatements(children))
+                yield return nested;
+        }
+    }
+
+    private static IEnumerable<ExpressionBase> EnumerateAllExpressions(ExpressionBase expression)
+    {
+        yield return expression;
+        foreach (var child in GetExpressionChildren(expression))
+        {
+            foreach (var nested in EnumerateAllExpressions(child))
+                yield return nested;
         }
     }
 
@@ -110,16 +217,23 @@ public static partial class CCodeOutputGenerator
         if (includeLocalFunctions)
         {
             var localFunctions = EnumerateLocalFunctions(declarations).ToArray();
+            WriteClosureEnvironmentDeclarations(writer, declarations, localFunctions);
             foreach (var localFunction in localFunctions)
             {
                 var parameters = localFunction.Parameters.Count == 0
                     ? "void"
                     : string.Join(", ", localFunction.Parameters.Select(parameter =>
                         $"{ToCParameterType(parameter.ParameterType)} {parameter.Name}"));
+                if (localFunction.LambdaOwner is not null)
+                {
+                    parameters = "void *__cx_environment" +
+                        (parameters == "void" ? string.Empty : $", {parameters}");
+                }
                 writer.WriteLine(
                     $"static {localFunction.ReturnType.ToCReturnType(false)} " +
                     $"{new QualifiedIdentifier(moduleName, localFunction.LocalCName!).ToCIdentifier()}({parameters});");
             }
+            WriteFunctionValueAdapters(writer, declarations, moduleName, localFunctions);
             if (localFunctions.Length > 0)
             {
                 writer.WriteLine();
@@ -171,6 +285,10 @@ public static partial class CCodeOutputGenerator
             }
             parameters.AddRange(functionDeclaration.Parameters.Select(
                 parameter => $"{ToCParameterType(parameter.ParameterType)} {parameter.Name}"));
+            if (functionDeclaration.LambdaOwner is not null)
+            {
+                parameters.Insert(0, "void *__cx_environment");
+            }
 
             writer.Write(string.Join(", ", parameters));
             writer.WriteLine(") {");
@@ -181,6 +299,29 @@ public static partial class CCodeOutputGenerator
             writer.WriteLine("#endif");
             var context = new StatementWriteContext(functionDeclaration);
             context.WriteDeclarations(writer);
+
+            if (functionDeclaration.LambdaOwner is { } lambdaOwner)
+            {
+                if (lambdaOwner.Captures.Count == 0)
+                {
+                    writer.WriteLine("(void)__cx_environment;");
+                }
+                else
+                {
+                    writer.WriteLine($"struct {GetLambdaEnvironmentCIdentifier(lambdaOwner)} *__cx_closure = " +
+                        $"(struct {GetLambdaEnvironmentCIdentifier(lambdaOwner)}*)__cx_environment;");
+                }
+            }
+            foreach (var parameter in functionDeclaration.Parameters.Where(parameter =>
+                parameter.LocalSymbol?.IsCaptured == true))
+            {
+                var symbol = parameter.LocalSymbol!;
+                var cType = symbol.Type.ToCIdentifier(false);
+                writer.WriteLine(
+                    $"{cType} *{symbol.CellName} = ({cType}*)CX_ID_4(cxcore, System, Memory, Alloc)(" +
+                    $"(cx_uint)sizeof({cType}));");
+                writer.WriteLine($"*{symbol.CellName} = {parameter.Name};");
+            }
 
             if (functionDeclaration is ConstructorDeclaration constructor)
             {
@@ -254,6 +395,20 @@ public static partial class CCodeOutputGenerator
     {
         foreach (var statement in statements)
         {
+            foreach (var expression in GetDirectExpressions(statement))
+            {
+                foreach (var lambda in EnumerateOperatorExpressions<LambdaExpression>(expression))
+                {
+                    if (lambda.GeneratedFunction is not { } generated)
+                        continue;
+                    yield return generated;
+                    if (generated.Body is { } generatedBody)
+                    {
+                        foreach (var nested in EnumerateLocalFunctions(generatedBody))
+                            yield return nested;
+                    }
+                }
+            }
             switch (statement)
             {
                 case LocalFunctionDeclarationStatement local:
@@ -698,6 +853,9 @@ public static partial class CCodeOutputGenerator
 
         switch (statement)
         {
+            case LocalFunctionDeclarationStatement:
+                break;
+
             case ExpressionStatement expressionStatement:
                 writer.WriteLine(
                     $"{ToCExpression(expressionStatement.Expression, functionDeclaration, moduleName)};");
@@ -712,6 +870,22 @@ public static partial class CCodeOutputGenerator
                 {
                     var type = declarator.Type ?? throw new InternalCompilerException(
                         $"Local '{declarator.Name}' is not bound.");
+                    var symbol = declarator.Symbol ?? throw new InternalCompilerException(
+                        $"Local '{declarator.Name}' has no bound symbol.");
+                    if (symbol.IsCaptured)
+                    {
+                        var cType = type.ToCIdentifier(false);
+                        writer.WriteLine(
+                            $"{cType} *{symbol.CellName} = ({cType}*)CX_ID_4(cxcore, System, Memory, Alloc)(" +
+                            $"(cx_uint)sizeof({cType}));");
+                        if (declarator.Initializer is not null)
+                        {
+                            writer.WriteLine(
+                                $"*{symbol.CellName} = " +
+                                $"{ToCExpressionAsType(declarator.Initializer, type, functionDeclaration, moduleName)};");
+                        }
+                        continue;
+                    }
                     var initializer = declarator.Initializer is null
                         ? string.Empty
                         : $" = {ToCExpressionAsType(declarator.Initializer, type, functionDeclaration, moduleName)}";
@@ -803,12 +977,50 @@ public static partial class CCodeOutputGenerator
 
             case ForStatement forStatement:
                 var forTarget = context.PushLoop();
+                var capturedForLocals = forStatement.DeclarationInitializer?.Declarators
+                    .Where(declarator => declarator.Symbol?.IsCaptured == true)
+                    .ToArray() ?? [];
+                if (capturedForLocals.Length > 0)
+                {
+                    writer.WriteLine("{");
+                    writer.IncreaseIndent();
+                    foreach (var declarator in forStatement.DeclarationInitializer!.Declarators)
+                    {
+                        var localType = declarator.Type ?? throw new InternalCompilerException(
+                            $"Local '{declarator.Name}' is not bound.");
+                        var localSymbol = declarator.Symbol ?? throw new InternalCompilerException(
+                            $"Local '{declarator.Name}' has no bound symbol.");
+                        if (localSymbol.IsCaptured)
+                        {
+                            var cType = localType.ToCIdentifier(false);
+                            writer.WriteLine(
+                                $"{cType} *{localSymbol.CellName} = ({cType}*)CX_ID_4(cxcore, System, Memory, Alloc)(" +
+                                $"(cx_uint)sizeof({cType}));");
+                            if (declarator.Initializer is not null)
+                            {
+                                writer.WriteLine(
+                                    $"*{localSymbol.CellName} = " +
+                                    $"{ToCExpressionAsType(declarator.Initializer, localType, functionDeclaration, moduleName)};");
+                            }
+                        }
+                        else
+                        {
+                            var initializer = declarator.Initializer is null
+                                ? string.Empty
+                                : $" = {ToCExpressionAsType(declarator.Initializer, localType, functionDeclaration, moduleName)}";
+                            writer.WriteLine($"{localType.ToCIdentifier(false)} {declarator.Name}{initializer};");
+                        }
+                    }
+                }
                 var forInitializer = forStatement.DeclarationInitializer is not null
-                    ? ToCForDeclaration(
-                        forStatement.DeclarationInitializer,
-                        functionDeclaration,
-                        moduleName)
-                    : string.Join(", ", forStatement.InitializerExpressions.Select(
+                    ? capturedForLocals.Length > 0
+                        ? string.Empty
+                        : ToCForDeclaration(
+                            forStatement.DeclarationInitializer,
+                            functionDeclaration,
+                            moduleName)
+                    :
+                    string.Join(", ", forStatement.InitializerExpressions.Select(
                         expression => ToCExpression(expression, functionDeclaration, moduleName)));
                 var condition = forStatement.Condition is null
                     ? string.Empty
@@ -828,6 +1040,11 @@ public static partial class CCodeOutputGenerator
                 if (forTarget.BreakLabelUsed)
                 {
                     writer.WriteLine($"{forTarget.BreakLabel}:;");
+                }
+                if (capturedForLocals.Length > 0)
+                {
+                    writer.DecreaseIndent();
+                    writer.WriteLine("}");
                 }
                 context.PopLoop(forTarget);
                 break;
@@ -896,6 +1113,40 @@ public static partial class CCodeOutputGenerator
                 ? constType.UnderlyingType
                 : receiverType;
             writer.WriteLine($"{temporaryType.ToCIdentifier(false)} {temporaryName};");
+        }
+        foreach (var invocation in expressionList
+            .SelectMany(EnumerateOperatorExpressions<InvocationExpression>)
+            .Where(invocation => invocation.FunctionType is not null &&
+                invocation.FunctionValueTemporaryName is not null))
+        {
+            writer.WriteLine(
+                $"{GetFunctionTypeCIdentifier(invocation.FunctionType!)} " +
+                $"{invocation.FunctionValueTemporaryName};");
+        }
+        foreach (var assignment in expressionList
+            .SelectMany(EnumerateAllExpressions)
+            .OfType<AssignmentExpression>()
+            .Where(assignment => assignment.DelegateTemporaryName is not null))
+        {
+            var functionType = GetFunctionType(assignment.Target.InferredType) ??
+                throw new InternalCompilerException("Delegate assignment target is not a function type.");
+            writer.WriteLine(
+                $"{functionType.ToCIdentifier(false)} *{assignment.DelegateTemporaryName};");
+        }
+        var allExpressions = expressionList.SelectMany(EnumerateAllExpressions).ToArray();
+        foreach (var methodValue in allExpressions
+            .OfType<MemberAccessExpression>()
+            .Concat(allExpressions
+                .OfType<IdentifierExpression>()
+                .Select(identifier => identifier.TargetMethodValue)
+                .OfType<MemberAccessExpression>())
+            .Where(memberAccess => memberAccess.FunctionValueSymbol is not null)
+            .DistinctBy(memberAccess => memberAccess.FunctionValueReceiverTemporaryName))
+        {
+            var receiverType = GetUnwrappedCaptureType(methodValue.Target.InferredType ??
+                throw new InternalCompilerException("Method value receiver is not bound."));
+            writer.WriteLine(
+                $"{receiverType.ToCIdentifier(false)} {methodValue.FunctionValueReceiverTemporaryName};");
         }
         foreach (var propertyExpression in expressionList.SelectMany(EnumerateInterfacePropertyReceivers))
         {
@@ -1354,9 +1605,22 @@ public static partial class CCodeOutputGenerator
             writer.IncreaseIndent();
             if (clause.VariableName is not null)
             {
-                writer.WriteLine(
-                    $"{clause.ExceptionType.ToCIdentifier(false)} {clause.VariableName} = " +
-                    $"({clause.ExceptionType.ToCIdentifier(false)})cx_exception_current();");
+                if (clause.VariableSymbol?.IsCaptured == true)
+                {
+                    var symbol = clause.VariableSymbol;
+                    var type = clause.ExceptionType.ToCIdentifier(false);
+                    writer.WriteLine(
+                        $"{type} *{symbol.CellName} = ({type}*)CX_ID_4(cxcore, System, Memory, Alloc)(" +
+                        $"(cx_uint)sizeof({type}));");
+                    writer.WriteLine(
+                        $"*{symbol.CellName} = ({type})cx_exception_current();");
+                }
+                else
+                {
+                    writer.WriteLine(
+                        $"{clause.ExceptionType.ToCIdentifier(false)} {clause.VariableName} = " +
+                        $"({clause.ExceptionType.ToCIdentifier(false)})cx_exception_current();");
+                }
             }
 
             if (clause.Filter is not null)
@@ -1439,9 +1703,23 @@ public static partial class CCodeOutputGenerator
             $"{indexName} < {collectionName}->_length; {indexName}++)");
         writer.WriteLine("{");
         writer.IncreaseIndent();
-        writer.WriteLine(
-            $"{variableType.ToCIdentifier(false)} {statement.VariableName} = " +
-            $"(({variableType.ToCIdentifier(false)}*){collectionName}->_data)[{indexName}];");
+        if (statement.VariableSymbol?.IsCaptured == true)
+        {
+            var symbol = statement.VariableSymbol;
+            writer.WriteLine(
+                $"{variableType.ToCIdentifier(false)} *{symbol.CellName} = " +
+                $"({variableType.ToCIdentifier(false)}*)CX_ID_4(cxcore, System, Memory, Alloc)(" +
+                $"(cx_uint)sizeof({variableType.ToCIdentifier(false)}));");
+            writer.WriteLine(
+                $"*{symbol.CellName} = (({variableType.ToCIdentifier(false)}*)" +
+                $"{collectionName}->_data)[{indexName}];");
+        }
+        else
+        {
+            writer.WriteLine(
+                $"{variableType.ToCIdentifier(false)} {statement.VariableName} = " +
+                $"(({variableType.ToCIdentifier(false)}*){collectionName}->_data)[{indexName}];");
+        }
         if (statement.Body is BlockStatement block)
         {
             foreach (var nestedStatement in block.Statements)
@@ -1675,6 +1953,8 @@ public static partial class CCodeOutputGenerator
                 "null" => ToCNullLiteral(literal),
                 _ => literal.SourceText,
             },
+            LambdaExpression { GeneratedFunction.LocalCName: { } localName } lambda =>
+                ToCLambdaValue(lambda, functionDeclaration, moduleName),
             InvocationExpression invocation =>
                 ToCInvocation(invocation, functionDeclaration, moduleName),
             IdentifierExpression { PropertyGetter: not null } identifier =>
@@ -1689,8 +1969,17 @@ public static partial class CCodeOutputGenerator
                     null,
                     functionDeclaration,
                     moduleName),
+            IdentifierExpression { TargetMethodValue: not null } identifier =>
+                ToCMethodGroupValue(
+                    identifier.TargetMethodValue,
+                    functionDeclaration,
+                    moduleName),
             IdentifierExpression { FunctionValueSymbol: not null } identifier =>
-                $"(&{ToCIdentifier(identifier.FunctionValueSymbol)})",
+                ToCFunctionValue(identifier, functionDeclaration, moduleName),
+            IdentifierExpression { TargetCapture: not null } identifier =>
+                ToCCapturedLocal(identifier.TargetCapture, functionDeclaration),
+            IdentifierExpression { TargetLocal: not null } identifier =>
+                ToCLocal(identifier.TargetLocal),
             IdentifierExpression identifier => identifier.TargetField is null
                 ? identifier.Identifier.ToCIdentifier()
                 : ToCFieldAccess(
@@ -1699,6 +1988,8 @@ public static partial class CCodeOutputGenerator
                     identifier.ReceiverBaseDepth,
                     functionDeclaration,
                     moduleName),
+            ThisExpression { TargetCapture: not null } thisExpression =>
+                ToCCapturedThis(thisExpression.TargetCapture, functionDeclaration),
             ThisExpression => "__this",
             BinaryExpression binary =>
                 ToCBinaryExpression(binary, functionDeclaration, moduleName),
@@ -1724,6 +2015,8 @@ public static partial class CCodeOutputGenerator
                     : $"({unary.Operator}{ToCExpression(unary.Operand, functionDeclaration, moduleName)})",
             AssignmentExpression { PropertySetter: not null } assignment =>
                 ToCPropertyAssignment(assignment, functionDeclaration, moduleName),
+            AssignmentExpression { DelegateTemporaryName: not null } assignment =>
+                ToCDelegateCompoundAssignment(assignment, functionDeclaration, moduleName),
             AssignmentExpression { OperatorSymbol: not null } assignment =>
                 ToCOperatorAssignment(assignment, functionDeclaration, moduleName),
             AssignmentExpression assignment =>
@@ -1763,11 +2056,598 @@ public static partial class CCodeOutputGenerator
                     memberAccess.ReceiverBaseDepth,
                     functionDeclaration,
                     moduleName),
+            MemberAccessExpression { FunctionValueIsStatic: true } memberAccess =>
+                ToCStaticMethodGroupValue(memberAccess),
+            MemberAccessExpression { FunctionValueSymbol: not null } memberAccess =>
+                ToCMethodGroupValue(memberAccess, functionDeclaration, moduleName),
             MemberAccessExpression memberAccess =>
                 FlattenIdentifier(memberAccess).ToCIdentifier(),
             _ => throw new InternalCompilerException(
                 $"Expression '{expression.GetType().Name}' is not yet supported by the C generator."),
         };
+    }
+
+    private static void WriteClosureEnvironmentDeclarations(
+        IndentingWriter writer,
+        IReadOnlyCollection<DeclarationBase> declarations,
+        IReadOnlyCollection<FunctionDeclaration> functions)
+    {
+        foreach (var methodValue in EnumerateMethodValueExpressions(declarations, functions)
+            .Where(methodValue => !methodValue.FunctionValueIsStatic))
+        {
+            var boundReceiverType = methodValue.Target.InferredType ??
+                throw new InternalCompilerException("Method value receiver is not bound.");
+            var receiverType = GetUnwrappedCaptureType(boundReceiverType);
+            writer.WriteLine($"struct {methodValue.FunctionValueEnvironmentName} {{");
+            writer.IncreaseIndent();
+            var receiverCType = receiverType is NamedType { ClassType: ClassType.Interface }
+                ? "struct cx_iface_ref"
+                : receiverType is NamedType { ClassType: ClassType.Struct }
+                    ? receiverType.ToCIdentifier(false)
+                    : boundReceiverType.ToCIdentifier(false);
+            writer.WriteLine($"{receiverCType} receiver;");
+            writer.DecreaseIndent();
+            writer.WriteLine("};");
+        }
+
+        foreach (var lambda in functions
+            .Select(function => function.LambdaOwner)
+            .OfType<LambdaExpression>()
+            .Where(lambda => lambda.Captures.Count > 0)
+            .Distinct())
+        {
+            writer.WriteLine($"struct {GetLambdaEnvironmentCIdentifier(lambda)} {{");
+            writer.IncreaseIndent();
+            foreach (var capture in lambda.Captures)
+            {
+                if (capture.Local.IsThis &&
+                    GetUnwrappedCaptureType(capture.Local.Type) is NamedType
+                    {
+                        ClassType: ClassType.Struct,
+                    } valueType)
+                {
+                    writer.WriteLine(
+                        $"{valueType.ToCIdentifier(false)} {capture.EnvironmentFieldName};");
+                }
+                else
+                {
+                    writer.WriteLine($"void *{capture.EnvironmentFieldName};");
+                }
+            }
+            writer.DecreaseIndent();
+            writer.WriteLine("};");
+        }
+    }
+
+    private static IEnumerable<MemberAccessExpression> EnumerateMethodValueExpressions(
+        IReadOnlyCollection<DeclarationBase> declarations,
+        IReadOnlyCollection<FunctionDeclaration> localFunctions)
+    {
+        var expressions = EnumerateFunctions(declarations)
+            .Concat(localFunctions)
+            .Distinct()
+            .SelectMany(function => EnumerateStatements(function.Body ?? [])
+                .SelectMany(GetDirectExpressions)
+                .SelectMany(EnumerateAllExpressions))
+            .ToArray();
+        return expressions
+            .OfType<MemberAccessExpression>()
+            .Concat(expressions
+                .OfType<IdentifierExpression>()
+                .Select(identifier => identifier.TargetMethodValue)
+                .OfType<MemberAccessExpression>())
+            .Where(memberAccess => memberAccess.FunctionValueSymbol is not null)
+            .DistinctBy(memberAccess => memberAccess.FunctionValueAdapterName);
+    }
+
+    private static void WriteFunctionValueAdapters(
+        IndentingWriter writer,
+        IReadOnlyCollection<DeclarationBase> declarations,
+        string moduleName,
+        IReadOnlyCollection<FunctionDeclaration> localFunctions)
+    {
+        var methodValues = EnumerateMethodValueExpressions(declarations, localFunctions).ToArray();
+        var functions = EnumerateFunctions(declarations)
+            .Concat(localFunctions)
+            .Distinct()
+            .SelectMany(function => EnumerateStatements(function.Body ?? [])
+                .SelectMany(GetDirectExpressions)
+                .SelectMany(EnumerateAllExpressions))
+            .OfType<IdentifierExpression>()
+            .Where(identifier => identifier.FunctionValueSymbol is not null)
+            .Select(identifier => identifier.FunctionValueSymbol!)
+            .Concat(methodValues
+                .Where(methodValue => methodValue.FunctionValueIsStatic)
+                .Select(methodValue => methodValue.FunctionValueSymbol!))
+            .DistinctBy(ToCIdentifier)
+            .ToArray();
+        foreach (var function in functions)
+        {
+            var adapterName = GetFunctionValueAdapterCIdentifier(function);
+            var parameters = function.ParameterTypes.Select((type, index) =>
+                $"{ToCParameterType(type)} __cx_arg_{index}").ToArray();
+            var signature = new[] { "void *__cx_environment" }.Concat(parameters);
+            writer.WriteLine($"static {function.ReturnType.ToCReturnType(false)} {adapterName}(");
+            writer.IncreaseIndent();
+            writer.WriteLine(string.Join(",\n", signature));
+            writer.DecreaseIndent();
+            writer.WriteLine(") {");
+            writer.IncreaseIndent();
+            writer.WriteLine("(void)__cx_environment;");
+            var call = $"{ToCIdentifier(function)}({string.Join(", ", parameters.Select((_, index) => $"__cx_arg_{index}"))})";
+            writer.WriteLine(function.ReturnType is VoidType ? $"{call};" : $"return {call};");
+            writer.DecreaseIndent();
+            writer.WriteLine("}");
+        }
+        var instanceMethodValues = methodValues
+            .Where(methodValue => !methodValue.FunctionValueIsStatic)
+            .ToArray();
+        foreach (var methodValue in instanceMethodValues)
+        {
+            WriteMethodValueAdapter(writer, methodValue, moduleName);
+        }
+        if (functions.Length > 0)
+        {
+            writer.WriteLine();
+        }
+        if (instanceMethodValues.Length > 0)
+        {
+            writer.WriteLine();
+        }
+        var functionTypes = EnumerateFunctionTypesFromDeclarations(declarations)
+            .DistinctBy(GetFunctionTypeCIdentifier)
+            .ToArray();
+        foreach (var functionType in functionTypes)
+        {
+            var cType = GetFunctionTypeCIdentifier(functionType);
+            WriteFunctionValueHelpers(writer, functionType);
+        }
+        if (functionTypes.Length > 0)
+        {
+            writer.WriteLine();
+        }
+    }
+
+    private static void WriteFunctionValueHelpers(
+        IndentingWriter writer,
+        FunctionType functionType)
+    {
+        var cType = GetFunctionTypeCIdentifier(functionType);
+        var nodeType = GetFunctionTypeNodeCIdentifier(functionType);
+        var nullName = GetFunctionTypeHelperName(functionType, "is_null");
+        var countName = GetFunctionTypeHelperName(functionType, "count");
+        var itemName = GetFunctionTypeHelperName(functionType, "item");
+        var appendName = GetFunctionTypeHelperName(functionType, "append");
+        var appendValueName = GetFunctionTypeHelperName(functionType, "append_value");
+        var combineName = GetFunctionTypeHelperName(functionType, "combine");
+        var removeName = GetFunctionTypeHelperName(functionType, "remove");
+        var equalName = GetFunctionTypeHelperName(functionType, "equal");
+        var invokeName = GetFunctionTypeHelperName(functionType, "invoke");
+        var callArguments = string.Join(", ", functionType.ParameterTypes
+            .Select((type, index) => $"__cx_arg_{index}"));
+        var parameters = functionType.ParameterTypes
+            .Select((type, index) => $"{ToCParameterType(type)} __cx_arg_{index}")
+            .ToArray();
+        var callSuffix = callArguments.Length == 0 ? string.Empty : $", {callArguments}";
+
+        writer.WriteLine($"struct {nodeType} {{ {cType} value; struct {nodeType} *next; }};");
+        writer.WriteLine($"static inline cx_bool {nullName}({cType} value) {{");
+        writer.IncreaseIndent();
+        writer.WriteLine("return value.__function == NULL && value.__invocation_list == NULL ? CX_TRUE : CX_FALSE;");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+
+        writer.WriteLine($"static inline cx_uint {countName}({cType} value) {{");
+        writer.IncreaseIndent();
+        writer.WriteLine("cx_uint count = 0;");
+        writer.WriteLine($"if (value.__invocation_list != NULL) for (struct {nodeType} *item = value.__invocation_list; item != NULL; item = item->next) ++count;");
+        writer.WriteLine("else if (value.__function != NULL) count = 1;");
+        writer.WriteLine("return count;");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+
+        writer.WriteLine($"static inline {cType} {itemName}({cType} value, cx_uint index) {{");
+        writer.IncreaseIndent();
+        writer.WriteLine($"if (value.__invocation_list != NULL) {{ for (struct {nodeType} *item = value.__invocation_list; item != NULL; item = item->next) {{ if (index == 0) return item->value; --index; }} }}");
+        writer.WriteLine("else if (index == 0 && value.__function != NULL) return value;");
+        writer.WriteLine($"return ({cType}){{ 0 }};");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+
+        writer.WriteLine($"static inline void {appendName}({cType} value, struct {nodeType} **head, struct {nodeType} **tail) {{");
+        writer.IncreaseIndent();
+        writer.WriteLine($"struct {nodeType} *source = value.__invocation_list;");
+        writer.WriteLine($"cx_uint count = source == NULL ? (value.__function == NULL ? 0 : 1) : {countName}(value);");
+        writer.WriteLine("for (cx_uint index = 0; index < count; ++index)");
+        writer.WriteLine("{");
+        writer.IncreaseIndent();
+        writer.WriteLine($"{cType} entry = source == NULL ? value : source->value;");
+        writer.WriteLine("if (source != NULL) source = source->next;");
+        writer.WriteLine("entry.__invocation_list = NULL;");
+        writer.WriteLine($"struct {nodeType} *copy = (struct {nodeType}*)CX_ID_4(cxcore, System, Memory, Alloc)((cx_uint)sizeof(struct {nodeType}));");
+        writer.WriteLine("copy->value = entry;");
+        writer.WriteLine("copy->next = NULL;");
+        writer.WriteLine("if (*tail == NULL) *head = copy; else (*tail)->next = copy;");
+        writer.WriteLine("*tail = copy;");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+
+        writer.WriteLine($"static inline void {appendValueName}({cType} value, struct {nodeType} **head, struct {nodeType} **tail) {{");
+        writer.IncreaseIndent();
+        writer.WriteLine("value.__invocation_list = NULL;");
+        writer.WriteLine("if (value.__function == NULL) return;");
+        writer.WriteLine($"struct {nodeType} *copy = (struct {nodeType}*)CX_ID_4(cxcore, System, Memory, Alloc)((cx_uint)sizeof(struct {nodeType}));");
+        writer.WriteLine("copy->value = value;");
+        writer.WriteLine("copy->next = NULL;");
+        writer.WriteLine("if (*tail == NULL) *head = copy; else (*tail)->next = copy;");
+        writer.WriteLine("*tail = copy;");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+
+        writer.WriteLine($"static inline {cType} {combineName}({cType} left, {cType} right) {{");
+        writer.IncreaseIndent();
+        writer.WriteLine($"struct {nodeType} *head = NULL, *tail = NULL;");
+        writer.WriteLine($"{appendName}(left, &head, &tail);");
+        writer.WriteLine($"{appendName}(right, &head, &tail);");
+        writer.WriteLine($"if (head == NULL) return ({cType}){{ 0 }};");
+        writer.WriteLine($"if (head == tail) return head->value;");
+        writer.WriteLine($"{cType} result = {{ 0 }};");
+        writer.WriteLine("result.__invocation_list = head;");
+        writer.WriteLine("return result;");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+
+        writer.WriteLine($"static inline {cType} {removeName}({cType} source, {cType} value) {{");
+        writer.IncreaseIndent();
+        writer.WriteLine($"cx_uint sourceCount = {countName}(source), valueCount = {countName}(value);");
+        writer.WriteLine("if (valueCount == 0 || valueCount > sourceCount) return source;");
+        writer.WriteLine("cx_uint removeAt = sourceCount;");
+        writer.WriteLine("for (cx_uint start = 0; start <= sourceCount - valueCount; ++start)");
+        writer.WriteLine("{");
+        writer.IncreaseIndent();
+        writer.WriteLine("cx_bool matches = CX_TRUE;");
+        writer.WriteLine("for (cx_uint offset = 0; offset < valueCount; ++offset)");
+        writer.WriteLine("{");
+        writer.IncreaseIndent();
+        writer.WriteLine($"{cType} sourceItem = {itemName}(source, start + offset);");
+        writer.WriteLine($"{cType} valueItem = {itemName}(value, offset);");
+        writer.WriteLine("if (sourceItem.__function != valueItem.__function || sourceItem.__environment != valueItem.__environment) matches = CX_FALSE;");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+        writer.WriteLine("if (matches) removeAt = start;");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+        writer.WriteLine("if (removeAt == sourceCount) return source;");
+        writer.WriteLine($"struct {nodeType} *head = NULL, *tail = NULL;");
+        writer.WriteLine("for (cx_uint index = 0; index < sourceCount; ++index)");
+        writer.WriteLine("{");
+        writer.IncreaseIndent();
+        writer.WriteLine("if (index >= removeAt && index < removeAt + valueCount) continue;");
+        writer.WriteLine($"{appendValueName}({itemName}(source, index), &head, &tail);");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+        writer.WriteLine("if (head == NULL) return (" + cType + "){ 0 };");
+        writer.WriteLine("if (head == tail) return head->value;");
+        writer.WriteLine($"{cType} result = {{ 0 }};");
+        writer.WriteLine("result.__invocation_list = head;");
+        writer.WriteLine("return result;");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+
+        writer.WriteLine($"static inline cx_bool {equalName}({cType} left, {cType} right) {{");
+        writer.IncreaseIndent();
+        writer.WriteLine($"cx_uint count = {countName}(left);");
+        writer.WriteLine($"if (count != {countName}(right)) return CX_FALSE;");
+        writer.WriteLine("for (cx_uint index = 0; index < count; ++index)");
+        writer.WriteLine("{");
+        writer.IncreaseIndent();
+        writer.WriteLine($"{cType} leftItem = {itemName}(left, index);");
+        writer.WriteLine($"{cType} rightItem = {itemName}(right, index);");
+        writer.WriteLine("if (leftItem.__function != rightItem.__function || leftItem.__environment != rightItem.__environment) return CX_FALSE;");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+        writer.WriteLine("return CX_TRUE;");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+
+        var invokeParameters = new[] { $"{cType} value" }.Concat(parameters);
+        writer.WriteLine($"static inline {functionType.ReturnType.ToCReturnType(false)} {invokeName}(");
+        writer.IncreaseIndent();
+        writer.WriteLine(string.Join(",\n", invokeParameters));
+        writer.DecreaseIndent();
+        writer.WriteLine(") {");
+        writer.IncreaseIndent();
+        writer.WriteLine($"if ({nullName}(value)) abort();");
+        if (functionType.ReturnType is VoidType)
+        {
+            writer.WriteLine($"if (value.__invocation_list != NULL) for (struct {nodeType} *item = value.__invocation_list; item != NULL; item = item->next) item->value.__function(item->value.__environment{callSuffix});");
+            writer.WriteLine($"else value.__function(value.__environment{callSuffix});");
+        }
+        else
+        {
+            var returnType = functionType.ReturnType.ToCIdentifier(false);
+            writer.WriteLine($"{returnType} result = {{ 0 }};");
+            writer.WriteLine($"if (value.__invocation_list != NULL) for (struct {nodeType} *item = value.__invocation_list; item != NULL; item = item->next) result = item->value.__function(item->value.__environment{callSuffix});");
+            writer.WriteLine($"else result = value.__function(value.__environment{callSuffix});");
+            writer.WriteLine("return result;");
+        }
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+        writer.WriteLine();
+    }
+
+    private static string GetFunctionTypeNodeCIdentifier(FunctionType functionType) =>
+        $"{GetFunctionTypeCIdentifier(functionType)}_invocation";
+
+    private static FunctionType? GetFunctionType(TypeBase? type) => type switch
+    {
+        ConstType constant => GetFunctionType(constant.UnderlyingType),
+        NullableType nullable => GetFunctionType(nullable.UnderlyingType),
+        FunctionType function => function,
+        NamedType { IsDelegate: true, DelegateSignature: { } signature } => signature,
+        _ => null,
+    };
+
+    private static string GetFunctionTypeHelperName(
+        FunctionType functionType,
+        string operation) =>
+        $"__cx_delegate_{operation}_{GetFunctionTypeCIdentifier(functionType)}";
+
+    private static void WriteMethodValueAdapter(
+        IndentingWriter writer,
+        MemberAccessExpression methodValue,
+        string moduleName)
+    {
+        var method = methodValue.FunctionValueSymbol ?? throw new InternalCompilerException(
+            "Method value has no bound function.");
+        var receiverType = GetUnwrappedCaptureType(methodValue.Target.InferredType ??
+            throw new InternalCompilerException("Method value receiver is not bound."));
+        var parameters = method.ParameterTypes.Select((type, index) =>
+            $"{ToCParameterType(type)} __cx_arg_{index}").ToArray();
+        var signature = new[] { "void *__cx_environment" }.Concat(parameters);
+        writer.WriteLine($"static {method.ReturnType.ToCReturnType(false)} " +
+            $"{methodValue.FunctionValueAdapterName}(");
+        writer.IncreaseIndent();
+        writer.WriteLine(string.Join(",\n", signature));
+        writer.DecreaseIndent();
+        writer.WriteLine(") {");
+        writer.IncreaseIndent();
+        writer.WriteLine($"struct {methodValue.FunctionValueEnvironmentName} *__cx_closure = " +
+            $"(struct {methodValue.FunctionValueEnvironmentName}*)__cx_environment;");
+
+        string call;
+        if (receiverType is NamedType { ClassType: ClassType.Interface })
+        {
+            var dispatchSlot = methodValue.InterfaceDispatchSlotIndex ??
+                throw new InternalCompilerException("Interface method value has no dispatch slot.");
+            var parameterTypes = new[] { "cx_ptr" }
+                .Concat(method.ParameterTypes.Select(type => type.ToCIdentifier(false)));
+            var functionPointer =
+                $"({method.ReturnType.ToCReturnType(false)} (*)({string.Join(", ", parameterTypes)}))";
+            var arguments = new[] { "__cx_closure->receiver.instance" }
+                .Concat(parameters.Select((_, index) => $"__cx_arg_{index}"));
+            call = $"({functionPointer}((union cx_vtable_entry*)" +
+                "__cx_closure->receiver.vtable)[" + dispatchSlot + "].function)(" +
+                string.Join(", ", arguments) + ")";
+        }
+        else
+        {
+            var receiver = receiverType is NamedType { ClassType: ClassType.Struct }
+                ? "&__cx_closure->receiver"
+                : "__cx_closure->receiver";
+            var receiverArgument = ToCBaseReceiver(receiver, true, methodValue.ReceiverBaseDepth);
+            var arguments = new[] { receiverArgument }
+                .Concat(parameters.Select((_, index) => $"__cx_arg_{index}"))
+                .ToArray();
+            if (method.Declaration is { VirtualSlotIndex: { } slotIndex } declaration)
+            {
+                var contract = declaration.VirtualContract ?? declaration;
+                var receiverConst = contract.Const ? "const " : string.Empty;
+                var parameterTypes = new[]
+                {
+                    $"{receiverConst}{contract.ParentClassDeclaration!.ToCIdentifier(moduleName)}*",
+                }.Concat(contract.Parameters.Select(parameter =>
+                    parameter.ParameterType.ToCIdentifier(false)));
+                var functionPointer =
+                    $"({contract.ReturnType.ToCReturnType(false)} (*)({string.Join(", ", parameterTypes)}))";
+                call = $"({functionPointer}((union cx_vtable_entry*)CX_GET_VTABLE({receiverArgument}))" +
+                    $"[{slotIndex}].function)({string.Join(", ", arguments)})";
+            }
+            else
+            {
+                call = $"{ToCIdentifier(method)}({string.Join(", ", arguments)})";
+            }
+        }
+
+        writer.WriteLine(method.ReturnType is VoidType ? $"{call};" : $"return {call};");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
+    }
+
+    private static string ToCLambdaValue(
+        LambdaExpression lambda,
+        FunctionDeclaration functionDeclaration,
+        string moduleName)
+    {
+        var generated = lambda.GeneratedFunction ?? throw new InternalCompilerException(
+            "Lambda expression is not bound.");
+        var functionType = lambda.InferredType as FunctionType ?? throw new InternalCompilerException(
+            "Lambda function type is not bound.");
+        var environment = "NULL";
+        if (lambda.Captures.Count > 0)
+        {
+            var environmentType = GetLambdaEnvironmentCIdentifier(lambda);
+            var fields = lambda.Captures.Select(capture =>
+            {
+                var pointer = GetCaptureCellPointer(capture.Local, functionDeclaration);
+                if (capture.Local.IsThis &&
+                    GetUnwrappedCaptureType(capture.Local.Type) is NamedType
+                    {
+                        ClassType: ClassType.Struct,
+                    })
+                {
+                    return $".{capture.EnvironmentFieldName} = *({pointer})";
+                }
+                return $".{capture.EnvironmentFieldName} = (void*)({pointer})";
+            });
+            environment = $"memcpy(CX_ID_4(cxcore, System, Memory, Alloc)((cx_uint)sizeof(struct {environmentType})), " +
+                $"&(struct {environmentType}){{ {string.Join(", ", fields)} }}, " +
+                $"sizeof(struct {environmentType}))";
+        }
+        return $"(({GetFunctionTypeCIdentifier(functionType)}){{ " +
+            $".__function = &{new QualifiedIdentifier(moduleName, generated.LocalCName!).ToCIdentifier()}, " +
+            $".__environment = {environment} }})";
+    }
+
+    private static TypeBase GetUnwrappedCaptureType(TypeBase type) =>
+        type is ConstType constType ? constType.UnderlyingType : type;
+
+    private static string ToCFunctionValue(
+        IdentifierExpression identifier,
+        FunctionDeclaration functionDeclaration,
+        string moduleName)
+    {
+        var functionType = identifier.InferredType as FunctionType ?? throw new InternalCompilerException(
+            "Function value type is not bound.");
+        var adapterName = GetFunctionValueAdapterCIdentifier(identifier.FunctionValueSymbol!);
+        return $"(({GetFunctionTypeCIdentifier(functionType)}){{ " +
+            $".__function = &{adapterName}, .__environment = NULL }})";
+    }
+
+    private static string ToCMethodGroupValue(
+        MemberAccessExpression methodValue,
+        FunctionDeclaration functionDeclaration,
+        string moduleName)
+    {
+        var functionType = methodValue.InferredType as FunctionType ??
+            throw new InternalCompilerException("Method value type is not bound.");
+        var adapterName = methodValue.FunctionValueAdapterName ??
+            throw new InternalCompilerException("Method value adapter is not bound.");
+        var environmentType = methodValue.FunctionValueEnvironmentName ??
+            throw new InternalCompilerException("Method value environment is not bound.");
+        var receiverTemporary = methodValue.FunctionValueReceiverTemporaryName ??
+            throw new InternalCompilerException("Method value receiver temporary is not bound.");
+        var receiverType = GetUnwrappedCaptureType(methodValue.Target.InferredType ??
+            throw new InternalCompilerException("Method value receiver is not bound."));
+        var receiver = ToCExpression(methodValue.Target, functionDeclaration, moduleName);
+        if (receiverType is NamedType { ClassType: ClassType.Struct } &&
+            methodValue.Target is ThisExpression)
+        {
+            receiver = $"*({receiver})";
+        }
+        var environment = $"memcpy(CX_ID_4(cxcore, System, Memory, Alloc)(" +
+            $"(cx_uint)sizeof(struct {environmentType})), " +
+            $"&(struct {environmentType}){{ .receiver = {receiverTemporary} }}, " +
+            $"sizeof(struct {environmentType}))";
+        var closure = $"(({GetFunctionTypeCIdentifier(functionType)}){{ " +
+            $".__function = &{adapterName}, .__environment = {environment} }})";
+        return $"({receiverTemporary} = {receiver}, {closure})";
+    }
+
+    private static string ToCStaticMethodGroupValue(MemberAccessExpression methodValue)
+    {
+        var method = methodValue.FunctionValueSymbol ?? throw new InternalCompilerException(
+            "Static method value has no bound function.");
+        var functionType = methodValue.InferredType as FunctionType ??
+            throw new InternalCompilerException("Static method value type is not bound.");
+        var adapterName = GetFunctionValueAdapterCIdentifier(method);
+        return $"(({GetFunctionTypeCIdentifier(functionType)}){{ " +
+            $".__function = &{adapterName}, .__environment = NULL }})";
+    }
+
+    private static string ToCLocal(LocalVariableSymbol local)
+    {
+        return local.IsCaptured ? $"(*{local.CellName})" : local.Name;
+    }
+
+    private static string ToCCapturedLocal(
+        LambdaCapture capture,
+        FunctionDeclaration functionDeclaration)
+    {
+        var environmentType = GetLambdaEnvironmentCIdentifier(
+            functionDeclaration.LambdaOwner ?? throw new InternalCompilerException(
+                "A captured local is referenced outside a lambda helper."));
+        var type = capture.Local.Type.ToCIdentifier(false);
+        return $"(*(({type}*)((struct {environmentType}*)__cx_environment)->" +
+            $"{capture.EnvironmentFieldName}))";
+    }
+
+    private static string ToCCapturedThis(
+        LambdaCapture capture,
+        FunctionDeclaration functionDeclaration) =>
+        GetCapturedThisPointer(capture.Local, functionDeclaration);
+
+    private static string GetCapturedThisPointer(
+        LocalVariableSymbol thisSymbol,
+        FunctionDeclaration functionDeclaration)
+    {
+        if (functionDeclaration.LambdaOwner is { } lambdaOwner)
+        {
+            var capture = lambdaOwner.Captures.FirstOrDefault(item =>
+                ReferenceEquals(item.Local, thisSymbol));
+            if (capture is null)
+            {
+                throw new InternalCompilerException("Lambda uses 'this' without capturing it.");
+            }
+            var environmentType = GetLambdaEnvironmentCIdentifier(lambdaOwner);
+            if (GetUnwrappedCaptureType(thisSymbol.Type) is NamedType
+                {
+                    ClassType: ClassType.Struct,
+                })
+            {
+                return $"(({thisSymbol.Type.ToCIdentifier(false)}*)&((struct {environmentType}*)" +
+                    $"__cx_environment)->{capture.EnvironmentFieldName})";
+            }
+            var cType = thisSymbol.Type.ToCIdentifier(false);
+            return $"(({cType})((struct {environmentType}*)__cx_environment)->" +
+                capture.EnvironmentFieldName + ")";
+        }
+        if (functionDeclaration.ParentClassDeclaration is not null)
+        {
+            return "__this";
+        }
+        throw new InternalCompilerException("'this' has no enclosing instance.");
+    }
+
+    private static string GetCaptureCellPointer(
+        LocalVariableSymbol local,
+        FunctionDeclaration functionDeclaration)
+    {
+        if (local.IsThis)
+        {
+            return GetCapturedThisPointer(local, functionDeclaration);
+        }
+        if (ReferenceEquals(local.OwnerLambda, functionDeclaration.LambdaOwner))
+        {
+            return local.CellName;
+        }
+        if (functionDeclaration.LambdaOwner is { } enclosingLambda)
+        {
+            var parentCapture = enclosingLambda.Captures.FirstOrDefault(capture =>
+                ReferenceEquals(capture.Local, local));
+            if (parentCapture is not null)
+            {
+                var environmentType = GetLambdaEnvironmentCIdentifier(enclosingLambda);
+                return $"((struct {environmentType}*)__cx_environment)->{parentCapture.EnvironmentFieldName}";
+            }
+        }
+        return local.CellName;
+    }
+
+    private static string GetLambdaEnvironmentCIdentifier(LambdaExpression lambda)
+    {
+        var functionName = lambda.GeneratedFunction?.LocalCName ??
+            throw new InternalCompilerException("Lambda environment has no generated function.");
+        return $"{functionName}_environment";
+    }
+
+    private static string GetFunctionValueAdapterCIdentifier(FunctionSymbol function)
+    {
+        var identifier = ToCIdentifier(function);
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identifier)));
+        return $"__cx_function_adapter_{hash[..16]}";
     }
 
     private static string ToCIndexedPropertyGetter(
@@ -1801,9 +2681,18 @@ public static partial class CCodeOutputGenerator
     {
         if (invocation.FunctionType is not null)
         {
-            return $"{ToCExpression(invocation.Target, functionDeclaration, moduleName)}(" +
-                string.Join(", ", invocation.Arguments.Select(argument =>
-                    ToCExpression(argument, functionDeclaration, moduleName))) + ")";
+            var temporaryName = invocation.FunctionValueTemporaryName ??
+                throw new InternalCompilerException("Function value invocation has no temporary.");
+            var callArguments = string.Join(", ", invocation.Arguments
+                .Zip(invocation.FunctionType.ParameterTypes)
+                .Select(pair => ToCExpressionAsType(
+                    pair.First,
+                    pair.Second,
+                    functionDeclaration,
+                    moduleName)));
+            var call = $"{GetFunctionTypeHelperName(invocation.FunctionType, "invoke")}" +
+                $"({temporaryName}{(callArguments.Length == 0 ? string.Empty : $", {callArguments}")})";
+            return $"({temporaryName} = {ToCExpression(invocation.Target, functionDeclaration, moduleName)}, {call})";
         }
         var target = invocation.TargetSymbol ?? throw new InternalCompilerException(
             "Invocation target is not bound.");
@@ -1837,8 +2726,11 @@ public static partial class CCodeOutputGenerator
         {
             if (invocation.Receiver is null)
             {
+                var implicitReceiver = functionDeclaration.LambdaOwner?.ThisSymbol is { } thisSymbol
+                    ? GetCapturedThisPointer(thisSymbol, functionDeclaration)
+                    : "__this";
                 arguments.Add(ToCBaseReceiver(
-                    "__this",
+                    implicitReceiver,
                     true,
                     invocation.ReceiverBaseDepth));
             }
@@ -1959,7 +2851,10 @@ public static partial class CCodeOutputGenerator
         {
             if (receiver is null)
             {
-                arguments.Add(ToCBaseReceiver("__this", true, receiverBaseDepth));
+                var receiverExpression = functionDeclaration.LambdaOwner?.ThisSymbol is { } thisSymbol
+                    ? GetCapturedThisPointer(thisSymbol, functionDeclaration)
+                    : "__this";
+                arguments.Add(ToCBaseReceiver(receiverExpression, true, receiverBaseDepth));
             }
             else
             {
@@ -1999,6 +2894,12 @@ public static partial class CCodeOutputGenerator
         }
         if (receiver is null)
         {
+            if (functionDeclaration.LambdaOwner?.ThisSymbol is { } thisSymbol &&
+                !field.Declaration.IsStatic)
+            {
+                return $"({GetCapturedThisPointer(thisSymbol, functionDeclaration)})->" +
+                    field.Declaration.Name;
+            }
             if (receiverBaseDepth == 0)
             {
                 return $"__this->{field.Declaration.Name}";
@@ -2076,6 +2977,10 @@ public static partial class CCodeOutputGenerator
         var unwrappedSource = sourceType is ConstType sourceConst
             ? sourceConst.UnderlyingType
             : sourceType;
+        if (GetFunctionType(unwrappedTarget) is not null && unwrappedSource is NullType)
+        {
+            return $"({unwrappedTarget.ToCIdentifier(false)}){{ 0 }}";
+        }
         if (unwrappedTarget is NullableType nullableTarget &&
             unwrappedSource is not NullableType &&
             unwrappedSource is not NullType)
@@ -2122,6 +3027,10 @@ public static partial class CCodeOutputGenerator
         string moduleName)
     {
         var targetType = expression.TargetType;
+        if (GetFunctionType(targetType) is not null && expression.Operand.InferredType is NullType)
+        {
+            return $"({targetType.ToCIdentifier(false)}){{ 0 }}";
+        }
         var targetClassType = GetReferenceClassType(targetType);
         var targetCType = targetType.ToCIdentifier(false);
         if (expression.Operand.InferredType is NullType)
@@ -2264,6 +3173,19 @@ public static partial class CCodeOutputGenerator
         FunctionDeclaration functionDeclaration,
         string moduleName)
     {
+        var leftFunctionTypeOuter = GetFunctionType(expression.Left.InferredType);
+        var rightFunctionTypeOuter = GetFunctionType(expression.Right.InferredType);
+        if (expression.Operator is "+" or "-" &&
+            (leftFunctionTypeOuter ?? rightFunctionTypeOuter) is { } delegateType)
+        {
+            var helper = GetFunctionTypeHelperName(
+                delegateType,
+                expression.Operator == "+" ? "combine" : "remove");
+            return $"{helper}(" +
+                $"{ToCExpressionAsType(expression.Left, delegateType, functionDeclaration, moduleName)}, " +
+                $"{ToCExpressionAsType(expression.Right, delegateType, functionDeclaration, moduleName)})";
+        }
+
         if (expression.OperatorSymbol is { } operatorSymbol)
         {
             var receiverTemporary = expression.OperatorReceiverTemporaryName;
@@ -2288,6 +3210,36 @@ public static partial class CCodeOutputGenerator
 
         if (expression.Operator is "==" or "!=")
         {
+            var leftType = expression.Left.InferredType is ConstType leftConst
+                ? leftConst.UnderlyingType
+                : expression.Left.InferredType;
+            var rightType = expression.Right.InferredType is ConstType rightConst
+                ? rightConst.UnderlyingType
+                : expression.Right.InferredType;
+            var leftFunctionType = GetFunctionType(leftType);
+            var rightFunctionType = GetFunctionType(rightType);
+            if (leftFunctionType is not null)
+            {
+                if (rightType is NullType)
+                {
+                    var isNull = $"{GetFunctionTypeHelperName(leftFunctionType, "is_null")}" +
+                        $"({ToCExpression(expression.Left, functionDeclaration, moduleName)})";
+                    return expression.Operator == "==" ? isNull : $"(!{isNull})";
+                }
+                if (rightFunctionType is not null)
+                {
+                    var comparison = $"{GetFunctionTypeHelperName(leftFunctionType, "equal")}(" +
+                        $"{ToCExpressionAsType(expression.Left, leftFunctionType, functionDeclaration, moduleName)}, " +
+                        $"{ToCExpressionAsType(expression.Right, leftFunctionType, functionDeclaration, moduleName)})";
+                    return expression.Operator == "==" ? comparison : $"(!{comparison})";
+                }
+            }
+            if (rightFunctionType is not null && leftType is NullType)
+            {
+                var isNull = $"{GetFunctionTypeHelperName(rightFunctionType, "is_null")}" +
+                    $"({ToCExpression(expression.Right, functionDeclaration, moduleName)})";
+                return expression.Operator == "==" ? isNull : $"(!{isNull})";
+            }
             if (expression.Left is LiteralExpression { SourceText: "null" } &&
                 IsInterfaceExpression(expression.Right))
             {
@@ -2391,6 +3343,28 @@ public static partial class CCodeOutputGenerator
         var value = ToCExpressionAsType(
             expression.Value, symbol.ParameterTypes.Single(), functionDeclaration, moduleName);
         return $"{ToCIdentifier(symbol)}({receiverArgument}, {value})";
+    }
+
+    private static string ToCDelegateCompoundAssignment(
+        AssignmentExpression expression,
+        FunctionDeclaration functionDeclaration,
+        string moduleName)
+    {
+        var functionType = GetFunctionType(expression.Target.InferredType) ??
+            throw new InternalCompilerException("Delegate assignment target is not a function type.");
+        var temporaryName = expression.DelegateTemporaryName ??
+            throw new InternalCompilerException("Delegate assignment has no lvalue temporary.");
+        var helper = GetFunctionTypeHelperName(
+            functionType,
+            expression.Operator == "+=" ? "combine" : "remove");
+        var target = ToCExpression(expression.Target, functionDeclaration, moduleName);
+        var value = ToCExpressionAsType(
+            expression.Value,
+            functionType,
+            functionDeclaration,
+            moduleName);
+        return $"({temporaryName} = &({target}), " +
+            $"*{temporaryName} = {helper}(*{temporaryName}, {value}), (void)0)";
     }
 
     private static string ToCNullCoalescingExpression(
@@ -2804,6 +3778,7 @@ public static partial class CCodeOutputGenerator
             ArrayCreationExpression arrayCreation => [arrayCreation.Length],
             ArrayAccessExpression arrayAccess => [arrayAccess.Target, .. arrayAccess.Indices],
             ObjectCreationExpression creation => creation.Arguments,
+            LambdaExpression => [],
             _ => [],
         };
     }

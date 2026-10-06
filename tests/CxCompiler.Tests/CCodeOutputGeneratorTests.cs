@@ -85,6 +85,68 @@ public sealed class CCodeOutputGeneratorTests
     }
 
     [Fact]
+    public void EmitsMulticastDelegateCombinationRemovalAndInvocation()
+    {
+        var generatedSource = GenerateSource("""
+            int Main() {
+                delegate(int) => int first = value => value + 1;
+                delegate(int) => int second = value => value + 2;
+                first += second;
+                first -= second;
+                return first(10);
+            }
+            """);
+
+        Assert.Contains("__invocation_list", generatedSource);
+        Assert.Contains("__cx_delegate_combine_CX_FN_", generatedSource);
+        Assert.Contains("__cx_delegate_remove_CX_FN_", generatedSource);
+        Assert.Contains("__cx_delegate_invoke_CX_FN_", generatedSource);
+        Assert.Contains("__cx_delegate_equal_CX_FN_", generatedSource);
+    }
+
+    [Fact]
+    public void EmitsAndInvokesNamedDelegateTypes()
+    {
+        const string source = """
+            public delegate int Transform(int value);
+
+            int Main() {
+                Transform first = value => value + 1;
+                Transform second = value => value + 2;
+                first += second;
+                bool same = first == second;
+                bool isNull = first == null;
+                return first(10);
+            }
+            """;
+        var generatedHeader = GenerateOutput(source, "unnamed.h");
+        var generatedSource = GenerateSource(source);
+
+        Assert.Contains("typedef CX_FN_", generatedHeader);
+        Assert.Contains("CX_ID_2(unnamed, Transform)", generatedHeader);
+        Assert.Contains("__cx_delegate_combine_CX_FN_", generatedSource);
+        Assert.Contains("__cx_delegate_invoke_CX_FN_", generatedSource);
+        Assert.Contains("__cx_delegate_equal_CX_FN_", generatedSource);
+        Assert.Contains("__cx_delegate_is_null_CX_FN_", generatedSource);
+    }
+
+    [Fact]
+    public void KeepsNamedDelegateTypesNominal()
+    {
+        var exception = Assert.Throws<CompilationErrorException>(() => GenerateSource("""
+            delegate int First(int value);
+            delegate int Second(int value);
+
+            void Main() {
+                First first = value => value;
+                Second second = first;
+            }
+            """));
+
+        Assert.Contains("Cannot initialize local", exception.Message);
+    }
+
+    [Fact]
     public void EmitsGenericFunctionParametersAndReturnStorageAsPointers()
     {
         const string source = """

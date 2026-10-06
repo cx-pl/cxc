@@ -13,6 +13,7 @@ public sealed class InvocationExpression : ExpressionBase
     public int ReceiverBaseDepth { get; private set; }
     public int? DispatchSlotIndex { get; private set; }
     public string? ReceiverTemporaryName { get; private set; }
+    public string? FunctionValueTemporaryName { get; private set; }
 
     public InvocationExpression(
         ExpressionBase target,
@@ -39,8 +40,10 @@ public sealed class InvocationExpression : ExpressionBase
     }
 
     public void BindFunctionType(
-        CxCompiler.Model.Types.BuiltInTypes.FunctionType functionType)
+        CxCompiler.Model.Types.BuiltInTypes.FunctionType functionType,
+        string temporaryName)
     {
         FunctionType = functionType;
+        FunctionValueTemporaryName = temporaryName;
     }
 }

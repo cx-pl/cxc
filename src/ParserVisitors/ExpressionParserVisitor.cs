@@ -25,6 +25,31 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
             Visit(context.expression())).WithSourceSpan(context);
     }
 
+    public override ExpressionBase VisitLambdaExpression([NotNull] CxParser.LambdaExpressionContext context)
+    {
+        var parameters = context.lambdaParameters().lambdaParameter()
+            .Select(parameter => new LambdaParameter(
+                parameter.Identifier().GetText(),
+                parameter.typeName() is { } typeName
+                    ? new TypeNameContextVisitor().Visit(typeName)
+                    : null))
+            .ToArray();
+        if (context.lambdaParameters().Identifier() is { } singleParameter)
+        {
+            parameters = [new LambdaParameter(singleParameter.GetText(), null)];
+        }
+
+        var body = context.lambdaBody();
+        var expressionBody = body.expression() is { } expression
+            ? Visit(expression)
+            : null;
+        var statementBody = body.LeftBrace() is not null
+            ? StatementParserVisitor.ParseStatements(body.statements())
+            : null;
+        return new LambdaExpression(parameters, expressionBody, statementBody)
+            .WithSourceSpan(context);
+    }
+
     public override ExpressionBase VisitConditionalExpression([NotNull] CxParser.ConditionalExpressionContext context)
     {
         if (context.Question() is null)

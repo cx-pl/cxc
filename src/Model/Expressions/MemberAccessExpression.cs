@@ -11,6 +11,11 @@ public sealed class MemberAccessExpression : ExpressionBase
     public PropertySymbol? TargetProperty { get; private set; }
     public PropertyAccessorSymbol? PropertyGetter { get; private set; }
     public EnumMemberSymbol? TargetEnumMember { get; private set; }
+    public FunctionSymbol? FunctionValueSymbol { get; private set; }
+    public bool FunctionValueIsStatic { get; private set; }
+    public string? FunctionValueAdapterName { get; private set; }
+    public string? FunctionValueEnvironmentName { get; private set; }
+    public string? FunctionValueReceiverTemporaryName { get; private set; }
     public int ReceiverBaseDepth { get; private set; }
     public int? InterfaceDispatchSlotIndex { get; private set; }
     public string? InterfaceReceiverTemporaryName { get; private set; }
@@ -44,5 +49,27 @@ public sealed class MemberAccessExpression : ExpressionBase
     public void BindEnumMember(EnumMemberSymbol member)
     {
         TargetEnumMember = member;
+    }
+
+    public void BindFunctionValue(
+        FunctionSymbol symbol,
+        string adapterName,
+        string environmentName,
+        string receiverTemporaryName,
+        int receiverBaseDepth,
+        int? interfaceDispatchSlotIndex)
+    {
+        FunctionValueSymbol = symbol;
+        FunctionValueAdapterName = adapterName;
+        FunctionValueEnvironmentName = environmentName;
+        FunctionValueReceiverTemporaryName = receiverTemporaryName;
+        ReceiverBaseDepth = receiverBaseDepth;
+        InterfaceDispatchSlotIndex = interfaceDispatchSlotIndex;
+    }
+
+    public void BindStaticFunctionValue(FunctionSymbol symbol)
+    {
+        FunctionValueSymbol = symbol;
+        FunctionValueIsStatic = true;
     }
 }

@@ -74,14 +74,42 @@ operator declarations are not implemented. Supported tokens are `+`, `-`,
 `>`, `>=`, `++`, `--`, and compound assignment forms of the binary operators.
 Function types use the syntax `delegate(parameter-types) => return-type`, for
 example `delegate(int, string) => bool`. Function values can be passed,
-stored in locals, and invoked. A named function can be used as a function value
-when its name resolves to one non-generic static or top-level overload.
-Instance-method values, lambdas, closures, and delegate object semantics are
-not implemented. For mixed numeric operands, the compiler chooses a common type
-when one operand type accepts an implicit numeric
-conversion from the other; otherwise it reports an error. The current implicit
-numeric conversions are widening conversions among the built-in numeric types;
-an explicit cast is required where no such conversion applies. Reference
+stored in locals, and invoked. A named static or top-level function can be used
+as a function value. When an expected function type is available, it selects an
+overload by exact parameter types and a compatible return type; generic
+parameters can be inferred from the expected parameter types.
+Lambda expressions use `x => expression` or `(x, y) => expression`, with
+optional block bodies. Parameter types come from the target function type or
+can be written explicitly, as in `(int x) => x + 1`. Lambdas can capture local
+variables, parameters, and `this`. Captured variables are shared by reference,
+so updates made by the enclosing function and by the lambda are visible to one
+another, even when the lambda outlives the enclosing stack frame. Capture
+storage is managed by the runtime garbage collector. A captured class `this`
+refers to the same object; a captured struct `this` is copied into managed
+closure storage when the closure is created. An unambiguous instance method
+can be used as a function value through a receiver, as in `item.Read`; class
+receivers retain the object, struct receivers are copied, and interface and
+virtual dispatch are preserved. An instance method can also be referenced by
+name inside its class instance context, including inside a lambda. An expected
+function type selects an instance method overload by exact parameter types and
+a compatible return type; generic parameters can be inferred from the expected
+parameter types. Static class methods can also be used as function values.
+Named delegate types use the declaration syntax `delegate ReturnType Name(Type parameter, ...);`, for example `public delegate int Transform(int value);`.
+They are nominal types, so separately declared delegate types remain distinct
+even when their signatures match. A lambda or function value with a compatible
+signature can initialize a named delegate variable. Delegate values support
+`+` and `-` to combine invocation lists or remove the last matching contiguous
+sequence, and `+=` and `-=` to update a variable; compound assignment returns
+`void`. Invocation runs handlers in order, and a non-void invocation returns
+the last handler's result. Equality compares the ordered invocation lists, and
+delegates can be compared with `null`. Named delegates currently use the
+compiler's closure and invocation-list representation; a common object base
+type and reflection-based delegate APIs are not implemented.
+For mixed numeric operands, the compiler chooses a common type when one operand
+type accepts an implicit numeric conversion from the other; otherwise it
+reports an error. The current implicit numeric conversions are widening
+conversions among the built-in numeric types; an explicit cast is required
+where no such conversion applies. Reference
 upcasts and class-to-interface conversions are implicit. Checked downcasts and
 interface conversions use explicit casts and fail at runtime if the non-null
 value is incompatible; a null cast remains null. Type tests on null are false.
@@ -143,9 +171,9 @@ must be registered, and dynamically unloading a module that registered roots is
 unsupported. See the linked runtime contracts and managed-memory design for
 ownership, `Memory.Free`, and rooting rules.
 
-The current compiler gaps include lambdas, closures, instance-method function
-values, delegate object semantics, `async`/`await`, concepts, extension
-declarations, and `typedef` declarations. The grammar accepts an `async`
+The current compiler gaps include a common object base type and reflection-based
+delegate APIs, `async`/`await`, concepts, extension declarations, and `typedef`
+declarations. The grammar accepts an `async`
 modifier, but it has no async semantics; `await` is not implemented. Generic
 support is restricted to the body and layout
 patterns in [`generics-design.md`](generics-design.md); generic property accessors

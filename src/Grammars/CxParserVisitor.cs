@@ -8,7 +8,7 @@
 // </auto-generated>
 //------------------------------------------------------------------------------
 
-// Generated from c:/workspace/cx-pl/cxc/src/Grammars/CxParser.g4 by ANTLR 4.13.1
+// Generated from CxParser.g4 by ANTLR 4.13.1
 
 // Unreachable code detected
 #pragma warning disable 0162
@@ -68,6 +68,12 @@ public interface ICxParserVisitor<Result> : IParseTreeVisitor<Result> {
 	/// <param name="context">The parse tree.</param>
 	/// <return>The visitor result.</return>
 	Result VisitTopLevelDeclaration([NotNull] CxParser.TopLevelDeclarationContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.delegateDeclaration"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitDelegateDeclaration([NotNull] CxParser.DelegateDeclarationContext context);
 	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.classModifiers"/>.
 	/// </summary>
@@ -470,6 +476,30 @@ public interface ICxParserVisitor<Result> : IParseTreeVisitor<Result> {
 	/// <param name="context">The parse tree.</param>
 	/// <return>The visitor result.</return>
 	Result VisitNonAssignmentExpression([NotNull] CxParser.NonAssignmentExpressionContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.lambdaExpression"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitLambdaExpression([NotNull] CxParser.LambdaExpressionContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.lambdaParameters"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitLambdaParameters([NotNull] CxParser.LambdaParametersContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.lambdaParameter"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitLambdaParameter([NotNull] CxParser.LambdaParameterContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.lambdaBody"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitLambdaBody([NotNull] CxParser.LambdaBodyContext context);
 	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.conditionalExpression"/>.
 	/// </summary>

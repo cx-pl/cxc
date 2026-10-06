@@ -13,6 +13,7 @@ public sealed class AssignmentExpression : ExpressionBase
     public int ReceiverBaseDepth { get; private set; }
     public int? InterfaceDispatchSlotIndex { get; private set; }
     public string? InterfaceReceiverTemporaryName { get; private set; }
+    public string? DelegateTemporaryName { get; private set; }
     public FunctionSymbol? OperatorSymbol { get; private set; }
     public int OperatorBaseDepth { get; private set; }
 
@@ -46,5 +47,10 @@ public sealed class AssignmentExpression : ExpressionBase
     {
         OperatorSymbol = symbol;
         OperatorBaseDepth = baseDepth;
+    }
+
+    public void BindDelegateCompound(string temporaryName)
+    {
+        DelegateTemporaryName = temporaryName;
     }
 }

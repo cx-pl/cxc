@@ -30,8 +30,14 @@ topLevelDeclaration
     : classDeclaration
     | functionDeclaration
     | enumDeclaration
+    | delegateDeclaration
     | typedefDeclaration
     | extensionDeclaration
+    ;
+
+delegateDeclaration
+    : visibilityModifier? Delegate returnType = typeNameOrVoid name = Identifier
+        LeftParen parameters = functionParameters? RightParen Semicolon
     ;
 
 // Classes
@@ -370,8 +376,26 @@ assignOperator
     ;
 
 nonAssignmentExpression
-    : conditionalExpression
-    // TODO: lambdaExpression
+    : lambdaExpression
+    | conditionalExpression
+    ;
+
+lambdaExpression
+    : lambdaParameters Arrow lambdaBody
+    ;
+
+lambdaParameters
+    : Identifier
+    | LeftParen (lambdaParameter (Comma lambdaParameter)*)? RightParen
+    ;
+
+lambdaParameter
+    : typeName? Identifier
+    ;
+
+lambdaBody
+    : expression
+    | LeftBrace statements? RightBrace
     ;
 
 conditionalExpression

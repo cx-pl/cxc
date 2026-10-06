@@ -1,4 +1,5 @@
 using CxCompiler.Model.Common;
+using CxCompiler.Model.Types.BuiltInTypes;
 
 namespace CxCompiler.Model.Types;
 
@@ -10,6 +11,8 @@ public class NamedType : TypeBase
     public string[] GenericParams { get; }
     public IReadOnlyList<TypeBase> TypeArguments { get; private set; }
     public GenericTypeIdentity? ConstructedIdentity { get; internal set; }
+    public bool IsDelegate { get; private set; }
+    public FunctionType? DelegateSignature { get; private set; }
 
     public NamedType(string name, string[] genericParams)
         : base(name, QualifiedIdentifier.Empty)
@@ -109,5 +112,15 @@ public class NamedType : TypeBase
     {
         ResolvedTypeFullName = new QualifiedIdentifier(moduleName, typeFullName);
         ClassType = classType;
+    }
+
+    public void SetDelegateType(
+        QualifiedIdentifier typeFullName,
+        string moduleName,
+        FunctionType signature)
+    {
+        SetResolvedType(typeFullName, moduleName, ClassType.Struct);
+        IsDelegate = true;
+        DelegateSignature = signature;
     }
 }

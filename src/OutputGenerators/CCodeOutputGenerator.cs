@@ -414,7 +414,7 @@ public static partial class CCodeOutputGenerator
             writer.WriteLine($"struct {instance.Type.ConstructedIdentity!.CIdentifier};");
         }
         writer.WriteLine();
-        WriteFunctionTypeDeclarations(writer, declarations);
+        WriteFunctionTypeDeclarations(writer, declarations, project.Name);
 
         writer.WriteLine("//");
         writer.WriteLine("// Type declarations");
@@ -1106,7 +1106,11 @@ public static partial class CCodeOutputGenerator
         var functionLiterals = EnumerateFunctions(declarations)
             .Where(function => function.Body is not null)
             .SelectMany(function => function.Body!)
-            .SelectMany(EnumerateStringLiterals);
+            .SelectMany(EnumerateStringLiterals)
+            .Concat(EnumerateLocalFunctions(declarations)
+                .Where(function => function.Body is not null)
+                .SelectMany(function => function.Body!)
+                .SelectMany(EnumerateStringLiterals));
         var fieldLiterals = EnumerateFields(declarations)
             .Where(field => field.Initializer is LiteralExpression { IsString: true })
             .Select(field => (LiteralExpression)field.Initializer!);
@@ -2339,7 +2343,8 @@ public static partial class CCodeOutputGenerator
     private static string ToTypeInfoPointer(TypeBase type)
     {
         type = type is ConstType constType ? constType.UnderlyingType : type;
-        if (type is PtrType or FunctionType or AutoType or GenericType or NullType)
+        if (type is PtrType or FunctionType or AutoType or GenericType or NullType ||
+            type is NamedType { IsDelegate: true })
         {
             return "CX_NULL";
         }
@@ -2592,6 +2597,10 @@ public static partial class CCodeOutputGenerator
                 {
                     declarations.Add(enumDeclaration);
                 }
+                else if (declaration is DelegateDeclaration delegateDeclaration)
+                {
+                    declarations.Add(delegateDeclaration);
+                }
                 else
                 {
                     throw new InternalCompilerException(
@@ -2681,7 +2690,7 @@ public static partial class CCodeOutputGenerator
         declarations.Where(declaration => declaration switch
         {
             FunctionDeclaration function => IsPublicApiFunction(function),
-            ClassDeclaration or EnumDeclaration =>
+            ClassDeclaration or EnumDeclaration or DelegateDeclaration =>
                 publicTypeNames.Contains(declaration.FullName),
             _ => false,
         }).ToList();
@@ -2695,6 +2704,7 @@ public static partial class CCodeOutputGenerator
             {
                 ClassDeclaration classType => classType.Visibility == Visibility.Public,
                 EnumDeclaration enumType => enumType.Visibility == Visibility.Public,
+                DelegateDeclaration delegateType => delegateType.Visibility == Visibility.Public,
                 _ => false,
             })
             .Select(type => type.FullName)
@@ -2708,6 +2718,15 @@ public static partial class CCodeOutputGenerator
             foreach (var parameter in function.Parameters)
             {
                 AddTypeReferences(parameter.ParameterType, referencedTypes);
+            }
+        }
+        foreach (var delegateType in declarations.OfType<DelegateDeclaration>()
+            .Where(delegateType => delegateType.Visibility == Visibility.Public))
+        {
+            AddTypeReferences(delegateType.Signature.ReturnType, referencedTypes);
+            foreach (var parameterType in delegateType.Signature.ParameterTypes)
+            {
+                AddTypeReferences(parameterType, referencedTypes);
             }
         }
 
@@ -2839,6 +2858,10 @@ public static partial class CCodeOutputGenerator
             else if (declaration is EnumDeclaration enumType)
             {
                 yield return enumType;
+            }
+            else if (declaration is DelegateDeclaration delegateType)
+            {
+                yield return delegateType;
             }
         }
     }
@@ -3102,6 +3125,8 @@ public static partial class CCodeOutputGenerator
             ArrayType => $"{constString}struct CX_ID_3(cxcore, System, Array)*",
             NullableType => $"{constString}struct CX_ID_3(cxcore, System, Nullable)",
 
+            NamedType namedType when namedType.IsDelegate =>
+                $"{constString}{namedType.ResolvedTypeFullName.ToCIdentifier()}",
             NamedType namedType when namedType.ClassType == ClassType.Struct => $"{constString}struct {namedType.ResolvedTypeFullName.ToCIdentifier()}",
             NamedType namedType when namedType.ClassType == ClassType.Class &&
                 RequiresClosedValueLayout(namedType) =>

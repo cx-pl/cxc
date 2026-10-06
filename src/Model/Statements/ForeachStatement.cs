@@ -1,5 +1,5 @@
-using CxCompiler.Model.Expressions;
 using CxCompiler.Model.Types;
+using CxCompiler.Model.Expressions;
 
 namespace CxCompiler.Model.Statements;
 
@@ -10,6 +10,7 @@ public sealed class ForeachStatement : StatementBase
     public ExpressionBase Collection { get; }
     public StatementBase Body { get; }
     public TypeBase? VariableType { get; private set; }
+    public LocalVariableSymbol? VariableSymbol { get; private set; }
 
     public ForeachStatement(
         TypeBase declaredType,
@@ -23,8 +24,9 @@ public sealed class ForeachStatement : StatementBase
         Body = body;
     }
 
-    public void BindVariableType(TypeBase type)
+    public void BindVariableType(TypeBase type, LocalVariableSymbol symbol)
     {
         VariableType = type;
+        VariableSymbol = symbol;
     }
 }
