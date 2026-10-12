@@ -32,6 +32,26 @@ public sealed class LocalAndExpressionTests
     }
 
     [Fact]
+    public void ParsesRightShiftWhileAllowingAdjacentGenericTypeClosers()
+    {
+        var project = CreateProject("""
+            public class Box<T> { }
+            public T Echo<T>(T value) { return value; }
+            public Box<int> Echo<Box<int>>(Box<int> value) { return value; }
+            int Shift(int value) { return value >> 1; }
+            """);
+
+        new SemanticBinder().Bind(project);
+
+        var declarations = project.CompilationContexts.Single().DeclarationScope.Declarations;
+        var shift = declarations.OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Shift");
+        var expression = Assert.IsType<BinaryExpression>(
+            Assert.IsType<ReturnStatement>(shift.Body!.Single()).Expression);
+        Assert.Equal(">>", expression.Operator);
+    }
+
+    [Fact]
     public void BindsInferredLocalAssignmentsAndNestedShadowing()
     {
         var project = CreateProject("""

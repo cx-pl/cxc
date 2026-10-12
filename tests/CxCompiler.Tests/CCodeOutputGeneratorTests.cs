@@ -47,7 +47,7 @@ public sealed class CCodeOutputGeneratorTests
         Assert.Contains("int main(int argc, char **argv)", generatedSource);
         Assert.Contains("cx_array_new(__cx_argument_count", generatedSource);
         Assert.Contains("CX_ID_5(cxcore, System, String, __constructor, _2)", generatedSource);
-        Assert.Contains("CX_ID_5(cxcore, System, Array, Length, __const_get)(args)", generatedSource);
+        Assert.Contains("CX_ID_6(cxcore, System, Collections, Array, Length, __const_get)(args)", generatedSource);
         Assert.Contains("CX_ID_2(unnamed, Main)(__cx_arguments)", generatedSource);
         Assert.Contains("return (int)CX_ID_2(unnamed, Main)(__cx_arguments);", generatedSource);
     }
@@ -147,6 +147,45 @@ public sealed class CCodeOutputGeneratorTests
     }
 
     [Fact]
+    public void EmitsTypedDelegateInvocationList()
+    {
+        var generatedSource = GenerateSource("""
+            delegate int Transform(int value);
+
+            int Main() {
+                Transform first = value => value + 1;
+                Transform second = value => value + 2;
+                first += second;
+                Transform[] handlers = first.GetInvocationList();
+                Transform firstHandler = handlers[0];
+                Transform secondHandler = handlers[1];
+                Transform empty = null;
+                Transform[] emptyHandlers = empty.GetInvocationList();
+                return handlers.Length == 2 &&
+                    firstHandler(10) == 11 && secondHandler(10) == 12 &&
+                    handlers[0](10) == 11 && handlers[1](10) == 12 &&
+                    emptyHandlers.Length == 0u ? 0 : 1;
+            }
+            """);
+
+        Assert.Contains("__cx_delegate_get_invocation_list_CX_FN_", generatedSource);
+        Assert.Contains("cx_array_at", generatedSource);
+    }
+
+    [Fact]
+    public void RejectsInvokingAnIndexedNonFunctionValue()
+    {
+        var exception = Assert.Throws<CompilationErrorException>(() => GenerateSource("""
+            int Main() {
+                int[] values = new int[1];
+                return values[0](1);
+            }
+            """));
+
+        Assert.Contains("ArrayAccessExpression' cannot be invoked", exception.Message);
+    }
+
+    [Fact]
     public void EmitsGenericFunctionParametersAndReturnStorageAsPointers()
     {
         const string source = """
@@ -178,14 +217,41 @@ public sealed class CCodeOutputGeneratorTests
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var header = File.ReadAllText(Path.Combine(directory, "api_split.h"));
             var cmake = File.ReadAllText(Path.Combine(directory, "CMakeLists.txt"));
+            var source = File.ReadAllText(Path.Combine(directory, "api_split.c"));
 
             Assert.Contains("#if defined(CX_API_SPLIT_BUILD)", header);
             Assert.Contains("#define CX_API_SPLIT_API CX_EXPORT", header);
             Assert.Contains("#define CX_API_SPLIT_API CX_IMPORT", header);
             Assert.Contains("extern CX_API_SPLIT_API cx_int CX_ID_2(api_split, Run)()", header);
+            Assert.Contains("CXCORE_ABI_VERSION EQUAL 1", cmake);
+            Assert.Contains("CX_RUNTIME_ABI_VERSION != 1", source);
             Assert.Contains("target_compile_definitions(api_split PRIVATE CX_API_SPLIT_BUILD)", cmake);
             Assert.True(cmake.IndexOf("add_executable(api_split", StringComparison.Ordinal) <
                 cmake.IndexOf("target_compile_definitions(api_split", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void BuildsCxcoreThroughItsExistingRuntimeTarget()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("cxcore");
+        project.AddCompilationContext(CompilerTestHelper.Parse("public void Run() {}"));
+        new SemanticBinder().Bind(project);
+        var directory = Path.Combine(Path.GetTempPath(), $"cxc-cxcore-cmake-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+
+            var cmake = File.ReadAllText(Path.Combine(directory, "CMakeLists.txt"));
+
+            Assert.Contains("if(NOT TARGET cxcore)", cmake);
+            Assert.DoesNotContain("add_library(cxcore", cmake);
+            Assert.DoesNotContain("target_sources(cxcore", cmake);
         }
         finally
         {

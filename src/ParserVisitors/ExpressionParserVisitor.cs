@@ -102,7 +102,37 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
         }
         return expression.WithSourceSpan(context);
     }
-    public override ExpressionBase VisitShiftExpression([NotNull] CxParser.ShiftExpressionContext context) => BuildBinary(context);
+    public override ExpressionBase VisitShiftExpression([NotNull] CxParser.ShiftExpressionContext context)
+    {
+        ExpressionBase? expression = null;
+        var operatorText = string.Empty;
+        foreach (var child in context.children)
+        {
+            if (child is ITerminalNode terminal)
+            {
+                operatorText += terminal.GetText();
+                continue;
+            }
+            if (child is not CxParser.AdditiveExpressionContext operandContext)
+            {
+                continue;
+            }
+
+            var operand = Visit(operandContext);
+            expression = expression is null
+                ? operand
+                : new BinaryExpression(
+                    expression,
+                    operatorText.Length == 0
+                        ? throw new InternalCompilerException("Shift operator is missing.")
+                        : operatorText,
+                    operand);
+            operatorText = string.Empty;
+        }
+
+        return (expression ?? throw new InternalCompilerException(
+            "Shift expression is empty.")).WithSourceSpan(context);
+    }
     public override ExpressionBase VisitAdditiveExpression([NotNull] CxParser.AdditiveExpressionContext context) => BuildBinary(context);
     public override ExpressionBase VisitMultiplicativeExpression([NotNull] CxParser.MultiplicativeExpressionContext context) => BuildBinary(context);
 
@@ -137,6 +167,8 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
             {
                 CxParser.MemberAccessContext memberAccess =>
                     new MemberAccessExpression(expression, memberAccess.Identifier().GetText()),
+                CxParser.GenericTypeMemberAccessContext genericTypeMemberAccess =>
+                    CreateGenericTypeMemberAccess(expression, genericTypeMemberAccess),
                 CxParser.FunctionInvocationContext invocation =>
                     new InvocationExpression(expression, GetArguments(invocation)),
                 CxParser.GenericFunctionInvocationContext genericInvocation =>
@@ -161,6 +193,19 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
         }
 
         return expression.WithSourceSpan(context);
+    }
+
+    private static MemberAccessExpression CreateGenericTypeMemberAccess(
+        ExpressionBase target,
+        CxParser.GenericTypeMemberAccessContext context)
+    {
+        var memberAccess = new MemberAccessExpression(
+            target,
+            context.Identifier().GetText());
+        memberAccess.SetStaticContainingTypeArguments(
+            new GenericTypeArgumentsParserVisitor().VisitGenericTypeArguments(
+                context.genericTypeArguments()));
+        return memberAccess;
     }
 
     private SwitchExpression ParseSwitchExpression(
@@ -218,6 +263,10 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
                         ? new GenericTypeArgumentsParserVisitor()
                             .VisitGenericTypeArguments(typeArguments)
                         : []);
+            foreach (var _ in arrayCreation.arrayDimension())
+            {
+                elementType = new ArrayType(elementType);
+            }
             return new ArrayCreationExpression(
                 elementType,
                 Visit(arrayCreation.expression())).WithSourceSpan(context);

@@ -88,9 +88,19 @@ public class CxProject
 
     internal void AddReferencedCompilationContext(CompilationContext context, string projectName)
     {
-        context.ProjectName = projectName;
-        context.IsProjectReference = true;
-        _compilationContexts.Add(context);
+        var referenceContext = new CompilationContext
+        {
+            ProjectName = projectName,
+            IsProjectReference = true,
+        };
+        referenceContext.SetNamespace(context.Namespace);
+        foreach (var import in context.Imports)
+        {
+            referenceContext.AddImport(import);
+        }
+        referenceContext.DeclarationScope.AddDeclarations(
+            context.DeclarationScope.Declarations.ToArray());
+        _compilationContexts.Add(referenceContext);
     }
 }
 

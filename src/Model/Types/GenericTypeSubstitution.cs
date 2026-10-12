@@ -5,19 +5,19 @@ public static class GenericTypeSubstitution
 {
     public static TypeBase BindParameters(TypeBase type, IReadOnlyCollection<string> parameterNames)
     {
-        return Replace(type, named =>
+        return ArrayType.Canonicalize(Replace(type, named =>
             named.GenericParams.Length == 0 && parameterNames.Contains(named.Name)
                 ? new GenericType(named.Name)
-                : null);
+                : null));
     }
 
     public static TypeBase Substitute(TypeBase type, IReadOnlyDictionary<string, TypeBase> arguments)
     {
-        return Replace(type, named =>
+        return ArrayType.Canonicalize(Replace(type, named =>
             named.GenericParams.Length == 0 && arguments.TryGetValue(named.Name, out var argument)
                 ? argument
                 : null,
-            generic => arguments.TryGetValue(generic.Name, out var argument) ? argument : null);
+            generic => arguments.TryGetValue(generic.Name, out var argument) ? argument : null));
     }
 
     private static TypeBase Replace(

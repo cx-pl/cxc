@@ -233,11 +233,14 @@ public sealed class SwitchTests
                 switch (value) {
                     case "ready" when enabled:
                         break;
+                    case null:
+                        break;
                     default:
                         break;
                 }
                 return value switch {
                     "ready" when enabled => 1,
+                    null => 2,
                     _ => 0,
                 };
             }
@@ -260,6 +263,8 @@ public sealed class SwitchTests
             Assert.Contains("__cx_switch_case_", generatedSource);
             Assert.Contains("case 0:", generatedSource);
             Assert.Contains("__cx_switch_value_", generatedSource);
+            Assert.Contains("== CX_NULL", generatedSource);
+            Assert.DoesNotContain("(CX_NULL)->_length", generatedSource);
         }
         finally
         {

@@ -6,6 +6,7 @@ public sealed class MemberAccessExpression : ExpressionBase
 {
     public ExpressionBase Target { get; }
     public string MemberName { get; }
+    public IReadOnlyList<CxCompiler.Model.Types.TypeBase>? StaticContainingTypeArguments { get; private set; }
 
     public FieldSymbol? TargetField { get; private set; }
     public PropertySymbol? TargetProperty { get; private set; }
@@ -19,12 +20,17 @@ public sealed class MemberAccessExpression : ExpressionBase
     public int ReceiverBaseDepth { get; private set; }
     public int? InterfaceDispatchSlotIndex { get; private set; }
     public string? InterfaceReceiverTemporaryName { get; private set; }
+    public CxCompiler.Model.Types.NamedType? InterfaceDispatchType { get; private set; }
 
     public MemberAccessExpression(ExpressionBase target, string memberName)
     {
         Target = target;
         MemberName = memberName;
     }
+
+    public void SetStaticContainingTypeArguments(
+        IReadOnlyList<CxCompiler.Model.Types.TypeBase> typeArguments) =>
+        StaticContainingTypeArguments = typeArguments;
 
     public void BindField(FieldSymbol field, int receiverBaseDepth = 0)
     {
@@ -37,13 +43,20 @@ public sealed class MemberAccessExpression : ExpressionBase
         PropertyAccessorSymbol getter,
         int receiverBaseDepth = 0,
         int? interfaceDispatchSlotIndex = null,
-        string? interfaceReceiverTemporaryName = null)
+        string? interfaceReceiverTemporaryName = null,
+        CxCompiler.Model.Types.NamedType? interfaceDispatchType = null)
     {
         TargetProperty = property;
         PropertyGetter = getter;
         ReceiverBaseDepth = receiverBaseDepth;
         InterfaceDispatchSlotIndex = interfaceDispatchSlotIndex;
         InterfaceReceiverTemporaryName = interfaceReceiverTemporaryName;
+        InterfaceDispatchType = interfaceDispatchType;
+    }
+
+    public void BindPropertyTarget(PropertySymbol property)
+    {
+        TargetProperty = property;
     }
 
     public void BindEnumMember(EnumMemberSymbol member)

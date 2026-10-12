@@ -35,4 +35,6 @@ public sealed class LocalVariableDeclarator
         Type = type;
         Symbol = symbol;
     }
+
+    public void CloseType(TypeBase type) => Type = type;
 }

@@ -97,6 +97,123 @@ public sealed class ProjectReferenceTests
     }
 
     [Fact]
+    public void ProjectReferenceCallsPublicGenericSpecializationInOwningModule()
+    {
+        var root = Path.Combine(Path.GetTempPath(),
+            $"cxc-project-generic-specialization-{Guid.NewGuid():N}");
+        var library = Path.Combine(root, "generic");
+        var app = Path.Combine(root, "app");
+        Directory.CreateDirectory(library);
+        Directory.CreateDirectory(app);
+        try
+        {
+            File.WriteAllText(Path.Combine(library, "generic.cxproj"),
+                """
+                name: generic
+                type: Library
+                """);
+            File.WriteAllText(Path.Combine(library, "api.cx"), """
+                namespace Lib;
+                public T Identity<T>(T value) { return value; }
+                public int Identity <int>(int value) { return value + 1; }
+                public class Counter {
+                    public int Value = 10;
+                    public T Adjust<T>(T value) { return value; }
+                    public int Adjust <int>(int value) { return Value + value; }
+                }
+                """);
+            File.WriteAllText(Path.Combine(app, "app.cxproj"),
+                """
+                name: app
+                type: Executable
+                project_references:
+                - ../generic/generic.cxproj
+                """);
+            File.WriteAllText(Path.Combine(app, "main.cx"), """
+                import Lib;
+                namespace App;
+                public int Run() {
+                    Counter counter = new Counter();
+                    return Identity(42) + counter.Adjust(5);
+                }
+                """);
+
+            new Compiler().Compile([Path.Combine(app, "app.cxproj")]);
+
+            var librarySource = File.ReadAllText(Path.Combine(library, ".obj", "generic.c"));
+            var libraryHeader = File.ReadAllText(Path.Combine(library, ".obj", "generic.h"));
+            var appSource = File.ReadAllText(Path.Combine(app, ".obj", "app.c"));
+            var symbols = Regex.Matches(
+                libraryHeader, @"(?m)^extern .* (cx_generic_[a-f0-9]+)\(");
+            Assert.Equal(2, symbols.Count);
+            foreach (Match symbol in symbols)
+            {
+                var specializationName = symbol.Groups[1].Value;
+                Assert.Contains($"{specializationName}(", librarySource);
+                Assert.Contains($"{specializationName}(", appSource);
+            }
+            Assert.Contains("return (value + 1);", librarySource);
+            Assert.DoesNotContain($"return (value + 1);", appSource);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ProjectReferenceCanUseAnImportedDerivedConcept()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cxc-project-concept-{Guid.NewGuid():N}");
+        var library = Path.Combine(root, "library");
+        var app = Path.Combine(root, "app");
+        Directory.CreateDirectory(library);
+        Directory.CreateDirectory(app);
+        try
+        {
+            File.WriteAllText(Path.Combine(library, "library.cxproj"),
+                "name: library\ntype: Library\n");
+            File.WriteAllText(Path.Combine(library, "api.cx"), """
+                namespace Lib;
+                public concept CReadable { int Read() const; }
+                public concept CValueWritable { int Value { set; } }
+                public concept CWritableReadable : CReadable, CValueWritable { }
+                public void Set<T>(T value, int next) : T = CWritableReadable {
+                    value.Value = next;
+                }
+                public int Read<T>(T value) : T = CWritableReadable {
+                    return value.Read();
+                }
+                """);
+            File.WriteAllText(Path.Combine(app, "app.cxproj"),
+                "name: app\ntype: Executable\nproject_references:\n- ../library/library.cxproj\n");
+            File.WriteAllText(Path.Combine(app, "main.cx"), """
+                import Lib;
+                namespace App;
+                public class Item {
+                    public int Value { const get; set; }
+                    public int Read() const { return Value; }
+                }
+                public int Run() {
+                    Item item = new Item();
+                    Set(item, 42);
+                    return Read(item);
+                }
+                """);
+
+            new Compiler().Compile([Path.Combine(app, "app.cxproj")]);
+
+            var appSource = File.ReadAllText(Path.Combine(app, ".obj", "app.c"));
+            Assert.Contains("Item", appSource);
+            Assert.DoesNotContain("_unknowntype_", appSource);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ProjectReferenceCanCloseAnImportedGenericClass()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cxc-project-generic-type-{Guid.NewGuid():N}");
@@ -179,6 +296,99 @@ public sealed class ProjectReferenceTests
             var error = Assert.Throws<CxCompiler.Model.Errors.CompilationErrorException>(
                 () => new Compiler().Compile([Path.Combine(app, "app.cxproj")]));
             Assert.Contains("declared by multiple CX projects", error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ProjectReferenceSpecializesGenericContainingMethodUsingOwningTypeLayout()
+    {
+        var root = Path.Combine(Path.GetTempPath(),
+            $"cxc-project-generic-container-specialization-{Guid.NewGuid():N}");
+        var library = Path.Combine(root, "generic");
+        var app = Path.Combine(root, "app");
+        Directory.CreateDirectory(library);
+        Directory.CreateDirectory(app);
+        try
+        {
+            File.WriteAllText(Path.Combine(library, "generic.cxproj"),
+                "name: generic\ntype: Library\n");
+            File.WriteAllText(Path.Combine(library, "api.cx"), """
+                namespace Lib;
+                public class Router<TState> {
+                    public U Route<U>(TState state, U value) { return value; }
+                    public int Route<int>(TState state, int value) { return value + 1; }
+                }
+                """);
+            File.WriteAllText(Path.Combine(app, "app.cxproj"),
+                "name: app\ntype: Executable\nproject_references:\n- ../generic/generic.cxproj\n");
+            File.WriteAllText(Path.Combine(app, "main.cx"), """
+                import Lib;
+                namespace App;
+                public int Run() {
+                    Router<string> router = new Router<string>();
+                    if (router.Route<int>("state", 2) != 3) return 1;
+                    return router.Route<long>("state", 4L) == 4L ? 42 : 2;
+                }
+                """);
+
+            new Compiler().Compile([Path.Combine(app, "app.cxproj")]);
+
+            var appSource = File.ReadAllText(Path.Combine(app, ".obj", "app.c"));
+            Assert.Contains("CX_ID_3(generic, Lib, Router)", appSource);
+            Assert.Contains("return (value + 1);", appSource);
+            Assert.Contains("return value;", appSource);
+            Assert.DoesNotContain("CX_ID_3(app, Lib, Router)", appSource);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ProjectReferenceSpecializesStaticGenericMethodThroughClosedGenericOwner()
+    {
+        var root = Path.Combine(Path.GetTempPath(),
+            $"cxc-project-static-generic-owner-specialization-{Guid.NewGuid():N}");
+        var library = Path.Combine(root, "generic");
+        var app = Path.Combine(root, "app");
+        Directory.CreateDirectory(library);
+        Directory.CreateDirectory(app);
+        try
+        {
+            File.WriteAllText(Path.Combine(library, "generic.cxproj"),
+                "name: generic\ntype: Library\n");
+            File.WriteAllText(Path.Combine(library, "api.cx"), """
+                namespace Lib;
+                public class StaticRouter<TState> {
+                    public static U Route<U>(TState state, U value) { return value; }
+                    public static int Route<int>(TState state, int value) { return value + 20; }
+                }
+                """);
+            File.WriteAllText(Path.Combine(app, "app.cxproj"), """
+                name: app
+                type: Executable
+                project_references:
+                - ../generic/generic.cxproj
+                """);
+            File.WriteAllText(Path.Combine(app, "main.cx"), """
+                import Lib;
+                namespace App;
+                public int Run() {
+                    return StaticRouter<string>.Route<int>("state", 3);
+                }
+                """);
+
+            new Compiler().Compile([Path.Combine(app, "app.cxproj")]);
+
+            var appSource = File.ReadAllText(Path.Combine(app, ".obj", "app.c"));
+            var librarySource = File.ReadAllText(Path.Combine(library, ".obj", "generic.c"));
+            Assert.Contains("return (value + 20);", appSource);
+            Assert.DoesNotContain("return (value + 20);", librarySource);
         }
         finally
         {

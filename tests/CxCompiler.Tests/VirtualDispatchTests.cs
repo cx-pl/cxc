@@ -26,10 +26,12 @@ public sealed class VirtualDispatchTests
         var types = project.CompilationContexts.Single().DeclarationScope.Declarations
             .OfType<ClassDeclaration>()
             .ToDictionary(type => type.Name);
-        Assert.Equal([1, 2], types["Parent"].VirtualMethodSlots.Select(slot => slot.Index));
-        Assert.Equal("Child", types["Child"].VirtualMethodSlots[0]
+        Assert.Equal([1, 2, 3, 4, 5], types["Parent"].VirtualMethodSlots.Select(slot => slot.Index));
+        Assert.Equal("Child", types["Child"].VirtualMethodSlots.Single(slot =>
+                slot.Contract.Name == "First")
             .Implementation!.ParentClassDeclaration!.Name);
-        Assert.Equal("Parent", types["Child"].VirtualMethodSlots[1]
+        Assert.Equal("Parent", types["Child"].VirtualMethodSlots.Single(slot =>
+                slot.Contract.Name == "Second")
             .Implementation!.ParentClassDeclaration!.Name);
     }
 
@@ -59,7 +61,7 @@ public sealed class VirtualDispatchTests
 
         Assert.Contains("CX_VTABLE_ENTRY(CX_ID_3(unnamed, Parent, Value))", source);
         Assert.Contains("CX_VTABLE_ENTRY(CX_ID_3(unnamed, Child, Value))", source);
-        Assert.Contains("CX_GET_VTABLE(value))[1]", source);
+        Assert.Contains("CX_GET_VTABLE(value))[4]", source);
         Assert.Contains("CX_ID_2(unnamed, Parent)* value = (", source);
         Assert.Contains("CX_ID_2(unnamed, Parent)*)(", source);
     }
@@ -81,7 +83,8 @@ public sealed class VirtualDispatchTests
         var child = project.CompilationContexts.Single().DeclarationScope.Declarations
             .OfType<ClassDeclaration>()
             .Single(type => type.Name == "Child");
-        Assert.Equal("Child", Assert.Single(child.VirtualMethodSlots)
+        Assert.Equal("Child", child.VirtualMethodSlots.Single(slot =>
+                slot.Contract.Name == "Value")
             .Implementation!.ParentClassDeclaration!.Name);
     }
 

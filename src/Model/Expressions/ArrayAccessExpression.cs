@@ -11,6 +11,7 @@ public sealed class ArrayAccessExpression : ExpressionBase
     public int ReceiverBaseDepth { get; private set; }
     public int? InterfaceDispatchSlotIndex { get; private set; }
     public string? InterfaceReceiverTemporaryName { get; private set; }
+    public CxCompiler.Model.Types.NamedType? InterfaceDispatchType { get; private set; }
 
     public ArrayAccessExpression(
         ExpressionBase target,
@@ -25,12 +26,14 @@ public sealed class ArrayAccessExpression : ExpressionBase
         PropertyAccessorSymbol getter,
         int receiverBaseDepth = 0,
         int? interfaceDispatchSlotIndex = null,
-        string? interfaceReceiverTemporaryName = null)
+        string? interfaceReceiverTemporaryName = null,
+        CxCompiler.Model.Types.NamedType? interfaceDispatchType = null)
     {
         TargetProperty = property;
         PropertyGetter = getter;
         ReceiverBaseDepth = receiverBaseDepth;
         InterfaceDispatchSlotIndex = interfaceDispatchSlotIndex;
         InterfaceReceiverTemporaryName = interfaceReceiverTemporaryName;
+        InterfaceDispatchType = interfaceDispatchType;
     }
 }

@@ -9,6 +9,61 @@ namespace CxCompiler.Tests;
 public sealed class InterfaceDispatchTests
 {
     [Fact]
+    public void BindsMethodsForConstructedGenericInterfaceImplementations()
+    {
+        var project = CreateProject("""
+            public interface IValue<T> {
+                T Echo(T value);
+            }
+            public class StringValue : IValue<string> {
+                public string Echo(string value) { return value; }
+            }
+            """);
+
+        new SemanticBinder().Bind(project);
+
+        var stringValue = project.CompilationContexts.Single().DeclarationScope.Declarations
+            .OfType<ClassDeclaration>()
+            .Single(type => type.Name == "StringValue");
+        var table = Assert.Single(stringValue.InterfaceDispatchTables);
+        var slot = Assert.Single(table.Slots);
+        Assert.Equal("Echo", slot.ContractFunction!.Name);
+        Assert.Equal("Echo", slot.ImplementationFunction!.Name);
+        Assert.Equal("String", slot.ImplementationFunction.ReturnType.Name);
+    }
+
+    [Fact]
+    public void ClosesGenericInterfaceCallsInsideConstructedGenericOwners()
+    {
+        var project = CreateProject("""
+            public interface IEqualityComparer<T> {
+                int GetHashCode(T value) const;
+            }
+            public class StringComparer : IEqualityComparer<string> {
+                public int GetHashCode(string value) const { return 1; }
+            }
+            public class Caller<T> {
+                public int Hash(IEqualityComparer<T> comparer, T value) {
+                    return comparer.GetHashCode(value);
+                }
+            }
+            public static class Program {
+                public static int Main() {
+                    Caller<string> caller = new Caller<string>();
+                    return caller.Hash(new StringComparer(), "value");
+                }
+            }
+            """);
+
+        new SemanticBinder().Bind(project);
+        var (_, source) = GenerateOutput(project);
+
+        Assert.DoesNotContain("_unknowntype_", source);
+        Assert.Contains("cx_generic_", source);
+        Assert.Contains("System, String", source);
+    }
+
+    [Fact]
     public void BindsInterfaceContractsAndImplementations()
     {
         var project = CreateProject("""

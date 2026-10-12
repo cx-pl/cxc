@@ -33,8 +33,8 @@ public class FieldsDeclarationParserVisitor : CxParserBaseVisitor<FieldDeclarati
             _fieldType,
             _memberModifiers,
             _classDeclaration,
-            context.literal() is { } literal
-                ? new ExpressionParserVisitor().Visit(literal)
+            context.expression() is { } expression
+                ? new ExpressionParserVisitor().Visit(expression)
                 : null).WithSourceSpan(context);
 
         _fieldDeclarations.Add(fieldDeclaration);

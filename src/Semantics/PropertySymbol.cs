@@ -35,4 +35,5 @@ public sealed class PropertySymbol
 public sealed record PropertyAccessorSymbol(
     string Name,
     bool Const,
-    IReadOnlyList<TypeBase> ParameterTypes);
+    IReadOnlyList<TypeBase> ParameterTypes,
+    PropertyAccessorDeclaration? Declaration = null);

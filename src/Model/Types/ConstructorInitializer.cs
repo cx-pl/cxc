@@ -12,7 +12,8 @@ public enum ConstructorInitializerKind
 public sealed class ConstructorInitializer
 {
     public ConstructorInitializerKind Kind { get; }
-    public IReadOnlyList<ExpressionBase> Arguments { get; }
+    private readonly List<ExpressionBase> _arguments;
+    public IReadOnlyList<ExpressionBase> Arguments => _arguments;
     public FunctionSymbol? Target { get; private set; }
 
     public ConstructorInitializer(
@@ -20,11 +21,14 @@ public sealed class ConstructorInitializer
         IReadOnlyList<ExpressionBase> arguments)
     {
         Kind = kind;
-        Arguments = arguments;
+        _arguments = arguments.ToList();
     }
 
     public void BindTarget(FunctionSymbol target)
     {
         Target = target;
     }
+
+    public void AddDefaultArguments(IEnumerable<ExpressionBase> arguments) =>
+        _arguments.AddRange(arguments);
 }

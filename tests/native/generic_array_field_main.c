@@ -6,7 +6,7 @@
 struct CX_ID_4(cxcore, System, Reflection, TypeInfo) CX_ID_4(cxcore, System, Object, __typeinfo);
 struct CX_ID_4(cxcore, System, Reflection, TypeInfo) CX_ID_4(cxcore, System, Void, __typeinfo);
 struct CX_ID_4(cxcore, System, Reflection, TypeInfo) CX_ID_4(cxcore, System, Int, __typeinfo);
-struct CX_ID_4(cxcore, System, Reflection, TypeInfo) CX_ID_4(cxcore, System, Array, __typeinfo);
+struct CX_ID_4(cxcore, System, Reflection, TypeInfo) CX_ID_5(cxcore, System, Collections, Array, __typeinfo);
 union cx_vtable_entry CX_ID_4(cxcore, System, String, __vtable)[1];
 
 cx_ptr CX_ID_4(cxcore, System, Memory, Alloc)(cx_uint size) {
@@ -21,7 +21,7 @@ void CX_ID_4(cxcore, System, Object,
 int main(void) {
     cx_ptr buffer = CX_ID_2(generic_array_field, Create)();
     cx_int token = 0;
-    struct CX_ID_3(cxcore, System, Array) *values = (struct CX_ID_3(cxcore, System, Array) *)&token;
+    struct CX_ID_4(cxcore, System, Collections, Array) *values = (struct CX_ID_4(cxcore, System, Collections, Array) *)&token;
     assert(buffer != NULL);
     CX_ID_2(generic_array_field, Store)(buffer, values);
     assert(CX_ID_2(generic_array_field, Load)(buffer) == values);

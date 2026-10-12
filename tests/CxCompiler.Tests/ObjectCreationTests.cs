@@ -149,6 +149,62 @@ public sealed class ObjectCreationTests
         Assert.Contains("CX_ID_3(unnamed, Number, __constructor)(&__cx_new_0, 7)", generatedSource);
     }
 
+    [Fact]
+    public void BindsAndEmitsTheCommonObjectToStringMethod()
+    {
+        var project = CreateProject("""
+            public class Widget {}
+            public string ReadName(Widget value) { return value.ToString(); }
+            """);
+
+        new SemanticBinder().Bind(project);
+
+        var function = project.CompilationContexts.Single().DeclarationScope.Declarations
+            .OfType<FunctionDeclaration>()
+            .Single(declaration => declaration.Name == "ReadName");
+        var invocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(function.Body!)).Expression);
+        Assert.Equal("System.Object.ToString", invocation.TargetSymbol!.FullName.ToString());
+        Assert.Equal("cxcore", invocation.TargetSymbol.ModuleName);
+        Assert.NotNull(invocation.TargetSymbol.Declaration);
+        Assert.False(invocation.TargetSymbol.Declaration!.IsStatic);
+        Assert.Equal(1, invocation.TargetSymbol.Declaration.VirtualSlotIndex);
+
+        var source = GenerateSource(project);
+        Assert.Contains("[1].function)", source);
+        Assert.Contains("->__base", source);
+    }
+
+    [Fact]
+    public void BindsAndEmitsTheCommonObjectIdentityMethods()
+    {
+        var project = CreateProject("""
+            public class Widget {}
+            public bool Same(Widget left, Widget right) { return left.Equals(right); }
+            public int IdentityHash(Widget value) { return value.GetHashCode(); }
+            """);
+
+        new SemanticBinder().Bind(project);
+
+        var functions = project.CompilationContexts.Single().DeclarationScope.Declarations
+            .OfType<FunctionDeclaration>()
+            .ToDictionary(declaration => declaration.Name);
+        var equals = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(functions["Same"].Body!)).Expression);
+        var hash = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(functions["IdentityHash"].Body!)).Expression);
+        Assert.Equal("System.Object.Equals", equals.TargetSymbol!.FullName.ToString());
+        Assert.Equal("System.Object.GetHashCode", hash.TargetSymbol!.FullName.ToString());
+        Assert.False(equals.TargetSymbol.Declaration!.IsStatic);
+        Assert.False(hash.TargetSymbol.Declaration!.IsStatic);
+        Assert.Equal(2, equals.TargetSymbol.Declaration.VirtualSlotIndex);
+        Assert.Equal(3, hash.TargetSymbol.Declaration.VirtualSlotIndex);
+
+        var source = GenerateSource(project);
+        Assert.Contains("[2].function)", source);
+        Assert.Contains("[3].function)", source);
+    }
+
     private static CxProject CreateProject(string source)
     {
         var project = CxProject.CreateDefaultApplicationProject();

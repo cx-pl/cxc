@@ -50,7 +50,10 @@ public class TypeNameContextVisitor : CxParserBaseVisitor<TypeBase>
 
         if (context.arrayDimension() != null && context.arrayDimension().Length > 0)
         {
-            underlyingType = new ArrayType(underlyingType);
+            foreach (var _ in context.arrayDimension())
+            {
+                underlyingType = new ArrayType(underlyingType);
+            }
         }
 
         if (context.Question() != null)

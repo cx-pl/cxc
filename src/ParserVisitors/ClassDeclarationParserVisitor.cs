@@ -9,6 +9,7 @@ namespace CxCompiler.ParserVisitors;
 public class ClassDeclarationParserVisitor : CxParserBaseVisitor<DeclarationBase>
 {
     private ClassDeclaration? _classDeclaration = null;
+    private bool _parseExtensionMembers;
     public DeclarationScope DeclarationScope { get; }
 
     public ClassDeclarationParserVisitor(DeclarationScope parentDeclarationScope, string? @namespace = null)
@@ -27,6 +28,26 @@ public class ClassDeclarationParserVisitor : CxParserBaseVisitor<DeclarationBase
         var (classType, customTypeName) = new ClassTypeParserVisitor().VisitClassType(context.classType());
         var genericParams = new GenericParamsParserVisitor()
             .VisitGenericTypeParameters(context.genericTypeParameters());
+        var genericConstraints = context.genericConstraintClauses()?
+            .genericConstraintClause()
+            .Select(clause => new GenericTypeConstraint(
+                clause.parameter.Text,
+                clause.typeName()
+                    .Select(type => new TypeNameContextVisitor().Visit(type))
+                    .ToArray(),
+                clause.Class() is not null
+                    ? GenericConstraintKind.ReferenceType
+                    : clause.Struct() is not null
+                        ? GenericConstraintKind.ValueType
+                        : GenericConstraintKind.Type))
+            .ToArray() ?? [];
+        var conceptConstraints = context.conceptConstraintClause()
+            .Select(conceptClause => new GenericConceptConstraint(
+                conceptClause.parameter.Text,
+                conceptClause.qualifiedIdentifier()
+                    .Select(type => new QualifiedIdentifierContextVisitor().Visit(type))
+                    .ToArray()))
+            .ToArray();
 
         if (_classDeclaration == null)
         {
@@ -37,7 +58,9 @@ public class ClassDeclarationParserVisitor : CxParserBaseVisitor<DeclarationBase
                 customTypeName,
                 context.name.Text,
                 genericParams,
-                DeclarationScope);
+                DeclarationScope,
+                genericConstraints,
+                conceptConstraints);
 
             AddBaseTypes(context.@base?.classBaseList());
 
@@ -51,6 +74,20 @@ public class ClassDeclarationParserVisitor : CxParserBaseVisitor<DeclarationBase
         }
 
         return _classDeclaration.WithSourceSpan(context);
+    }
+
+    public ClassDeclaration ParseExtensionMembers(
+        string name,
+        QualifiedIdentifier @namespace,
+        CxParser.ClassDeclarationBodyContext body,
+        string[] genericTypeNames)
+    {
+        var scope = new DeclarationScope(@namespace: @namespace);
+        _classDeclaration = new ClassDeclaration(
+            [], false, ClassType.Class, null, name, genericTypeNames, scope);
+        _parseExtensionMembers = true;
+        Visit(body);
+        return _classDeclaration;
     }
 
     private void AddBaseTypes(CxParser.ClassBaseListContext? context)
@@ -84,7 +121,8 @@ public class ClassDeclarationParserVisitor : CxParserBaseVisitor<DeclarationBase
             throw new InternalCompilerException("Class declaration is null");
         }
 
-        var propertyDeclaration = new PropertyDeclarationParserVisitor(_classDeclaration).Visit(context);
+        var propertyDeclaration = new PropertyDeclarationParserVisitor(
+            _classDeclaration, _parseExtensionMembers).Visit(context);
         _classDeclaration.MemberDeclarations.AddDeclaration(propertyDeclaration);
         return _classDeclaration;
     }

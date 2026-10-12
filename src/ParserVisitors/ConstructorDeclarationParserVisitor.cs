@@ -7,7 +7,7 @@ namespace CxCompiler.ParserVisitors;
 
 public class ConstructorDeclarationParserVisitor : CxParserBaseVisitor<ConstructorDeclaration>
 {
-    private QualifiedIdentifier _namespace;
+    private readonly QualifiedIdentifier _namespace;
     private readonly ClassDeclaration _parentClassDeclaration;
     private ConstructorDeclaration _constructorDeclaration = null!;
 
@@ -51,12 +51,7 @@ public class ConstructorDeclarationParserVisitor : CxParserBaseVisitor<Construct
     {
         var type = new TypeNameContextVisitor().Visit(context.typeName());
 
-        var funtionParameter = new FunctionParameter(
-            context.name.Text,
-            type,
-            null).WithSourceSpan(context); // TODO: Handle default value if present
-
-        _constructorDeclaration.AddParameter(funtionParameter);
+        _constructorDeclaration.AddParameter(FunctionParameterParser.Parse(context, type));
 
         return base.VisitFunctionParameter(context);
     }

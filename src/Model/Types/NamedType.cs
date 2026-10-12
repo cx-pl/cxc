@@ -21,10 +21,6 @@ public class NamedType : TypeBase
         // Quick type resolution for primitive types
         switch (name)
         {
-            case "Array":
-                SetResolvedType(new QualifiedIdentifier("System", "Array"), "cxcore", ClassType.Class);
-                break;
-
             case "DateTime":
                 SetResolvedType(new QualifiedIdentifier("System", "DateTime"), "cxcore", ClassType.Struct);
                 break;
@@ -106,6 +102,16 @@ public class NamedType : TypeBase
             throw new ArgumentException("Generic argument count does not match source syntax.", nameof(arguments));
         }
         TypeArguments = arguments;
+    }
+
+    internal void SetAliasTarget(NamedType target)
+    {
+        ResolvedTypeFullName = target.ResolvedTypeFullName;
+        ClassType = target.ClassType;
+        TypeArguments = target.TypeArguments;
+        ConstructedIdentity = target.ConstructedIdentity;
+        IsDelegate = target.IsDelegate;
+        DelegateSignature = target.DelegateSignature;
     }
 
     public void SetResolvedType(QualifiedIdentifier typeFullName, string moduleName, ClassType classType)

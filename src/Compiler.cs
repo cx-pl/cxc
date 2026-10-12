@@ -384,7 +384,8 @@ public class Compiler
                     CCodeOutputGenerator.GetPublicApiGenericTypeInstances(external.Project);
                 var exportedGenericFunctionInstances =
                     CCodeOutputGenerator.GetPublicApiGenericFunctionInstances(external.Project);
-                foreach (var context in external.Project.CompilationContexts)
+                foreach (var context in external.Project.CompilationContexts
+                    .Where(context => !context.IsProjectReference))
                     node.Project.AddReferencedCompilationContext(context, external.Project.Name);
                 foreach (var instance in exportedGenericTypeInstances)
                 {

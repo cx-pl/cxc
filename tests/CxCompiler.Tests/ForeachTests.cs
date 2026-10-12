@@ -1,4 +1,5 @@
 using CxCompiler.Model.Errors;
+using CxCompiler.Model.Expressions;
 using CxCompiler.Model.Project;
 using CxCompiler.Model.Statements;
 using CxCompiler.Model.Types;
@@ -62,7 +63,7 @@ public sealed class ForeachTests
     }
 
     [Fact]
-    public void BinderRejectsNonArrayCollectionsAndElementTypeMismatch()
+    public void BinderRejectsUnsupportedCollectionsAndArrayElementTypeMismatch()
     {
         var nonArrayProject = CreateProject("""
             void Visit(int value) {
@@ -72,7 +73,7 @@ public sealed class ForeachTests
             """);
         var nonArrayException = Assert.Throws<CompilationErrorException>(
             () => new SemanticBinder().Bind(nonArrayProject));
-        Assert.Contains("foreach collection must be an array", nonArrayException.Message);
+        Assert.Contains("must be an array or expose a valid enumerator", nonArrayException.Message);
 
         var mismatchProject = CreateProject("""
             void Visit(int[] values) {
@@ -83,6 +84,120 @@ public sealed class ForeachTests
         var mismatchException = Assert.Throws<CompilationErrorException>(
             () => new SemanticBinder().Bind(mismatchProject));
         Assert.Contains("Cannot iterate array elements of type 'System.Int' as 'System.String'", mismatchException.Message);
+    }
+
+    [Fact]
+    public void BindsAndEmitsEnumeratorPatternForeach()
+    {
+        var project = CreateProject("""
+            public class Cursor {
+                private int _index;
+                public int Current { const get { return _index; } }
+                public bool MoveNext() { _index += 1; return _index <= 3; }
+            }
+            public class Sequence {
+                public Cursor GetEnumerator() const { return new Cursor(); }
+            }
+            public int Sum(Sequence sequence) {
+                int sum = 0;
+                foreach (var value in sequence) { sum += value; }
+                return sum;
+            }
+            """);
+        new SemanticBinder().Bind(project);
+        var function = project.CompilationContexts.Single().DeclarationScope.Declarations
+            .OfType<FunctionDeclaration>().Single(item => item.Name == "Sum");
+        var foreachStatement = Assert.IsType<ForeachStatement>(function.Body![1]);
+
+        Assert.Same(BuiltInSystemTypes.Int, foreachStatement.VariableType);
+        Assert.NotNull(foreachStatement.GetEnumeratorInvocation?.TargetSymbol);
+        Assert.NotNull(foreachStatement.MoveNextInvocation?.TargetSymbol);
+        Assert.NotNull(foreachStatement.CurrentExpression);
+
+        var outputDirectory = Path.Combine(Path.GetTempPath(), $"cxc-foreach-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(outputDirectory);
+            CCodeOutputGenerator.GenerateOutput(
+                project, Path.Combine(outputDirectory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(outputDirectory, "unnamed.c"));
+            Assert.Contains("GetEnumerator", source);
+            Assert.Contains("MoveNext", source);
+            Assert.Contains("Current", source);
+            Assert.Contains("while (", source);
+        }
+        finally
+        {
+            if (Directory.Exists(outputDirectory)) Directory.Delete(outputDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void BindsAndEmitsForeachThroughGenericEnumerableInterfaces()
+    {
+        var project = CreateProject("""
+            public interface IEnumerator<T> {
+                T Current { const get; }
+                bool MoveNext();
+            }
+            public interface IEnumerable<T> {
+                IEnumerator<T> GetEnumerator() const;
+            }
+            public class Cursor : IEnumerator<int> {
+                private int _index;
+                public int Current { const get { return _index; } }
+                public bool MoveNext() { _index += 1; return _index <= 3; }
+            }
+            public class Sequence : IEnumerable<int> {
+                public IEnumerator<int> GetEnumerator() const {
+                    return new Cursor();
+                }
+            }
+            public int Sum(IEnumerable<int> sequence) {
+                int sum = 0;
+                foreach (var value in sequence) { sum += value; }
+                return sum;
+            }
+            """);
+
+        new SemanticBinder().Bind(project);
+        var (header, source) = GenerateOutput(project);
+
+        Assert.Contains("IEnumerable", header);
+        Assert.Contains("IEnumerator", header);
+        Assert.DoesNotContain("_unknowntype_", source);
+        Assert.Contains("while (", source);
+        Assert.Contains(".vtable", source);
+    }
+
+    [Fact]
+    public void ResolvesConstructedTypeInExplicitEnumeratorForeachVariable()
+    {
+        var project = CreateProject("""
+            public struct Pair<T> {
+                public T Value;
+                public constructor(T value) { Value = value; }
+            }
+            public class Cursor<T> {
+                public Pair<T> Current() { return default; }
+                public bool MoveNext() { return false; }
+            }
+            public class Sequence<T> {
+                public Cursor<T> GetEnumerator() const { return new Cursor<T>(); }
+            }
+            public void Visit(Sequence<int> sequence) {
+                foreach (Pair<int> pair in sequence) { int value = pair.Value; }
+            }
+            """);
+        new SemanticBinder().Bind(project);
+        var function = project.CompilationContexts.Single().DeclarationScope.Declarations
+            .OfType<FunctionDeclaration>().Single(item => item.Name == "Visit");
+        var foreachStatement = Assert.IsType<ForeachStatement>(function.Body!.Single());
+        var variableType = Assert.IsType<NamedType>(foreachStatement.VariableType);
+
+        Assert.Single(variableType.TypeArguments);
+        Assert.Same(BuiltInSystemTypes.Int, variableType.TypeArguments[0]);
+        Assert.IsType<InvocationExpression>(foreachStatement.CurrentExpression);
     }
 
     [Fact]
@@ -112,7 +227,7 @@ public sealed class ForeachTests
                 Path.Combine(outputDirectory, "unnamed.c"));
 
             Assert.Contains(
-                "struct CX_ID_3(cxcore, System, Array)* __cx_foreach_collection_value = values;",
+                "struct CX_ID_4(cxcore, System, Collections, Array)* __cx_foreach_collection_value = values;",
                 generatedSource);
             Assert.Contains(
                 "__cx_foreach_index_value < __cx_foreach_collection_value->_length",
@@ -136,5 +251,28 @@ public sealed class ForeachTests
         var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse(source));
         return project;
+    }
+
+    private static (string Header, string Source) GenerateOutput(CxProject project)
+    {
+        var outputDirectory = Path.Combine(
+            Path.GetTempPath(),
+            $"cxc-foreach-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(outputDirectory);
+            CCodeOutputGenerator.GenerateOutput(
+                project, Path.Combine(outputDirectory, "Foreach.cx"));
+            return (
+                File.ReadAllText(Path.Combine(outputDirectory, "unnamed.h")),
+                File.ReadAllText(Path.Combine(outputDirectory, "unnamed.c")));
+        }
+        finally
+        {
+            if (Directory.Exists(outputDirectory))
+            {
+                Directory.Delete(outputDirectory, recursive: true);
+            }
+        }
     }
 }

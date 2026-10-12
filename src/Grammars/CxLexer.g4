@@ -79,7 +79,6 @@ This: 'this';
 Throw: 'throw';
 True: 'true';
 Try: 'try';
-Typedef: 'typedef';
 Typeof: 'typeof';
 Uint: 'uint';
 UInt8: 'uint8';
@@ -93,6 +92,7 @@ Var: 'var';
 Virtual: 'virtual';
 Void: 'void';
 When: 'when';
+Where: 'where';
 While: 'while';
 
 // Operators
@@ -108,7 +108,6 @@ LessEqual: '<=';
 Greater: '>';
 GreaterEqual: '>=';
 LeftShift: '<<';
-RightShift: '>>';
 Plus: '+';
 PlusPlus: '++';
 Minus: '-';

@@ -62,10 +62,14 @@ public sealed class GenericTypeIdentity
 
     private static string GetTypeKey(TypeBase type)
     {
+        if (ArrayType.TryGetElementType(type, out var arrayElementType))
+        {
+            return Encode("array", GetTypeKey(arrayElementType));
+        }
+
         return type switch
         {
             ConstType item => GetTypeKey(item.UnderlyingType),
-            ArrayType item => Encode("array", GetTypeKey(item.ElementType)),
             NullableType item => Encode("nullable", GetTypeKey(item.UnderlyingType)),
             GenericType item => throw new ArgumentException(
                 $"Unsubstituted type parameter '{item.Name}' has no runtime identity."),

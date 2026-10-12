@@ -8,7 +8,7 @@
 // </auto-generated>
 //------------------------------------------------------------------------------
 
-// Generated from CxParser.g4 by ANTLR 4.13.1
+// Generated from c:/workspace/cx-pl/cxc/src/Grammars/CxParser.g4 by ANTLR 4.13.1
 
 // Unreachable code detected
 #pragma warning disable 0162
@@ -213,6 +213,36 @@ public interface ICxParserVisitor<Result> : IParseTreeVisitor<Result> {
 	/// <return>The visitor result.</return>
 	Result VisitFunctionDeclaration([NotNull] CxParser.FunctionDeclarationContext context);
 	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.functionGenericTypeList"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitFunctionGenericTypeList([NotNull] CxParser.FunctionGenericTypeListContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.functionGenericTypeArgumentList"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitFunctionGenericTypeArgumentList([NotNull] CxParser.FunctionGenericTypeArgumentListContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.conceptConstraintClause"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitConceptConstraintClause([NotNull] CxParser.ConceptConstraintClauseContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.genericConstraintClauses"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitGenericConstraintClauses([NotNull] CxParser.GenericConstraintClausesContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.genericConstraintClause"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitGenericConstraintClause([NotNull] CxParser.GenericConstraintClauseContext context);
+	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.functionParameters"/>.
 	/// </summary>
 	/// <param name="context">The parse tree.</param>
@@ -249,17 +279,41 @@ public interface ICxParserVisitor<Result> : IParseTreeVisitor<Result> {
 	/// <return>The visitor result.</return>
 	Result VisitEnumMemberDeclaration([NotNull] CxParser.EnumMemberDeclarationContext context);
 	/// <summary>
-	/// Visit a parse tree produced by <see cref="CxParser.typedefDeclaration"/>.
+	/// Visit a parse tree produced by <see cref="CxParser.aliasDeclaration"/>.
 	/// </summary>
 	/// <param name="context">The parse tree.</param>
 	/// <return>The visitor result.</return>
-	Result VisitTypedefDeclaration([NotNull] CxParser.TypedefDeclarationContext context);
+	Result VisitAliasDeclaration([NotNull] CxParser.AliasDeclarationContext context);
 	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.extensionDeclaration"/>.
 	/// </summary>
 	/// <param name="context">The parse tree.</param>
 	/// <return>The visitor result.</return>
 	Result VisitExtensionDeclaration([NotNull] CxParser.ExtensionDeclarationContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.conceptDeclaration"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitConceptDeclaration([NotNull] CxParser.ConceptDeclarationContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.conceptBaseList"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitConceptBaseList([NotNull] CxParser.ConceptBaseListContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.conceptPropertyRequirement"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitConceptPropertyRequirement([NotNull] CxParser.ConceptPropertyRequirementContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.conceptPropertyAccessorRequirement"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitConceptPropertyAccessorRequirement([NotNull] CxParser.ConceptPropertyAccessorRequirementContext context);
 	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.statements"/>.
 	/// </summary>
@@ -626,6 +680,12 @@ public interface ICxParserVisitor<Result> : IParseTreeVisitor<Result> {
 	/// <param name="context">The parse tree.</param>
 	/// <return>The visitor result.</return>
 	Result VisitMemberAccess([NotNull] CxParser.MemberAccessContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.genericTypeMemberAccess"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitGenericTypeMemberAccess([NotNull] CxParser.GenericTypeMemberAccessContext context);
 	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.functionInvocation"/>.
 	/// </summary>

@@ -7,8 +7,8 @@ namespace CxCompiler.ParserVisitors;
 
 public class FunctionDeclarationParserVisitor : CxParserBaseVisitor<FunctionDeclaration>
 {
-    private QualifiedIdentifier _namespace;
-    private ClassDeclaration? _parentClassDeclaration = null;
+    private readonly QualifiedIdentifier _namespace;
+    private readonly ClassDeclaration? _parentClassDeclaration;
     private FunctionDeclaration _functionDeclaration = null!;
 
     public FunctionDeclarationParserVisitor(QualifiedIdentifier @namespace, ClassDeclaration? parentClassDeclaration)
@@ -24,6 +24,34 @@ public class FunctionDeclarationParserVisitor : CxParserBaseVisitor<FunctionDecl
         var memberModifiers = new MemberModifiersParserVisitor().Visit(context.memberModifiers());
 
         var operatorToken = OperatorNames.GetToken(context.name.Text);
+        var genericConstraints = context.genericConstraintClauses()?
+            .genericConstraintClause()
+            .Select(clause => new GenericTypeConstraint(
+                clause.parameter.Text,
+                clause.typeName()
+                    .Select(type => new TypeNameContextVisitor().Visit(type))
+                    .ToArray(),
+                clause.Class() is not null
+                    ? GenericConstraintKind.ReferenceType
+                    : clause.Struct() is not null
+                        ? GenericConstraintKind.ValueType
+                        : GenericConstraintKind.Type))
+            .ToArray() ?? [];
+        var conceptConstraints = context.conceptConstraintClause()
+            .Select(conceptClause => new GenericConceptConstraint(
+                conceptClause.parameter.Text,
+                conceptClause.qualifiedIdentifier()
+                    .Select(type => new QualifiedIdentifierContextVisitor().Visit(type))
+                    .ToArray()))
+            .ToArray();
+        var unclassifiedGenericTypeArguments = context.functionGenericTypeList() is { } genericList
+            ? EnumerateFunctionGenericTypeArguments(
+                    genericList.functionGenericTypeArgumentList())
+                .Select(argument => new FunctionGenericTypeArgument(
+                    new TypeNameContextVisitor().Visit(argument).WithSourceSpan(argument),
+                    IsSimpleIdentifierType(argument) ? argument.namedType!.GetText() : null))
+                .ToArray()
+            : [];
         _functionDeclaration = new FunctionDeclaration(
             operatorToken is null ? context.name.Text : OperatorNames.GetDeclarationName(operatorToken),
             _namespace,
@@ -31,11 +59,17 @@ public class FunctionDeclarationParserVisitor : CxParserBaseVisitor<FunctionDecl
             memberModifiers,
             _parentClassDeclaration,
             context.Const() != null,
-            new GenericParamsParserVisitor().VisitGenericTypeParameters(
-                context.genericTypeParameters()),
-            operatorToken).WithSourceSpan(context);
+            [],
+            operatorToken,
+            genericConstraints,
+            conceptConstraints,
+            [],
+            unclassifiedGenericTypeArguments).WithSourceSpan(context);
 
-        base.VisitChildren(context);
+        foreach (var parameter in EnumerateFunctionParameters(context.functionParameters()))
+        {
+            VisitFunctionParameter(parameter);
+        }
 
         var functionBody = context.functionBody();
         if (functionBody.LeftBrace() is not null)
@@ -52,15 +86,51 @@ public class FunctionDeclarationParserVisitor : CxParserBaseVisitor<FunctionDecl
         var type = ResolveGenericType(
             new TypeNameContextVisitor().Visit(context.typeName()));
 
-        var funtionParameter = new FunctionParameter(
-            context.name.Text,
-            type,
-            null).WithSourceSpan(context); // TODO: Handle default value if present
-
-        _functionDeclaration.AddParameter(funtionParameter);
+        _functionDeclaration.AddParameter(FunctionParameterParser.Parse(context, type));
 
         return base.VisitFunctionParameter(context);
     }
+
+    private static IEnumerable<CxParser.FunctionParameterContext> EnumerateFunctionParameters(
+        CxParser.FunctionParametersContext? context)
+    {
+        if (context is null)
+        {
+            yield break;
+        }
+        foreach (var previous in EnumerateFunctionParameters(context.functionParameters()))
+        {
+            yield return previous;
+        }
+        if (context.functionParameter() is { } parameter)
+        {
+            yield return parameter;
+        }
+    }
+
+    private static IEnumerable<CxParser.TypeNameContext> EnumerateFunctionGenericTypeArguments(
+        CxParser.FunctionGenericTypeArgumentListContext context)
+    {
+        if (context.functionGenericTypeArgumentList() is { } previous)
+        {
+            foreach (var argument in EnumerateFunctionGenericTypeArguments(previous))
+            {
+                yield return argument;
+            }
+        }
+        if (context.typeName() is { } type)
+        {
+            yield return type;
+        }
+    }
+
+    private static bool IsSimpleIdentifierType(CxParser.TypeNameContext context) =>
+        context.Const() is null && context.namedType is not null &&
+        context.namedTypeGenericArguments is null && context.arrayDimension().Length == 0 &&
+        context.Question() is null &&
+        context.namedType.Start.Type == CxParser.Identifier &&
+        context.namedType.Stop.Type == CxParser.Identifier &&
+        context.namedType.Start.TokenIndex == context.namedType.Stop.TokenIndex;
 
     private TypeBase ResolveGenericType(TypeBase type)
     {

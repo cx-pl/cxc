@@ -8,6 +8,8 @@ public class PropertyDeclaration : DeclarationBase
     public MemberModifier[] MemberModifiers { get; }
     public bool IsStatic => MemberModifiers.Contains(MemberModifier.Static);
     public ClassDeclaration ParentClassDeclaration { get; }
+    public bool IsExtension { get; internal set; }
+    public TypeBase? ExtensionTargetType { get; internal set; }
 
     private List<PropertyAccessorDeclaration> _propertyAccessorDeclarations = new();
     public IReadOnlyCollection<PropertyAccessorDeclaration> PropertyAccessorDeclarations => _propertyAccessorDeclarations;

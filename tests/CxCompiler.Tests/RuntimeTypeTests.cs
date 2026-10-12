@@ -25,6 +25,7 @@ public sealed class RuntimeTypeTests
         Assert.IsType<CastExpression>(GetReturnExpression(functions["Down"]));
         Assert.IsType<CastExpression>(GetReturnExpression(functions["FromInterface"]));
         Assert.IsType<CastExpression>(GetReturnExpression(functions["ToInterface"]));
+        Assert.IsType<ReturnStatement>(functions["StructToInterface"].Body!.Single());
         Assert.IsType<CastExpression>(GetReturnExpression(functions["ToDerivedInterface"]));
         Assert.IsType<TypeTestExpression>(GetReturnExpression(functions["IsDerived"]));
         Assert.IsType<TypeTestExpression>(GetReturnExpression(functions["IsDerivedInterface"]));
@@ -52,9 +53,13 @@ public sealed class RuntimeTypeTests
         Assert.DoesNotContain(".RuntimeInterfaces =", source);
         Assert.DoesNotContain(".RuntimeInterfaceCount =", source);
         Assert.Contains("CX_BEGIN_INTERFACE_VTABLE_DEF(CX_ID_5(unnamed, Derived, __iface, IDerived, __vtable), CX_ID_2(unnamed, Derived))", source);
+        Assert.Contains(
+            "{ &CX_ID_3(unnamed, IBase, __typeinfo), CX_ID_5(unnamed, Value, __iface, IBase, __vtable) },",
+            source);
         Assert.Contains("cx_checked_cast_object((cx_ptr)(value), &CX_ID_3(unnamed, Derived, __typeinfo))", source);
         Assert.Contains("cx_checked_cast_interface(value, &CX_ID_3(unnamed, Derived, __typeinfo))", source);
         Assert.Contains("cx_checked_cast_object_to_interface((cx_ptr)(value), &CX_ID_3(unnamed, IBase, __typeinfo))", source);
+        Assert.Contains("cx_box_value((const void*)&((struct CX_ID_2(unnamed, Value)[])", source);
         Assert.Contains("cx_checked_cast_interface_to_interface(value, &CX_ID_3(unnamed, IDerived, __typeinfo))", source);
         Assert.Contains("cx_is_object((cx_ptr)(value), &CX_ID_3(unnamed, Derived, __typeinfo))", source);
         Assert.Contains("cx_is_interface(value, &CX_ID_3(unnamed, IDerived, __typeinfo))", source);
@@ -85,10 +90,12 @@ public sealed class RuntimeTypeTests
             public int DerivedValue() { return 2; }
             public constructor() {}
         }
+        public struct Value : IBase { public int BaseValue() { return 7; } }
         public static class Program {
             public static Derived Down(Base value) { return (Derived)value; }
             public static Derived FromInterface(IBase value) { return (Derived)value; }
             public static IBase ToInterface(Base value) { return (IBase)value; }
+            public static IBase StructToInterface(Value value) { return value; }
             public static IDerived ToDerivedInterface(IBase value) { return (IDerived)value; }
             public static bool IsDerived(Base value) { return value is Derived; }
             public static bool IsDerivedInterface(IBase value) { return value is IDerived; }

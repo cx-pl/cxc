@@ -9,6 +9,7 @@ public class FieldDeclaration : DeclarationBase
     public bool IsStatic => MemberModifiers.Contains(MemberModifier.Static);
     public ClassDeclaration ParentClassDeclaration { get; }
     public CxCompiler.Model.Expressions.ExpressionBase? Initializer { get; }
+    public bool IsAutoPropertyBackingField { get; internal set; }
 
     public FieldDeclaration(
         string name, TypeBase type,

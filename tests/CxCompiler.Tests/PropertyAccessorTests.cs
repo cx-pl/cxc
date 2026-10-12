@@ -66,7 +66,7 @@ public sealed class PropertyAccessorTests
         var container = Assert.IsType<ClassDeclaration>(
             project.CompilationContexts.Single().DeclarationScope.Declarations.Single());
         var property = Assert.IsType<PropertyDeclaration>(
-            container.MemberDeclarations.Declarations.Single());
+            container.MemberDeclarations.Declarations.OfType<PropertyDeclaration>().Single());
         Assert.All(property.PropertyAccessorDeclarations, accessor =>
         {
             var parameter = Assert.Single(accessor.Parameters);

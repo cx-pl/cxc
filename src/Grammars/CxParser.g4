@@ -31,8 +31,9 @@ topLevelDeclaration
     | functionDeclaration
     | enumDeclaration
     | delegateDeclaration
-    | typedefDeclaration
+    | aliasDeclaration
     | extensionDeclaration
+    | conceptDeclaration
     ;
 
 delegateDeclaration
@@ -77,7 +78,8 @@ classType
     ;
 
 classDeclaration
-    : classModifiers partial = Partial? classType name = Identifier genericTypeParameters? base = classBase?
+    : classModifiers partial = Partial? classType name = Identifier genericTypeParameters?
+        conceptConstraintClause* genericConstraintClauses? base = classBase?
         body = classDeclarationBody
     ;
 
@@ -120,7 +122,7 @@ fieldInitializers
     ;
 
 fieldInitializer
-    : Identifier (Assign literal)?
+    : Identifier (Assign expression)?
     ;
 
 propertyDeclaration
@@ -159,7 +161,34 @@ constructorOrBaseInvocation
     ;
 
 functionDeclaration
-    : modifiers = memberModifiers async = Async? returnType = typeNameOrVoid name = Identifier genericTypeParameters? LeftParen functionParameters? RightParen Const? functionBody
+    : modifiers = memberModifiers async = Async? returnType = typeNameOrVoid name = Identifier
+        functionGenericTypeList? LeftParen functionParameters? RightParen Const? conceptConstraintClause* genericConstraintClauses? functionBody
+    ;
+
+functionGenericTypeList
+    : Less functionGenericTypeArgumentList Greater
+    ;
+
+functionGenericTypeArgumentList
+    : typeName
+    | functionGenericTypeArgumentList Comma typeName
+    ;
+
+conceptConstraintClause
+    : Colon parameter = Identifier Assign concepts += qualifiedIdentifier
+        (Comma concepts += qualifiedIdentifier)*
+    ;
+
+genericConstraintClauses
+    : genericConstraintClause+
+    ;
+
+genericConstraintClause
+    : Where parameter = Identifier Colon
+        ( Class (Comma constraints += typeName)*
+        | Struct (Comma constraints += typeName)*
+        | constraints += typeName (Comma constraints += typeName)*
+        )
     ;
 
 functionParameters
@@ -168,7 +197,7 @@ functionParameters
     ;
 
 functionParameter
-    : Params? typeName name = Identifier (defaultValue = Assign literal)?
+    : Params? typeName name = Identifier (defaultValue = Assign (literal | qualifiedIdentifier))?
     ;
 
 functionBody
@@ -191,12 +220,32 @@ enumMemberDeclaration
     // TODO: allow memberDeclaration to build rich enums
     ;
 
-typedefDeclaration
-    : Typedef Identifier Assign qualifiedIdentifier Semicolon
+aliasDeclaration
+    : Alias Identifier genericTypeParameters? Assign target = qualifiedIdentifier genericTypeArguments? Semicolon
     ;
 
 extensionDeclaration
-    : visibilityModifier? Extension name = Identifier base = classBase body = classDeclarationBody
+    : visibilityModifier? Extension name = Identifier genericTypeParameters? base = classBase body = classDeclarationBody
+    ;
+
+conceptDeclaration
+    : visibilityModifier? Concept name = Identifier base = conceptBaseList? LeftBrace
+        (requirements += functionDeclaration
+        | propertyRequirements += conceptPropertyRequirement)*
+        RightBrace
+    ;
+
+conceptBaseList
+    : Colon names += qualifiedIdentifier (Comma names += qualifiedIdentifier)*
+    ;
+
+conceptPropertyRequirement
+    : typeName Identifier LeftBrace conceptPropertyAccessorRequirement+ RightBrace
+    ;
+
+conceptPropertyAccessorRequirement
+    : Const? Get Semicolon
+    | Set Semicolon
     ;
 
 // Statements
@@ -445,7 +494,7 @@ relationalExpression
 
 shiftExpression
     : additiveExpression (
-        (LeftShift | RightShift) additiveExpression
+        (LeftShift | Greater Greater) additiveExpression
     )*
     ;
 
@@ -475,6 +524,7 @@ primaryExpression
     : primaryExpressionStart arrayExpression* (
         (
             memberAccess
+            | genericTypeMemberAccess
             | functionInvocation
             | genericFunctionInvocation
             | switchExpression
@@ -502,7 +552,7 @@ primaryExpressionStart
     ;
 
 arrayCreationExpression
-    : New arrayElementType LeftBracket expression RightBracket
+    : New arrayElementType LeftBracket expression RightBracket arrayDimension*
     ;
 
 arrayElementType
@@ -516,6 +566,10 @@ arrayExpression
 
 memberAccess
     : Dot Identifier
+    ;
+
+genericTypeMemberAccess
+    : genericTypeArguments Dot Identifier
     ;
 
 functionInvocation
@@ -654,6 +708,7 @@ literal
     | CharLiteral
     | StringLiteral
     | Null
+    | Default
     ;
 
 booleanLiteral

@@ -1,5 +1,6 @@
 using CxCompiler.Model.Types;
 using CxCompiler.Model.Expressions;
+using CxCompiler.Semantics;
 
 namespace CxCompiler.Model.Statements;
 
@@ -11,6 +12,10 @@ public sealed class ForeachStatement : StatementBase
     public StatementBase Body { get; }
     public TypeBase? VariableType { get; private set; }
     public LocalVariableSymbol? VariableSymbol { get; private set; }
+    public LocalVariableSymbol? EnumeratorSymbol { get; private set; }
+    public InvocationExpression? GetEnumeratorInvocation { get; private set; }
+    public InvocationExpression? MoveNextInvocation { get; private set; }
+    public ExpressionBase? CurrentExpression { get; private set; }
 
     public ForeachStatement(
         TypeBase declaredType,
@@ -28,5 +33,21 @@ public sealed class ForeachStatement : StatementBase
     {
         VariableType = type;
         VariableSymbol = symbol;
+    }
+
+    public void BindEnumerator(
+        TypeBase variableType,
+        LocalVariableSymbol variableSymbol,
+        LocalVariableSymbol enumeratorSymbol,
+        InvocationExpression getEnumeratorInvocation,
+        InvocationExpression moveNextInvocation,
+        ExpressionBase currentExpression)
+    {
+        VariableType = variableType;
+        VariableSymbol = variableSymbol;
+        EnumeratorSymbol = enumeratorSymbol;
+        GetEnumeratorInvocation = getEnumeratorInvocation;
+        MoveNextInvocation = moveNextInvocation;
+        CurrentExpression = currentExpression;
     }
 }

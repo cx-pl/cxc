@@ -16,7 +16,7 @@ public sealed class LocalVariableSymbol(
     string? cellName = null)
 {
     public string Name { get; } = name;
-    public TypeBase Type { get; } = type;
+    public TypeBase Type { get; } = ArrayType.Canonicalize(type);
     public LambdaExpression? OwnerLambda { get; } = ownerLambda;
     public bool IsThis { get; } = isThis;
     public bool IsCaptured { get; private set; }
