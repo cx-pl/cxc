@@ -43,6 +43,7 @@ public sealed partial class SemanticBinder
     private int _loopDepth;
     private int _breakableDepth;
     private int _catchDepth;
+    private int _unsafeDepth;
     private int _objectCreationIndex;
     private int _propertyAssignmentIndex;
     private int _interfaceReceiverIndex;
@@ -52,6 +53,12 @@ public sealed partial class SemanticBinder
     private string? _genericConstraintFailure;
 
     public void Bind(CxProject project)
+    {
+        try { BindCore(project); }
+        finally { project.RemoveSyntheticCoreContexts(); }
+    }
+
+    private void BindCore(CxProject project)
     {
         _project = project;
         project.ClearGenericFunctionInstances();
@@ -84,6 +91,7 @@ public sealed partial class SemanticBinder
         _genericConstraintFailure = null;
         _operatorTemporaryIndex = 0;
         _switchTemporaryIndex = 0;
+        AddCoreTextDeclarations();
         AddCoreSymbols();
 
         MergePartialTypeDeclarations(project.CompilationContexts);
@@ -184,6 +192,8 @@ public sealed partial class SemanticBinder
             ValidateGenericBaseTypeConstraints(context.DeclarationScope.Declarations);
         }
         ValidateInheritanceCycles();
+        BindNativeTypes(project);
+        BindNativeFunctions(project);
 
         foreach (var context in project.CompilationContexts)
         {
@@ -229,6 +239,7 @@ public sealed partial class SemanticBinder
 
         BindFieldInitializers();
         BindEnumMembers();
+        BindAnnotations(project);
 
         foreach (var context in project.CompilationContexts)
         {
@@ -268,6 +279,7 @@ public sealed partial class SemanticBinder
             RegisterClosedGenericClassFunctionInstances();
             RegisterClosedGenericClassFunctionTargets();
             RegisterClosedGenericConstructorObjectCreations();
+            BindGenericVirtualDispatchTargets(project);
             if (project.GenericTypeInstances.Count == genericTypeCount &&
                 project.GenericFunctionInstances.Count == genericFunctionCount)
             {

@@ -10,6 +10,7 @@ public static class BuiltInSystemTypes
 
     public static readonly BoolType Bool = new BoolType(SystemNamespace);
     public static readonly CharType Char = new CharType(SystemNamespace);
+    public static readonly WCharType WChar = new WCharType(SystemNamespace);
 
     public static readonly SByteType SByte = new SByteType(SystemNamespace);
     public static readonly ShortType Short = new ShortType(SystemNamespace);

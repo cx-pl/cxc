@@ -393,19 +393,14 @@ public sealed class GenericSpecializationTests
             public override int Echo<int>(int value) { return value + 1; }
         }
         """)]
-    public void RejectsSpecializationsOfVirtualAndOverrideGenericMethods(
+    public void BindsSpecializationsOfVirtualAndOverrideGenericMethods(
         string source)
     {
         var project = CxProject.CreateDefaultApplicationProject(
             "generic_virtual_method_specialization");
         project.AddCompilationContext(CompilerTestHelper.Parse(source));
 
-        var exception = Assert.Throws<CompilationErrorException>(
-            () => new SemanticBinder().Bind(project));
-
-        Assert.Contains(
-            "Generic specializations of virtual, override, or abstract methods are not supported",
-            exception.Message);
+        new SemanticBinder().Bind(project);
     }
 
     [Fact]
@@ -445,8 +440,1430 @@ public sealed class GenericSpecializationTests
         var exception = Assert.Throws<CompilationErrorException>(
             () => new SemanticBinder().Bind(project));
 
-        Assert.Contains("Generic function 'Base.Echo' currently supports only",
+        Assert.Contains("cannot provide an implementation for an abstract generic method",
             exception.Message);
+    }
+
+    [Fact]
+    public void BindsGenericVirtualAndOverrideMethodsToTheSameSlot()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_method_call");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public abstract class Base {
+                public abstract T Echo<T>(T value);
+            }
+            public class Derived : Base {
+                public override U Echo<U>(U value) { return value; }
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var types = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<ClassDeclaration>()
+            .Where(type => type.Name is "Base" or "Derived")
+            .ToDictionary(type => type.Name, StringComparer.Ordinal);
+        var contract = Assert.Single(types["Base"].VirtualMethodSlots, slot =>
+            slot.Contract.Name == "Echo");
+        var implementation = Assert.Single(types["Derived"].VirtualMethodSlots, slot =>
+            slot.Contract.Name == "Echo");
+        Assert.Equal(contract.Index, implementation.Index);
+        Assert.Same(contract.Contract, implementation.Contract);
+        Assert.Same(types["Derived"].MemberDeclarations.Declarations
+            .OfType<FunctionDeclaration>().Single(function => function.Name == "Echo"),
+            implementation.Implementation);
+    }
+
+    [Fact]
+    public void BindsGenericVirtualCallTargetsForKnownRuntimeClasses()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_method_call_pending_dispatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Base {
+                public virtual T Echo<T>(T value) { return value; }
+            }
+            public class Derived : Base {
+                public override U Echo<U>(U value) { return value; }
+                public override int Echo<int>(int value) { return value + 1; }
+            }
+            public int Run() {
+                Base value = new Derived();
+                return value.Echo(42);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var declarations = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .ToDictionary(function => function.Name, StringComparer.Ordinal);
+        var run = declarations["Run"];
+        var invocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                run.Body!.OfType<ReturnStatement>())).Expression);
+        Assert.Contains(invocation.GenericVirtualDispatchTargets,
+            target => target.Implementation.Declaration?.ParentClassDeclaration?.Name == "Derived" &&
+                target.Implementation.ImplementationDeclaration?.IsGenericSpecialization == true);
+        Assert.Contains(invocation.GenericVirtualDispatchTargets,
+            target => target.Implementation.Declaration?.ParentClassDeclaration?.Name == "Base");
+    }
+
+    [Fact]
+    public void BindsGenericVirtualMethodValueTargetsForKnownRuntimeClasses()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_method_value_dispatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public delegate int Transform(int value);
+            public class Base {
+                public virtual T Echo<T>(T value) { return value; }
+            }
+            public class Derived : Base {
+                public override U Echo<U>(U value) { return value; }
+                public override int Echo<int>(int value) { return value + 1; }
+            }
+            public int Run() {
+                Base value = new Derived();
+                Transform transform = value.Echo;
+                return transform(41);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var declarations = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .ToDictionary(function => function.Name, StringComparer.Ordinal);
+        var run = declarations["Run"];
+        var methodValue = Assert.IsType<MemberAccessExpression>(run.Body!
+            .OfType<LocalVariableDeclarationStatement>()
+            .SelectMany(statement => statement.Declarators)
+            .Single(declarator => declarator.Name == "transform").Initializer);
+        var target = Assert.Single(methodValue.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "Derived");
+        Assert.Equal("Derived", target.Implementation.Declaration?
+            .ParentClassDeclaration?.Name);
+        Assert.True(target.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+        Assert.IsType<IntType>(Assert.Single(target.Implementation.ParameterTypes));
+    }
+
+    [Fact]
+    public void BindsGenericVirtualTargetsForClosedGenericRuntimeClasses()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_closed_runtime_class");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Base {
+                public virtual T Echo<T>(T value) { return value; }
+            }
+            public class Derived<TState> : Base {
+                public TState State;
+            }
+            public int Run() {
+                Base value = new Derived<string>();
+                return value.Echo(41);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var run = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Run");
+        var invocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                run.Body!.OfType<ReturnStatement>())).Expression);
+        var derivedTarget = Assert.Single(invocation.GenericVirtualDispatchTargets,
+            target => target.RuntimeType.ConstructedIdentity is not null &&
+                target.RuntimeType.ResolvedTypeFullName.ToString().EndsWith(
+                    ".Derived", StringComparison.Ordinal));
+        Assert.NotNull(derivedTarget.RuntimeType.ConstructedIdentity);
+        Assert.Equal("Base", derivedTarget.Implementation.Declaration?
+            .ParentClassDeclaration?.Name);
+        Assert.Null(derivedTarget.Implementation.ImplementationDeclaration);
+    }
+
+    [Fact]
+    public void BindsGenericVirtualTargetsForClosedGenericCallerSpecializations()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_closed_generic_caller");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Base {
+                public virtual T Echo<T>(T value) { return value; }
+            }
+            public class Derived : Base { }
+            public T Forward<T>(Base receiver, T value) {
+                return receiver.Echo(value);
+            }
+            public int Run() { return Forward(new Derived(), 41); }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var forward = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Forward");
+        var invocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                forward.Body!.OfType<ReturnStatement>())).Expression);
+        var caller = Assert.Single(project.GenericFunctionInstances,
+            instance => ReferenceEquals(instance.Declaration, forward));
+        var closedContract = invocation.GetClosedGenericTarget(
+            caller.SpecializationName!);
+        Assert.NotNull(closedContract);
+        Assert.IsType<IntType>(closedContract.GenericTypeArguments["T"]);
+        var target = Assert.Single(invocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "Derived");
+        Assert.IsType<IntType>(target.Implementation.GenericTypeArguments["T"]);
+    }
+
+    [Fact]
+    public void BindsGenericInterfaceMethodToRuntimeImplementation()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_interface_virtual_dispatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface ITransform {
+                T Transform<T>(T value);
+            }
+            public class TransformImpl : ITransform {
+                public T Transform<T>(T value) { return value; }
+                public int Transform<int>(int value) { return value + 20; }
+            }
+            public int Run() {
+                ITransform value = new TransformImpl();
+                return value.Transform(2);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var run = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Run");
+        var invocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                run.Body!.OfType<ReturnStatement>())).Expression);
+        var target = Assert.Single(invocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "TransformImpl");
+        Assert.Equal("Transform", target.Implementation.Declaration?.Name);
+        Assert.IsType<IntType>(target.Implementation.GenericTypeArguments["T"]);
+        Assert.NotNull(target.Implementation.SpecializationName);
+    }
+
+    [Fact]
+    public void BindsGenericVirtualMethodThroughConstructedGenericInterface()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_constructed_interface_dispatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface ITransform<TState> {
+                U Transform<U>(TState state, U value);
+            }
+            public class TransformImpl : ITransform<int> {
+                public U Transform<U>(int state, U value) { return value; }
+                public int Transform<int>(int state, int value) {
+                    return state + value;
+                }
+            }
+            public int Run() {
+                ITransform<int> value = new TransformImpl();
+                return value.Transform(1, 41);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var run = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Run");
+        var invocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                run.Body!.OfType<ReturnStatement>())).Expression);
+        var target = Assert.Single(invocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "TransformImpl");
+        Assert.Equal("Transform", target.Implementation.Declaration?.Name);
+        Assert.True(target.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+    }
+
+    [Fact]
+    public void BindsGenericVirtualMethodOnClosedClassImplementingConstructedInterface()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_closed_class_constructed_interface_dispatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface ITransform<TState> {
+                U Transform<U>(TState state, U value);
+            }
+            public class TransformImpl<TState> : ITransform<TState> {
+                public U Transform<U>(TState state, U value) { return value; }
+                public int Transform<int>(TState state, int value) {
+                    return value + 1;
+                }
+            }
+            public int Run() {
+                ITransform<int> value = new TransformImpl<int>();
+                return value.Transform(1, 41);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var run = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Run");
+        var invocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                run.Body!.OfType<ReturnStatement>())).Expression);
+        var target = Assert.Single(invocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.ConstructedIdentity is not null &&
+                item.RuntimeType.ResolvedTypeFullName.ToString().EndsWith(
+                    ".TransformImpl", StringComparison.Ordinal));
+        Assert.True(target.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+        Assert.All(target.Implementation.ParameterTypes, parameter =>
+            Assert.IsType<IntType>(parameter));
+    }
+
+    [Fact]
+    public void BindsGenericCallerForwardingThroughConstructedGenericInterface()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_constructed_interface_forwarding");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface ITransform<TState> {
+                U Transform<U>(TState state, U value);
+            }
+            public class TransformImpl<TState> : ITransform<TState> {
+                public U Transform<U>(TState state, U value) { return value; }
+                public int Transform<int>(TState state, int value) {
+                    return value + 1;
+                }
+            }
+            public T Forward<T>(
+                ITransform<int> receiver, int state, T value) {
+                return receiver.Transform(state, value);
+            }
+            public int Run() {
+                ITransform<int> receiver = new TransformImpl<int>();
+                return Forward(receiver, 1, 41);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var forward = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Forward");
+        var invocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                forward.Body!.OfType<ReturnStatement>())).Expression);
+        var target = Assert.Single(invocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.ConstructedIdentity is not null &&
+                item.RuntimeType.ResolvedTypeFullName.ToString().EndsWith(
+                    ".TransformImpl", StringComparison.Ordinal));
+        Assert.True(target.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+        Assert.All(target.Implementation.ParameterTypes, parameter =>
+            Assert.IsType<IntType>(parameter));
+    }
+
+    [Fact]
+    public void BindsGenericVirtualCallerWithLocalResult()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_caller_local_result");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Base {
+                public virtual T Echo<T>(T value) { return value; }
+            }
+            public class Derived : Base {
+                public override U Echo<U>(U value) { return value; }
+                public override int Echo<int>(int value) { return value + 1; }
+            }
+            public T Forward<T>(Base receiver, T value) {
+                T result = receiver.Echo(value);
+                return result;
+            }
+            public int Run() { return Forward(new Derived(), 41); }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var forward = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Forward");
+        var invocation = Assert.IsType<InvocationExpression>(Assert.Single(
+            Assert.Single(forward.Body!.OfType<LocalVariableDeclarationStatement>())
+                .Declarators).Initializer);
+        var target = Assert.Single(invocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "Derived");
+        Assert.True(target.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+        Assert.IsType<IntType>(Assert.Single(target.Implementation.ParameterTypes));
+    }
+
+    [Fact]
+    public void BindsGenericVirtualCallerOnClosedGenericOwner()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_caller_closed_generic_owner");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface ITransform {
+                T Transform<TState, T>(TState state, T value);
+            }
+            public class IntTransformImpl : ITransform {
+                public T Transform<TState, T>(TState state, T value) { return value; }
+                public int Transform<int, int>(int state, int value) {
+                    return value + 55;
+                }
+            }
+            public class LongTransformImpl : ITransform {
+                public T Transform<TState, T>(TState state, T value) { return value; }
+            }
+            public class GenericRouter<TOwner> {
+                public T Forward<T>(ITransform receiver,
+                    TOwner state, T value) {
+                    return receiver.Transform(state, value);
+                }
+            }
+            public int RunExact() {
+                GenericRouter<int> router = new GenericRouter<int>();
+                return router.Forward(new IntTransformImpl(), 1, 2);
+            }
+            public long RunFallback() {
+                GenericRouter<long> router = new GenericRouter<long>();
+                return router.Forward(new LongTransformImpl(), 1l, 3l);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var forward = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<ClassDeclaration>()
+            .Single(declaration => declaration.Name == "GenericRouter")
+            .MemberDeclarations.Declarations.OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Forward");
+        var invocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                forward.Body!.OfType<ReturnStatement>())).Expression);
+        var callerInstances = project.GenericFunctionInstances
+            .Where(instance => ReferenceEquals(instance.Declaration, forward))
+            .Where(instance => instance.SpecializationName is not null)
+            .ToArray();
+        Assert.Contains(callerInstances, instance =>
+            instance.ClosedContainingType?.TypeArguments.Single() is IntType);
+        Assert.Contains(callerInstances, instance =>
+            instance.ClosedContainingType?.TypeArguments.Single() is LongType);
+
+        Assert.Contains(invocation.GenericVirtualDispatchTargets,
+            target => target.RuntimeType.Name == "IntTransformImpl" &&
+                target.Implementation.ImplementationDeclaration?.IsGenericSpecialization == true &&
+                target.Implementation.ParameterTypes.Last() is IntType);
+        Assert.Contains(invocation.GenericVirtualDispatchTargets,
+            target => target.RuntimeType.Name == "LongTransformImpl" &&
+                target.Implementation.ImplementationDeclaration?.IsGenericSpecialization != true &&
+                target.Implementation.ParameterTypes.Last() is LongType);
+
+        var outputDirectory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-virtual-owner-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputDirectory);
+        try
+        {
+            CCodeOutputGenerator.GenerateOutput(
+                project, Path.Combine(outputDirectory, "input.cx"));
+            var generatedC = File.ReadAllText(Path.Combine(
+                outputDirectory, $"{project.Name}.c"));
+            Assert.Contains("cx_require_generic_virtual_method", generatedC);
+            Assert.Contains("ITransform.Transform`2(!TState,!T)->!T", generatedC);
+            Assert.Contains("System.Int", generatedC);
+            Assert.Contains("System.Long", generatedC);
+        }
+        finally
+        {
+            Directory.Delete(outputDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void BindsGenericVirtualCallerWithConditionalDispatch()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_caller_conditional_dispatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface IApply { T Apply<T>(T value); }
+            public class Handler : IApply {
+                public T Apply<T>(T value) { return value; }
+                public int Apply<int>(int value) { return value + 1; }
+            }
+            public T Forward<T>(bool dispatch, IApply target, T value) {
+                return dispatch ? target.Apply(value) : value;
+            }
+            public T Reverse<T>(bool dispatch, IApply target, T value) {
+                return dispatch ? value : target.Apply(value);
+            }
+            public T ForwardStatement<T>(bool dispatch, IApply target, T value) {
+                if (dispatch) return target.Apply(value);
+                return value;
+            }
+            public T ReverseStatement<T>(bool dispatch, IApply target, T value) {
+                if (dispatch) return value;
+                else return target.Apply(value);
+            }
+            public T ForwardBlockStatement<T>(bool dispatch, IApply target, T value) {
+                if (dispatch) { return target.Apply(value); }
+                else { return value; }
+            }
+            public T ReverseBlockStatement<T>(bool dispatch, IApply target, T value) {
+                if (dispatch) { return value; }
+                else { return target.Apply(value); }
+            }
+            public T InferredAliasStatement<T>(bool dispatch, IApply target, T value) {
+                var forwarded = value;
+                if (dispatch) { return target.Apply(forwarded); }
+                else { return forwarded; }
+            }
+            public T LocalConditionStatement<T>(bool dispatch, IApply target, T value) {
+                bool shouldDispatch = dispatch;
+                if (shouldDispatch) { return target.Apply(value); }
+                return value;
+            }
+            public T InferredLocalConditionStatement<T>(bool dispatch, IApply target, T value) {
+                var shouldDispatch = dispatch;
+                if (shouldDispatch) { return target.Apply(value); }
+                return value;
+            }
+            public int Run() {
+                return Forward(true, new Handler(), 41) +
+                    Forward(false, new Handler(), 1) +
+                    Reverse(false, new Handler(), 41) +
+                    Reverse(true, new Handler(), 1) +
+                    ForwardStatement(true, new Handler(), 41) +
+                    ForwardStatement(false, new Handler(), 1) +
+                    ReverseStatement(false, new Handler(), 41) +
+                    ReverseStatement(true, new Handler(), 1) +
+                    ForwardBlockStatement(true, new Handler(), 41) +
+                    ForwardBlockStatement(false, new Handler(), 1) +
+                    ReverseBlockStatement(false, new Handler(), 41) +
+                    ReverseBlockStatement(true, new Handler(), 1) +
+                    InferredAliasStatement(true, new Handler(), 41) +
+                    InferredAliasStatement(false, new Handler(), 1) +
+                    LocalConditionStatement(true, new Handler(), 41) +
+                    LocalConditionStatement(false, new Handler(), 1) +
+                    InferredLocalConditionStatement(true, new Handler(), 41) +
+                    InferredLocalConditionStatement(false, new Handler(), 1);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var outputDirectory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-virtual-conditional-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputDirectory);
+        try
+        {
+            CCodeOutputGenerator.GenerateOutput(
+                project, Path.Combine(outputDirectory, "input.cx"));
+            var generatedC = File.ReadAllText(Path.Combine(
+                outputDirectory, $"{project.Name}.c"));
+            Assert.Contains("int forwarded = value;", generatedC);
+            Assert.DoesNotContain("cx_bool forwarded", generatedC);
+        }
+        finally
+        {
+            Directory.Delete(outputDirectory, recursive: true);
+        }
+
+        var forward = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Forward");
+        var returned = Assert.IsType<ReturnStatement>(Assert.Single(forward.Body!));
+        var conditional = Assert.IsType<ConditionalExpression>(returned.Expression);
+        var invocation = Assert.IsType<InvocationExpression>(conditional.WhenTrue);
+        var target = Assert.Single(invocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "Handler");
+        Assert.True(target.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+        Assert.IsType<IntType>(Assert.Single(target.Implementation.ParameterTypes));
+
+        var reverse = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Reverse");
+        var reverseReturned = Assert.IsType<ReturnStatement>(Assert.Single(reverse.Body!));
+        var reverseConditional = Assert.IsType<ConditionalExpression>(reverseReturned.Expression);
+        var reverseInvocation = Assert.IsType<InvocationExpression>(
+            reverseConditional.WhenFalse);
+        var reverseTarget = Assert.Single(reverseInvocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "Handler");
+        Assert.True(reverseTarget.Implementation.ImplementationDeclaration?
+            .IsGenericSpecialization);
+
+        static IEnumerable<ReturnStatement> GetBranchReturns(StatementBase? statement) =>
+            statement switch
+            {
+                ReturnStatement returnStatement => [returnStatement],
+                BlockStatement block => block.Statements.OfType<ReturnStatement>(),
+                _ => [],
+            };
+
+        foreach (var name in new[]
+            {
+                "ForwardStatement", "ReverseStatement",
+                "ForwardBlockStatement", "ReverseBlockStatement",
+                "InferredAliasStatement",
+                "LocalConditionStatement",
+                "InferredLocalConditionStatement",
+            })
+        {
+            var statementForwarder = project.CompilationContexts
+                .SelectMany(context => context.DeclarationScope.Declarations)
+                .OfType<FunctionDeclaration>()
+                .Single(function => function.Name == name);
+            var statementConditional = Assert.Single(
+                statementForwarder.Body!.OfType<IfStatement>());
+            var statementInvocation = new[]
+                { statementConditional.ThenStatement, statementConditional.ElseStatement }
+                .Where(statement => statement is not null)
+                .SelectMany(GetBranchReturns)
+                .Select(returnStatement => returnStatement.Expression)
+                .OfType<InvocationExpression>()
+                .Single();
+            var statementTarget = Assert.Single(statementInvocation.GenericVirtualDispatchTargets,
+                item => item.RuntimeType.Name == "Handler");
+            Assert.True(statementTarget.Implementation.ImplementationDeclaration?
+                .IsGenericSpecialization);
+        }
+    }
+
+    [Fact]
+    public void BindsInheritedGenericInterfaceMethodToRuntimeImplementation()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_inherited_interface_dispatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface IBaseTransform {
+                T Transform<T>(T value);
+            }
+            public interface IDerivedTransform : IBaseTransform { }
+            public class TransformImpl : IDerivedTransform {
+                public T Transform<T>(T value) { return value; }
+                public int Transform<int>(int value) { return value + 1; }
+            }
+            public int Run() {
+                IDerivedTransform value = new TransformImpl();
+                return value.Transform(41);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var run = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Run");
+        var invocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                run.Body!.OfType<ReturnStatement>())).Expression);
+        var target = Assert.Single(invocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "TransformImpl");
+        Assert.True(target.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+        Assert.IsType<IntType>(Assert.Single(target.Implementation.ParameterTypes));
+    }
+
+    [Fact]
+    public void BindsGenericVirtualDispatchThroughInterfaceConstrainedCaller()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_interface_constrained_caller");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface ITransform<TState> {
+                U Transform<U>(TState state, U value);
+            }
+            public class TransformImpl<TState> : ITransform<TState> {
+                public U Transform<U>(TState state, U value) { return value; }
+                public int Transform<int>(TState state, int value) {
+                    return value + 1;
+                }
+            }
+            public T Forward<TReceiver, T>(TReceiver receiver, T value)
+                where TReceiver : ITransform<int> {
+                return receiver.Transform(1, value);
+            }
+            public int Run() {
+                return Forward(new TransformImpl<int>(), 41);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var forward = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Forward");
+        var invocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                forward.Body!.OfType<ReturnStatement>())).Expression);
+        var target = Assert.Single(invocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.ConstructedIdentity is not null &&
+                item.RuntimeType.ResolvedTypeFullName.ToString().EndsWith(
+                    ".TransformImpl", StringComparison.Ordinal));
+        Assert.True(target.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+        Assert.All(target.Implementation.ParameterTypes, parameter =>
+            Assert.IsType<IntType>(parameter));
+    }
+
+    [Fact]
+    public void BindsConstrainedGenericVirtualMethodSpecialization()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_method_constraint_dispatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface ITransform {
+                T Transform<T>(T value) where T : class;
+            }
+            public class TransformImpl : ITransform {
+                public T Transform<T>(T value) where T : class { return value; }
+                public string Transform<string>(string value) { return value; }
+            }
+            public string Run() {
+                ITransform value = new TransformImpl();
+                return value.Transform("seed");
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var run = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Run");
+        var invocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                run.Body!.OfType<ReturnStatement>())).Expression);
+        var target = Assert.Single(invocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "TransformImpl");
+        Assert.True(target.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+        Assert.IsType<StringType>(Assert.Single(target.Implementation.ParameterTypes));
+    }
+
+    [Fact]
+    public void BindsGenericVirtualMethodWithInterfaceConstraint()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_interface_constraint_dispatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface IMarker { }
+            public class Marker : IMarker { }
+            public interface ITransformMarker {
+                T Transform<T>(T value) where T : IMarker;
+            }
+            public class TransformMarkerImpl : ITransformMarker {
+                public T Transform<T>(T value) where T : IMarker { return value; }
+                public Marker Transform<Marker>(Marker value) { return value; }
+            }
+            public IMarker Run() {
+                ITransformMarker value = new TransformMarkerImpl();
+                return value.Transform(new Marker());
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var run = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Run");
+        var invocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                run.Body!.OfType<ReturnStatement>())).Expression);
+        var target = Assert.Single(invocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "TransformMarkerImpl");
+        Assert.True(target.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+        Assert.Equal("Marker", Assert.Single(target.Implementation.ParameterTypes).FullName.ToString());
+    }
+
+    [Fact]
+    public void BindsStructConstrainedGenericVirtualMethodSpecialization()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_struct_constraint_dispatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface IValueTransform {
+                T TransformValue<T>(T value) where T : struct;
+            }
+            public class ValueTransformImpl : IValueTransform {
+                public T TransformValue<T>(T value) where T : struct { return value; }
+                public int TransformValue<int>(int value) { return value + 1; }
+            }
+            public int Run() {
+                IValueTransform value = new ValueTransformImpl();
+                return value.TransformValue(41);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var run = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Run");
+        var invocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                run.Body!.OfType<ReturnStatement>())).Expression);
+        var target = Assert.Single(invocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "ValueTransformImpl");
+        Assert.True(target.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+        Assert.IsType<IntType>(Assert.Single(target.Implementation.ParameterTypes));
+    }
+
+    [Fact]
+    public void BindsGenericVirtualMethodWithCombinedClassAndInterfaceConstraints()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_combined_constraint_dispatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface IMarker { }
+            public class Marker : IMarker { }
+            public interface ITransform {
+                T Transform<T>(T value) where T : class, IMarker;
+            }
+            public class TransformImpl : ITransform {
+                public T Transform<T>(T value) where T : class, IMarker { return value; }
+                public Marker Transform<Marker>(Marker value) { return value; }
+            }
+            public IMarker Run() {
+                ITransform value = new TransformImpl();
+                return value.Transform(new Marker());
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var run = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Run");
+        var invocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                run.Body!.OfType<ReturnStatement>())).Expression);
+        var target = Assert.Single(invocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "TransformImpl");
+        Assert.True(target.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+        Assert.Equal("Marker", Assert.Single(target.Implementation.ParameterTypes).FullName.ToString());
+    }
+
+    [Fact]
+    public void BindsGenericVirtualMethodWithMultipleInterfaceConstraints()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_multiple_interface_constraints_dispatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface IMarker { }
+            public interface ITraceable { }
+            public class Marker : IMarker, ITraceable { }
+            public interface ITransform {
+                T Transform<T>(T value) where T : class, IMarker, ITraceable;
+            }
+            public class TransformImpl : ITransform {
+                public T Transform<T>(T value)
+                    where T : class, IMarker, ITraceable { return value; }
+                public Marker Transform<Marker>(Marker value) { return value; }
+            }
+            public IMarker Run() {
+                ITransform value = new TransformImpl();
+                return value.Transform(new Marker());
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var run = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Run");
+        var invocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                run.Body!.OfType<ReturnStatement>())).Expression);
+        var target = Assert.Single(invocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "TransformImpl");
+        Assert.True(target.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+        Assert.Equal("Marker", Assert.Single(target.Implementation.ParameterTypes).FullName.ToString());
+    }
+
+    [Fact]
+    public void BindsGenericVirtualMethodWithStructAndInterfaceConstraints()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_struct_interface_constraints_dispatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface IMarker { }
+            public interface IAuditable { }
+            public struct Marker : IMarker, IAuditable { public int Value; }
+            public struct Fallback : IMarker, IAuditable { public int Value; }
+            public interface ITransform {
+                T Transform<T>(T value) where T : struct, IMarker, IAuditable;
+            }
+            public class TransformImpl : ITransform {
+                public T Transform<T>(T value)
+                    where T : struct, IMarker, IAuditable { return value; }
+                public Marker Transform<Marker>(Marker value) {
+                    value.Value = 1;
+                    return value;
+                }
+            }
+            public int Run() {
+                ITransform value = new TransformImpl();
+                Marker marker = default;
+                Fallback fallback = default;
+                Marker exact = value.Transform(marker);
+                Fallback primary = value.Transform(fallback);
+                return exact.Value + primary.Value;
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var run = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Run");
+        var invocations = run.Body!
+            .OfType<LocalVariableDeclarationStatement>()
+            .SelectMany(local => local.Declarators)
+            .Select(declarator => declarator.Initializer)
+            .OfType<InvocationExpression>()
+            .ToArray();
+        var exactInvocation = Assert.Single(invocations,
+            invocation => invocation.Arguments.Single() is IdentifierExpression identifier &&
+                identifier.Identifier.ToString() == "marker");
+        var target = Assert.Single(exactInvocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "TransformImpl");
+        Assert.True(target.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+        Assert.Equal("Marker", Assert.Single(target.Implementation.ParameterTypes)
+            .FullName.ToString());
+        var fallbackInvocation = Assert.Single(invocations,
+            invocation => invocation.Arguments.Single() is IdentifierExpression identifier &&
+                identifier.Identifier.ToString() == "fallback");
+        var fallbackTarget = Assert.Single(fallbackInvocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "TransformImpl");
+        Assert.False(fallbackTarget.Implementation.ImplementationDeclaration?
+            .IsGenericSpecialization ?? false);
+    }
+
+    [Fact]
+    public void BindsClassOverrideWithGenericMethodConstraint()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_override_constraint_dispatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Base {
+                public virtual T Transform<T>(T value) where T : class { return value; }
+            }
+            public class Derived : Base {
+                public override U Transform<U>(U value) where U : class { return value; }
+                public override string Transform<string>(string value) { return value; }
+            }
+            public string Run() {
+                Base value = new Derived();
+                return value.Transform("seed");
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var run = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Run");
+        var invocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                run.Body!.OfType<ReturnStatement>())).Expression);
+        var target = Assert.Single(invocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "Derived");
+        Assert.Equal("Derived", target.Implementation.Declaration?
+            .ParentClassDeclaration?.Name);
+        Assert.True(target.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+        Assert.IsType<StringType>(Assert.Single(target.Implementation.ParameterTypes));
+    }
+
+    [Fact]
+    public void BindsGenericVirtualSpecializationOnClosedGenericOwner()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_specialization_closed_owner");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Marker { public int Value; }
+            public class MarkerFallback { public int Value = 7; }
+            public class Base<T> {
+                public virtual U Transform<U>(U value) where U : class { return value; }
+            }
+            public class Derived<T> : Base<T> {
+                public override U Transform<U>(U value) where U : class { return value; }
+                public override Marker Transform<Marker>(Marker value) {
+                    value.Value = 42;
+                    return value;
+                }
+            }
+            public Marker Run() {
+                Base<int> value = new Derived<int>();
+                return value.Transform(new Marker());
+            }
+            public MarkerFallback RunFallback() {
+                Base<int> value = new Derived<int>();
+                return value.Transform(new MarkerFallback());
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var functions = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .ToDictionary(function => function.Name, StringComparer.Ordinal);
+        foreach (var functionName in new[] { "Run", "RunFallback" })
+        {
+            var invocation = Assert.IsType<InvocationExpression>(
+                Assert.IsType<ReturnStatement>(Assert.Single(
+                    functions[functionName].Body!.OfType<ReturnStatement>())).Expression);
+            var target = Assert.Single(invocation.GenericVirtualDispatchTargets,
+                item => item.RuntimeType.Name == "Derived");
+            Assert.Equal(functionName == "Run",
+                target.Implementation.ImplementationDeclaration?.IsGenericSpecialization ?? false);
+            Assert.Equal("Derived", target.Implementation.Declaration?
+                .ParentClassDeclaration?.Name);
+        }
+    }
+
+    [Fact]
+    public void BindsClassVirtualMethodWithCombinedClassAndInterfaceConstraints()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_class_combined_constraint_dispatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface IMarker { }
+            public interface ITraceable { }
+            public class Marker : IMarker, ITraceable { }
+            public class MarkerFallback : IMarker, ITraceable { }
+            public class Base {
+                public virtual T Transform<T>(T value)
+                    where T : class, IMarker, ITraceable {
+                    return value;
+                }
+            }
+            public class Derived : Base {
+                public override U Transform<U>(U value)
+                    where U : class, IMarker, ITraceable {
+                    return value;
+                }
+                public override Marker Transform<Marker>(Marker value) {
+                    return value;
+                }
+            }
+            public IMarker Run() {
+                Base value = new Derived();
+                return value.Transform(new Marker());
+            }
+            public IMarker RunFallback() {
+                Base value = new Derived();
+                return value.Transform(new MarkerFallback());
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var declarations = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .ToDictionary(function => function.Name, StringComparer.Ordinal);
+        var run = declarations["Run"];
+        var invocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                run.Body!.OfType<ReturnStatement>())).Expression);
+        var target = Assert.Single(invocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "Derived");
+        Assert.Equal("Derived", target.Implementation.Declaration?
+            .ParentClassDeclaration?.Name);
+        Assert.True(target.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+        Assert.Equal("Marker", Assert.Single(target.Implementation.ParameterTypes)
+            .FullName.ToString());
+
+        var fallbackInvocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                declarations["RunFallback"].Body!.OfType<ReturnStatement>())).Expression);
+        var fallbackTarget = Assert.Single(fallbackInvocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "Derived");
+        Assert.False(fallbackTarget.Implementation.ImplementationDeclaration?
+            .IsGenericSpecialization ?? false);
+    }
+
+    [Fact]
+    public void BindsClassVirtualMethodWithStructConstraint()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_class_struct_constraint_dispatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Base {
+                public virtual T Transform<T>(T value) where T : struct {
+                    return value;
+                }
+            }
+            public class Derived : Base {
+                public override U Transform<U>(U value) where U : struct {
+                    return value;
+                }
+                public override int Transform<int>(int value) {
+                    return value + 30;
+                }
+            }
+            public long RunFallback() {
+                Base value = new Derived();
+                return value.Transform(7L);
+            }
+            public int RunExact() {
+                Base value = new Derived();
+                return value.Transform(7);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var declarations = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .ToDictionary(function => function.Name, StringComparer.Ordinal);
+        var exactInvocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                declarations["RunExact"].Body!.OfType<ReturnStatement>())).Expression);
+        var target = Assert.Single(exactInvocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "Derived");
+        Assert.True(target.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+        Assert.IsType<IntType>(Assert.Single(target.Implementation.ParameterTypes));
+    }
+
+    [Fact]
+    public void BindsGenericVirtualVoidForwardingCaller()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_void_forwarding_caller");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface IApply { T Apply<T>(T value); }
+            public class Handler : IApply {
+                public T Apply<T>(T value) { return value; }
+                public int Apply<int>(int value) { return value + 1; }
+            }
+            public void Forward<T>(IApply target, T value) {
+                target.Apply(value);
+            }
+            public int Run() {
+                Forward(new Handler(), 4);
+                return 0;
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var declarations = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .ToDictionary(function => function.Name, StringComparer.Ordinal);
+        var forwardInvocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ExpressionStatement>(
+                Assert.Single(declarations["Forward"].Body!)).Expression);
+        var target = Assert.Single(forwardInvocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "Handler");
+        Assert.True(target.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+        Assert.IsType<IntType>(Assert.Single(target.Implementation.ParameterTypes));
+    }
+
+    [Fact]
+    public void BindsRecursiveGenericVirtualSpecialization()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_recursive_specialization");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Base {
+                public virtual T Transform<T>(T value) { return value; }
+            }
+            public class Derived : Base {
+                public override U Transform<U>(U value) { return value; }
+                public override int Transform<int>(int value) {
+                    if (value == 0) return 0;
+                    return this.Transform(value - 1) - (-1);
+                }
+            }
+            public int Run() {
+                Base value = new Derived();
+                return value.Transform(5);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var derived = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<ClassDeclaration>()
+            .Single(declaration => declaration.Name == "Derived");
+        var recursiveSpecialization = derived.MemberDeclarations.Declarations
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.IsGenericSpecialization &&
+                function.Name == "Transform");
+        var recursiveReturn = Assert.IsType<ReturnStatement>(
+            recursiveSpecialization.Body!.OfType<ReturnStatement>().Single());
+        var recursiveExpression = Assert.IsType<BinaryExpression>(
+            recursiveReturn.Expression);
+        var recursiveInvocation = Assert.IsType<InvocationExpression>(
+            recursiveExpression.Left);
+        Assert.True(recursiveInvocation.TargetSymbol?.ImplementationDeclaration?
+            .IsGenericSpecialization);
+    }
+
+    [Fact]
+    public void BindsGenericVirtualMethodThroughDeepInterfaceInheritance()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_deep_interface_inheritance_dispatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface ITransform { T Transform<T>(T value); }
+            public interface IChildTransform : ITransform { }
+            public interface IGrandchildTransform : IChildTransform { }
+            public class TransformImpl : IGrandchildTransform {
+                public T Transform<T>(T value) { return value; }
+                public int Transform<int>(int value) { return value + 40; }
+            }
+            public int Run() {
+                IGrandchildTransform value = new TransformImpl();
+                return value.Transform(2);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var run = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Run");
+        var invocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                run.Body!.OfType<ReturnStatement>())).Expression);
+        var target = Assert.Single(invocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "TransformImpl");
+        Assert.True(target.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+        Assert.IsType<IntType>(Assert.Single(target.Implementation.ParameterTypes));
+    }
+
+    [Fact]
+    public void BindsGenericVirtualMethodThroughDiamondInterfaceInheritance()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_diamond_interface_inheritance_dispatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface ITransform { T Transform<T>(T value); }
+            public interface ILeftTransform : ITransform {
+                T Transform<T>(T value);
+            }
+            public interface IRightTransform : ITransform {
+                T Transform<T>(T value);
+            }
+            public interface IDiamondTransform : ILeftTransform, IRightTransform { }
+            public class TransformImpl : IDiamondTransform {
+                public T Transform<T>(T value) { return value; }
+                public int Transform<int>(int value) { return value + 50; }
+            }
+            public int Run() {
+                IDiamondTransform value = new TransformImpl();
+                return value.Transform(2);
+            }
+            public long RunFallback() {
+                IDiamondTransform value = new TransformImpl();
+                return value.Transform(11l);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var run = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Run");
+        var invocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                run.Body!.OfType<ReturnStatement>())).Expression);
+        var target = Assert.Single(invocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "TransformImpl");
+        Assert.True(target.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+        Assert.IsType<IntType>(Assert.Single(target.Implementation.ParameterTypes));
+
+        var fallback = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "RunFallback");
+        var fallbackInvocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                fallback.Body!.OfType<ReturnStatement>())).Expression);
+        var fallbackTarget = Assert.Single(fallbackInvocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "TransformImpl");
+        Assert.False(fallbackTarget.Implementation.ImplementationDeclaration?
+            .IsGenericSpecialization ?? false);
+    }
+
+    [Fact]
+    public void BindsGenericVirtualMethodRedeclaredByChildInterface()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_redeclared_interface_contract");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface ITransform { T Transform<T>(T value); }
+            public interface IChildTransform : ITransform {
+                T Transform<T>(T value);
+            }
+            public class TransformImpl : IChildTransform {
+                public T Transform<T>(T value) { return value; }
+                public int Transform<int>(int value) { return value + 55; }
+            }
+            public int RunExact() {
+                IChildTransform value = new TransformImpl();
+                return value.Transform(2);
+            }
+            public long RunFallback() {
+                IChildTransform value = new TransformImpl();
+                return value.Transform(2l);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var declarations = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .ToDictionary(function => function.Name, StringComparer.Ordinal);
+        var exactInvocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                declarations["RunExact"].Body!.OfType<ReturnStatement>())).Expression);
+        var exactTarget = Assert.Single(exactInvocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "TransformImpl");
+        Assert.True(exactTarget.Implementation.ImplementationDeclaration?.IsGenericSpecialization);
+
+        var fallbackInvocation = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(
+                declarations["RunFallback"].Body!.OfType<ReturnStatement>())).Expression);
+        var fallbackTarget = Assert.Single(fallbackInvocation.GenericVirtualDispatchTargets,
+            item => item.RuntimeType.Name == "TransformImpl");
+        Assert.False(
+            fallbackTarget.Implementation.ImplementationDeclaration?.IsGenericSpecialization ?? false);
+    }
+
+    [Fact]
+    public void BindsDistinctGenericVirtualContractRedeclaredByChildInterface()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_distinct_redeclared_interface_contract");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface ITransform { T Transform<T>(T value); }
+            public interface IChildTransform : ITransform {
+                T Transform<T>(T value, int offset);
+            }
+            public class TransformImpl : IChildTransform {
+                public T Transform<T>(T value) { return value; }
+                public int Transform<int>(int value) { return value + 1; }
+                public T Transform<T>(T value, int offset) { return value; }
+                public int Transform<int>(int value, int offset) {
+                    return value + offset + 100;
+                }
+            }
+            public int RunBaseContract() {
+                IChildTransform value = new TransformImpl();
+                return value.Transform(2);
+            }
+            public int RunChildExact() {
+                IChildTransform value = new TransformImpl();
+                return value.Transform(2, 3);
+            }
+            public long RunChildFallback() {
+                IChildTransform value = new TransformImpl();
+                return value.Transform(2l, 3);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var declarations = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<FunctionDeclaration>()
+            .ToDictionary(function => function.Name, StringComparer.Ordinal);
+        var baseInvocation = GetInvocation("RunBaseContract");
+        Assert.True(GetTarget(baseInvocation).Implementation
+            .ImplementationDeclaration?.IsGenericSpecialization);
+
+        var childExactInvocation = GetInvocation("RunChildExact");
+        var childExactTarget = GetTarget(childExactInvocation);
+        Assert.True(childExactTarget.Implementation
+            .ImplementationDeclaration?.IsGenericSpecialization);
+        Assert.Equal(2, childExactTarget.Implementation.ParameterTypes.Count);
+
+        var childFallbackInvocation = GetInvocation("RunChildFallback");
+        var childFallbackTarget = GetTarget(childFallbackInvocation);
+        Assert.False(childFallbackTarget.Implementation
+            .ImplementationDeclaration?.IsGenericSpecialization ?? false);
+        Assert.Equal(2, childFallbackTarget.Implementation.ParameterTypes.Count);
+
+        InvocationExpression GetInvocation(string functionName) =>
+            Assert.IsType<InvocationExpression>(
+                Assert.IsType<ReturnStatement>(Assert.Single(
+                    declarations[functionName].Body!.OfType<ReturnStatement>())).Expression);
+
+        GenericVirtualDispatchTarget GetTarget(InvocationExpression invocation) =>
+            Assert.Single(invocation.GenericVirtualDispatchTargets,
+                item => item.RuntimeType.Name == "TransformImpl");
+    }
+
+    [Fact]
+    public void RejectsGenericInterfaceRedeclarationWithIncompatibleReturnType()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_redeclared_interface_return_mismatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface ITransform { T Transform<T>(T value); }
+            public interface IChildTransform : ITransform {
+                int Transform<T>(T value);
+            }
+            """));
+
+        var error = Assert.Throws<CompilationErrorException>(
+            () => new SemanticBinder().Bind(project));
+
+        Assert.Contains("must preserve the return type", error.Message);
+    }
+
+    [Fact]
+    public void RejectsGenericInterfaceRedeclarationWithIncompatibleConstraints()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_virtual_redeclared_interface_constraint_mismatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface ITransform {
+                T Transform<T>(T value) where T : class;
+            }
+            public interface IChildTransform : ITransform {
+                T Transform<T>(T value);
+            }
+            """));
+
+        var error = Assert.Throws<CompilationErrorException>(
+            () => new SemanticBinder().Bind(project));
+
+        Assert.Contains("must preserve the generic constraints", error.Message);
     }
 
     [Fact]

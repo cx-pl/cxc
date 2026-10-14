@@ -11,5 +11,6 @@ public enum MemberModifier
     Override,
     Final,
     Static,
-    Extern
+    Extern,
+    Unsafe
 }

@@ -271,12 +271,26 @@ public class Compiler
         _projectPath = filePath;
         _project = Path.GetExtension(filePath).ToLowerInvariant() switch
         {
-            ".cxproj" or ".yaml" or ".yml" => ParseCxProjectFromYaml(reader),
+            ".cxproj" or ".cxpm" or ".yaml" or ".yml" => ParseCxProjectFromYaml(reader),
             ".json" => ParseCxProjectFromJson(reader),
             _ => throw new CompilationErrorException($"Unsupported project file format: {Path.GetExtension(filePath)}"),
         };
         if (_moduleNameOverride is not null)
             _project.Name = _moduleNameOverride;
+        if (Path.GetFileName(filePath) == "package.cxpm")
+        {
+            // cxpm preserves the manifest and places selected payloads in source/ and bin/.
+            // Translate project-relative asset paths without probing a build-host SDK.
+            foreach (var library in _project.NativeLibraries.Values)
+                foreach (var target in new[] { library.Windows, library.Linux }.OfType<NativeLibraryTarget>())
+                {
+                    target.IncludeDirectories = target.IncludeDirectories.Select(PackageAssetPath).ToList();
+                    target.RuntimeArtifacts = target.RuntimeArtifacts.Select(PackageAssetPath).ToList();
+                    target.RuntimeSearchPaths = target.RuntimeSearchPaths.Select(PackageAssetPath).ToList();
+                    target.LinkLibraries = target.LinkLibraries.Select(value => value.Contains('/') || value.Contains('\\') ? PackageAssetPath(value) : value).ToList();
+                    if (target.SdkRoot is { } sdkRoot) target.SdkRoot = PackageAssetPath(sdkRoot);
+                }
+        }
         _project.Targets ??= [];
         if (_project.Targets.Any(target => string.IsNullOrWhiteSpace(target)
             || !Regex.IsMatch(target, "^[A-Za-z0-9][A-Za-z0-9._-]*$")))
@@ -290,6 +304,9 @@ public class Compiler
             throw new InvalidOperationException($"Project directory does not exist: {projectDirectory.FullName}");
         }
         foreach (var sourceFile in projectDirectory.EnumerateFiles("*.cx", SearchOption.AllDirectories)
+            .Where(file => !Path.GetRelativePath(projectDirectoryPath, file.FullName)
+                .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                .Any(part => part is ".packages" or ".obj" or ".bin" or ".dist"))
             .OrderBy(file => file.FullName, StringComparer.Ordinal))
         {
             CompileCxSourceFile(sourceFile.FullName);
@@ -298,6 +315,15 @@ public class Compiler
 
     private sealed record ProjectNode(string Path, CxProject Project, IReadOnlyList<ProjectNode> References,
         Compiler Compiler);
+
+    private static string PackageAssetPath(string path)
+    {
+        if (Path.IsPathRooted(path)) return path;
+        path = path.Replace('\\', '/');
+        if (path.StartsWith("binary/", StringComparison.Ordinal)) return "bin/" + path[7..];
+        if (path.StartsWith("bin/", StringComparison.Ordinal) || path.StartsWith("source/", StringComparison.Ordinal)) return path;
+        return "source/" + path;
+    }
 
     private void CompileProjectGraph(string rootPath, IReadOnlySet<string> symbols, Options options)
     {
@@ -356,6 +382,50 @@ public class Compiler
                     throw new CompilationErrorException($"Project '{project.Name}' references '{reference}' more than once.");
                 refs.Add(LoadProject(referencePath));
             }
+            if (project.Dependencies.Count > 0)
+            {
+                var lockPath = Path.Combine(projectDirectory, "cxpm.lock");
+                var packageRoot = projectDirectory;
+                if (Path.GetFileName(path) == "package.cxpm")
+                {
+                    // Restored transitive dependencies share the consuming app's lock.
+                    var parent = Directory.GetParent(projectDirectory);
+                    while (parent is not null && parent.Name != ".packages") parent = parent.Parent;
+                    packageRoot = parent?.Parent?.FullName ?? projectDirectory;
+                    lockPath = Path.Combine(packageRoot, "cxpm.lock");
+                }
+                if (!File.Exists(lockPath))
+                    throw new CompilationErrorException($"Project '{project.Name}' has package dependencies; run cxpm restore before compilation.");
+                using var lockDocument = System.Text.Json.JsonDocument.Parse(File.ReadAllText(lockPath));
+                if (lockDocument.RootElement.GetProperty("LockVersion").GetInt32() != 1)
+                    throw new CompilationErrorException("Unsupported cxpm.lock version; run cxpm restore with a compatible cxpm.");
+                if (Path.GetFileName(path) != "package.cxpm")
+                {
+                    var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+                    if (lockDocument.RootElement.GetProperty("ProjectHash").GetString() != hash)
+                        throw new CompilationErrorException("cxpm.lock does not match the project manifest; run cxpm restore before compilation.");
+                }
+                var packages = lockDocument.RootElement.GetProperty("Packages");
+                foreach (var dependency in project.Dependencies.Order(StringComparer.Ordinal))
+                {
+                    var separator = dependency.LastIndexOf('@');
+                    if (separator <= 0) throw new CompilationErrorException($"Invalid package dependency '{dependency}'.");
+                    var id = dependency[..separator];
+                    var locked = packages.EnumerateObject().SingleOrDefault(package =>
+                        string.Equals(package.Name, id, StringComparison.OrdinalIgnoreCase));
+                    if (locked.Value.ValueKind != System.Text.Json.JsonValueKind.Object)
+                        throw new CompilationErrorException($"Package '{id}' is not present in cxpm.lock; run cxpm restore.");
+                    var version = locked.Value.GetProperty("Version").GetString()!;
+                    if (!Regex.IsMatch(id, @"^[A-Za-z0-9][A-Za-z0-9._-]*$") ||
+                        !Regex.IsMatch(version, @"^[A-Za-z0-9][A-Za-z0-9.+-]*$"))
+                        throw new CompilationErrorException("Invalid restored package identity.");
+                    var manifest = Path.Combine(packageRoot, ".packages", id.ToLowerInvariant(), version, "package.cxpm");
+                    var packageNode = LoadProject(manifest);
+                    if (!string.Equals(packageNode.Project.Name, id, StringComparison.OrdinalIgnoreCase) || packageNode.Project.Version != version)
+                        throw new CompilationErrorException($"Restored package '{id}' manifest identity does not match cxpm.lock.");
+                    refs.Add(packageNode);
+                }
+            }
             refs = refs.OrderBy(reference => reference.Project.Name, StringComparer.Ordinal).ToList();
             if (refs.Any(reference => reference.Project.Name == project.Name) ||
                 refs.Select(reference => reference.Project.Name).Distinct(StringComparer.Ordinal).Count() != refs.Count)
@@ -380,6 +450,8 @@ public class Compiler
                 StringComparer.OrdinalIgnoreCase).ToArray();
             foreach (var external in externalNodes)
             {
+                node.Project.ReferencedNativeLibraries[external.Project.Name] =
+                    external.Project.NativeLibraries;
                 var exportedGenericTypeInstances =
                     CCodeOutputGenerator.GetPublicApiGenericTypeInstances(external.Project);
                 var exportedGenericFunctionInstances =

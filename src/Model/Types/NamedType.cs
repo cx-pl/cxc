@@ -13,6 +13,11 @@ public class NamedType : TypeBase
     public GenericTypeIdentity? ConstructedIdentity { get; internal set; }
     public bool IsDelegate { get; private set; }
     public FunctionType? DelegateSignature { get; private set; }
+    public TypeBase? AliasTargetType { get; private set; }
+    public NativeTypeMetadata? NativeType { get; internal set; }
+    public TypeBase? EnumUnderlyingType { get; internal set; }
+
+    internal void SetPrimitiveAliasTarget(TypeBase target) => AliasTargetType = target;
 
     public NamedType(string name, string[] genericParams)
         : base(name, QualifiedIdentifier.Empty)
@@ -112,6 +117,9 @@ public class NamedType : TypeBase
         ConstructedIdentity = target.ConstructedIdentity;
         IsDelegate = target.IsDelegate;
         DelegateSignature = target.DelegateSignature;
+        AliasTargetType = target.AliasTargetType;
+        NativeType = target.NativeType;
+        EnumUnderlyingType = target.EnumUnderlyingType;
     }
 
     public void SetResolvedType(QualifiedIdentifier typeFullName, string moduleName, ClassType classType)

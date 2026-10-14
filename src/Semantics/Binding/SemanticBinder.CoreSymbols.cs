@@ -15,6 +15,7 @@ public sealed partial class SemanticBinder
         AddCoreFunction("Console", "WriteLine", [BuiltInSystemTypes.String], BuiltInSystemTypes.UInt);
         AddCoreObjectMethods();
         AddCoreStringOperators();
+        AddCoreStringTranscoding();
         AddCoreConstructor(BuiltInSystemTypes.Object, ClassType.Class, "Object", [], 1);
         AddCoreProperty(
             BuiltInSystemTypes.Object,
@@ -27,7 +28,16 @@ public sealed partial class SemanticBinder
         {
             AddCoreTypeInfoCreateInstance();
         }
-        AddCoreConstructor(BuiltInSystemTypes.Exception, ClassType.Class, "Exception", [], 1);
+        AddCoreFunctionInfoTypes();
+        AddCoreThreadingTypes();
+        AddCoreAnnotationTypes();
+        AddCoreConstructor(BuiltInSystemTypes.Exception, ClassType.Class, "Exception", [], 3);
+        AddCoreConstructor(BuiltInSystemTypes.Exception, ClassType.Class, "Exception",
+            [BuiltInSystemTypes.String], 1);
+        AddCoreConstructor(BuiltInSystemTypes.Exception, ClassType.Class, "Exception",
+            [BuiltInSystemTypes.String, BuiltInSystemTypes.Exception], 2);
+        AddCoreProperty(BuiltInSystemTypes.Exception, ClassType.Class, "Exception", "Message",
+            BuiltInSystemTypes.String, [new PropertyAccessorSymbol("get", true, [])]);
         AddCoreConstructor(
             BuiltInSystemTypes.String,
             ClassType.Class,
@@ -68,6 +78,41 @@ public sealed partial class SemanticBinder
             "cxcore",
             ClassType.Struct);
         _types.Add(new TypeSymbol("cxcore", typeInfoDeclaration, typeInfo));
+
+        var fieldInfo = new NamedType("FieldInfo", []);
+        fieldInfo.SetResolvedType(
+            new QualifiedIdentifier("System", "Reflection", "FieldInfo"),
+            "cxcore",
+            ClassType.Struct);
+        var functionInfo = new NamedType("FunctionInfo", []);
+        functionInfo.SetResolvedType(
+            new QualifiedIdentifier("System", "Reflection", "FunctionInfo"),
+            "cxcore",
+            ClassType.Struct);
+
+        foreach (var (name, fieldType) in new (string Name, TypeBase Type)[]
+        {
+            ("Hash", BuiltInSystemTypes.ULong),
+            ("Flags", BuiltInSystemTypes.UInt),
+            ("Size", BuiltInSystemTypes.UInt),
+            ("Name", BuiltInSystemTypes.String),
+            ("Namespace", BuiltInSystemTypes.String),
+            ("GenericParams", new ArrayType(typeInfo)),
+            ("BaseType", new NullableType(typeInfo)),
+            ("Interfaces", new ArrayType(typeInfo)),
+            ("GenericArity", BuiltInSystemTypes.UInt),
+            ("Fields", new ArrayType(fieldInfo)),
+            ("Functions", new ArrayType(functionInfo)),
+        })
+        {
+            var field = new FieldDeclaration(
+                name,
+                fieldType,
+                [MemberModifier.Public],
+                typeInfoDeclaration);
+            typeInfoDeclaration.MemberDeclarations.AddDeclaration(field);
+            _fields.Add(new FieldSymbol("cxcore", typeInfo, ClassType.Struct, field));
+        }
 
         var returnType = BuiltInSystemTypes.Object;
         var declaration = new FunctionDeclaration(
@@ -128,6 +173,90 @@ public sealed partial class SemanticBinder
             invokeParameters.Select(parameter => parameter.ParameterType).ToArray(),
             returnType,
             declaration: invokeDeclaration));
+    }
+
+    private void AddCoreFunctionInfoTypes()
+    {
+        var typeInfo = new NamedType("TypeInfo", []);
+        typeInfo.SetResolvedType(
+            new QualifiedIdentifier("System", "Reflection", "TypeInfo"),
+            "cxcore",
+            ClassType.Struct);
+        var functionParamInfo = new NamedType("FunctionParamInfo", []);
+        functionParamInfo.SetResolvedType(
+            new QualifiedIdentifier("System", "Reflection", "FunctionParamInfo"),
+            "cxcore",
+            ClassType.Struct);
+        var fieldInfo = new NamedType("FieldInfo", []);
+        fieldInfo.SetResolvedType(
+            new QualifiedIdentifier("System", "Reflection", "FieldInfo"),
+            "cxcore",
+            ClassType.Struct);
+
+        AddCoreReflectionStruct(
+            "FieldInfo",
+            [
+                ("Flags", BuiltInSystemTypes.UInt),
+                ("Offset", BuiltInSystemTypes.UInt),
+                ("Type", typeInfo),
+                ("Name", BuiltInSystemTypes.String),
+            ]);
+        AddCoreReflectionStruct(
+            "FunctionParamInfo",
+            [
+                ("Flags", BuiltInSystemTypes.UInt),
+                ("Type", typeInfo),
+                ("Name", BuiltInSystemTypes.String),
+                ("DefaultValue", BuiltInSystemTypes.Ptr),
+            ]);
+        AddCoreReflectionStruct(
+            "FunctionInfo",
+            [
+                ("Flags", BuiltInSystemTypes.UInt),
+                ("Offset", BuiltInSystemTypes.UInt),
+                ("ReturnType", typeInfo),
+                ("Name", BuiltInSystemTypes.String),
+                ("Params", new ArrayType(functionParamInfo)),
+            ]);
+    }
+
+    private void AddCoreReflectionStruct(
+        string name,
+        IReadOnlyList<(string Name, TypeBase Type)> fields)
+    {
+        var fullName = new QualifiedIdentifier("System", "Reflection", name);
+        if (FindCoreClass(fullName.ToString()) is not null)
+        {
+            return;
+        }
+
+        var scope = new DeclarationScope(
+            @namespace: new QualifiedIdentifier("System", "Reflection"));
+        var declaration = new ClassDeclaration(
+            [ClassModifier.Public],
+            partial: false,
+            ClassType.Struct,
+            customClassTypeName: null,
+            name,
+            genericTypeNames: [],
+            scope)
+        {
+            ProjectName = "cxcore",
+        };
+        var type = new NamedType(name, []);
+        type.SetResolvedType(fullName, "cxcore", ClassType.Struct);
+        _types.Add(new TypeSymbol("cxcore", declaration, type));
+
+        foreach (var (fieldName, fieldType) in fields)
+        {
+            var field = new FieldDeclaration(
+                fieldName,
+                fieldType,
+                [MemberModifier.Public],
+                declaration);
+            declaration.MemberDeclarations.AddDeclaration(field);
+            _fields.Add(new FieldSymbol("cxcore", type, ClassType.Struct, field));
+        }
     }
 
     private void AddCoreFunction(

@@ -1,0 +1,11 @@
+name: native_scalar
+version: 1.0.0
+type: Library
+native_libraries:
+  system:
+    provider: os
+    windows:
+      link_libraries: [kernel32]
+      headers: [windows.h]
+    linux:
+      headers: [unistd.h]

@@ -8,7 +8,7 @@
 // </auto-generated>
 //------------------------------------------------------------------------------
 
-// Generated from c:/workspace/cx-pl/cxc/src/Grammars/CxParser.g4 by ANTLR 4.13.1
+// Generated from CxParser.g4 by ANTLR 4.13.1
 
 // Unreachable code detected
 #pragma warning disable 0162
@@ -375,6 +375,12 @@ public interface ICxParserVisitor<Result> : IParseTreeVisitor<Result> {
 	/// <return>The visitor result.</return>
 	Result VisitExpressionStatement([NotNull] CxParser.ExpressionStatementContext context);
 	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.unsafeStatement"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitUnsafeStatement([NotNull] CxParser.UnsafeStatementContext context);
+	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.ifStatement"/>.
 	/// </summary>
 	/// <param name="context">The parse tree.</param>
@@ -657,6 +663,18 @@ public interface ICxParserVisitor<Result> : IParseTreeVisitor<Result> {
 	/// <return>The visitor result.</return>
 	Result VisitPrimaryExpressionStart([NotNull] CxParser.PrimaryExpressionStartContext context);
 	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.nativeTypeQuery"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitNativeTypeQuery([NotNull] CxParser.NativeTypeQueryContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.nativeStackAllocation"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitNativeStackAllocation([NotNull] CxParser.NativeStackAllocationContext context);
+	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.arrayCreationExpression"/>.
 	/// </summary>
 	/// <param name="context">The parse tree.</param>
@@ -734,6 +752,12 @@ public interface ICxParserVisitor<Result> : IParseTreeVisitor<Result> {
 	/// <param name="context">The parse tree.</param>
 	/// <return>The visitor result.</return>
 	Result VisitAnnotation([NotNull] CxParser.AnnotationContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.annotationArgument"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitAnnotationArgument([NotNull] CxParser.AnnotationArgumentContext context);
 	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.typeNameOrVoid"/>.
 	/// </summary>

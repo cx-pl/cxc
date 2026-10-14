@@ -1,0 +1,9 @@
+name: native_abi
+version: 1.0.0
+type: Executable
+native_libraries:
+  fixture:
+    windows:
+      headers: [native_fixture.h]
+    linux:
+      headers: [native_fixture.h]

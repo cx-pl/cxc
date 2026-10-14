@@ -9,10 +9,16 @@ internal static class FunctionParameterParser
     public static FunctionParameter Parse(CxParser.FunctionParameterContext context, TypeBase type)
     {
         var defaultIdentifier = context.qualifiedIdentifier();
+        var defaultText = context.sign is not null
+            ? context.sign.Text + (context.IntegerLiteral() ?? context.FloatingLiteral()).GetText()
+            : context.literal()?.GetText() ?? defaultIdentifier?.GetText();
         return new FunctionParameter(
             context.name.Text,
             type,
-            context.literal()?.GetText() ?? defaultIdentifier?.GetText(),
-            defaultIdentifier is not null).WithSourceSpan(context);
+            defaultText,
+            defaultIdentifier is not null)
+        {
+            Annotations = AnnotationParser.Parse(context.annotations()),
+        }.WithSourceSpan(context);
     }
 }

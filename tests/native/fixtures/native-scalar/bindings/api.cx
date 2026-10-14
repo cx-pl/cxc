@@ -1,0 +1,14 @@
+import System.Interop;
+namespace NativeScalar;
+
+#if WINDOWS
+@NativeFunction(callingConvention = NativeCallingConvention.Winapi)
+public delegate uint ProcessIdFunction();
+@NativeImport("system", entryPoint = "GetCurrentProcessId", callingConvention = NativeCallingConvention.Winapi)
+public extern uint ProcessId();
+#else
+@NativeFunction
+public delegate int ProcessIdFunction();
+@NativeImport("system", entryPoint = "getpid")
+public extern int ProcessId();
+#endif

@@ -17,7 +17,12 @@ public sealed partial class SemanticBinder
         }
         if (function.Body is null)
         {
-            if (function.MemberModifiers.Contains(MemberModifier.Extern))
+            if (function.ParentClassDeclaration?.ClassType == ClassType.Interface)
+            {
+                return;
+            }
+            if (function.MemberModifiers.Contains(MemberModifier.Extern) ||
+                function.MemberModifiers.Contains(MemberModifier.Abstract))
             {
                 return;
             }
@@ -32,6 +37,11 @@ public sealed partial class SemanticBinder
         }
         else if (!function.MemberModifiers.Contains(MemberModifier.Extern) &&
             IsGenericForwardCallReturnBody(function))
+        {
+            return;
+        }
+        else if (!function.MemberModifiers.Contains(MemberModifier.Extern) &&
+            IsGenericVoidForwardCallBody(function))
         {
             return;
         }
@@ -221,14 +231,13 @@ public sealed partial class SemanticBinder
 
     private static bool IsGenericForwardCallReturnBody(FunctionDeclaration function)
     {
+        var invocation = GetGenericForwardCallInvocation(function);
         if (function.ParentClassDeclaration is { } parent &&
                 (parent.ClassType is not (ClassType.Class or ClassType.Struct) ||
-                    parent.GenericTypeNames.Length != 0 ||
                     parent.IsStatic) ||
             function.LambdaOwner is not null ||
             function.IsExtension ||
-            function.GenericTypeNames.Length == 0 || function.Body is not
-            [ReturnStatement { Expression: InvocationExpression invocation }] ||
+            function.GenericTypeNames.Length == 0 || invocation is null ||
             invocation.Arguments.Count == 0 ||
             invocation.Arguments.Any(argument =>
                 !IsPotentialGenericForwardArgument(argument, function)) ||
@@ -238,13 +247,357 @@ public sealed partial class SemanticBinder
             return false;
         }
 
-        return invocation.Arguments.OfType<IdentifierExpression>()
-            .Select(argument => function.Parameters.SingleOrDefault(candidate =>
-                candidate.Name == argument.Identifier.ToString()))
-            .Any(parameter => parameter?.ParameterType is GenericType
+        return invocation.Arguments.OfType<IdentifierExpression>().Any(argument =>
+            function.Parameters.Any(parameter =>
+                parameter.Name == argument.Identifier.ToString() &&
+                parameter.ParameterType is GenericType parameterType &&
+                parameterType.Name == returnType.Name) ||
+            GetGenericForwardAliasTypeParameter(
+                function, argument.Identifier.ToString()) == returnType.Name);
+    }
+
+    private static InvocationExpression? GetGenericForwardCallInvocation(
+        FunctionDeclaration function)
+    {
+        if (function.Body is [ReturnStatement
+            { Expression: InvocationExpression returnedInvocation }])
+        {
+            return returnedInvocation;
+        }
+        if (function.Body is [ExpressionStatement
+            { Expression: InvocationExpression expressionInvocation }])
+        {
+            return expressionInvocation;
+        }
+        var aliasInvocation = function.Body switch
+        {
+            [LocalVariableDeclarationStatement,
+                ReturnStatement { Expression: InvocationExpression returnAliasInvocation }] =>
+                returnAliasInvocation,
+            [LocalVariableDeclarationStatement,
+                ExpressionStatement { Expression: InvocationExpression statementAliasInvocation }] =>
+                statementAliasInvocation,
+            _ => null,
+        };
+        if (aliasInvocation is not null &&
+            aliasInvocation.Arguments.OfType<IdentifierExpression>().Any(argument =>
+                GetGenericForwardAliasTypeParameter(
+                    function, argument.Identifier.ToString()) is not null))
+        {
+            return aliasInvocation;
+        }
+        if (function.Body is
+                [LocalVariableDeclarationStatement,
+                    ReturnStatement { Expression: ConditionalExpression conditional }])
+        {
+            if (conditional.WhenTrue is InvocationExpression whenTrue &&
+                conditional.WhenFalse is IdentifierExpression falseFallback &&
+                GetGenericForwardAliasTypeParameter(
+                    function, falseFallback.Identifier.ToString()) is not null &&
+                whenTrue.Arguments.OfType<IdentifierExpression>().Any(argument =>
+                    GetGenericForwardAliasTypeParameter(
+                        function, argument.Identifier.ToString()) is not null))
             {
-                Name: var parameterTypeName,
-            } && parameterTypeName == returnType.Name);
+                return whenTrue;
+            }
+            if (conditional.WhenFalse is InvocationExpression whenFalse &&
+                conditional.WhenTrue is IdentifierExpression trueFallback &&
+                GetGenericForwardAliasTypeParameter(
+                    function, trueFallback.Identifier.ToString()) is not null &&
+                whenFalse.Arguments.OfType<IdentifierExpression>().Any(argument =>
+                    GetGenericForwardAliasTypeParameter(
+                        function, argument.Identifier.ToString()) is not null))
+            {
+                return whenFalse;
+            }
+        }
+        if (function.Body is
+            [LocalVariableDeclarationStatement local,
+                ReturnStatement { Expression: IdentifierExpression returned }] &&
+            local.Declarators is [var declarator] &&
+            declarator.Name == returned.Identifier.ToString() &&
+            declarator.Initializer is InvocationExpression invocation &&
+            (IsDirectGenericIdentityType(function.ReturnType,
+                declarator.Type ?? local.DeclaredType) ||
+                local.DeclaredType is AutoType &&
+                function.ReturnType is GenericType returnType &&
+                function.GenericTypeNames.Contains(
+                    returnType.Name, StringComparer.Ordinal)))
+        {
+            return invocation;
+        }
+        if (function.Body is [ReturnStatement
+            { Expression: ConditionalExpression simpleConditional }])
+        {
+            static bool IsMatchingReturnParameter(
+                FunctionDeclaration declaration,
+                ExpressionBase expression) =>
+                expression is IdentifierExpression identifier &&
+                declaration.Parameters.Any(parameter =>
+                    parameter.Name == identifier.Identifier.ToString() &&
+                    IsDirectGenericIdentityType(
+                        declaration.ReturnType, parameter.ParameterType));
+
+            if (simpleConditional.WhenTrue is InvocationExpression whenTrue &&
+                IsMatchingReturnParameter(function, simpleConditional.WhenFalse))
+            {
+                return whenTrue;
+            }
+            if (simpleConditional.WhenFalse is InvocationExpression whenFalse &&
+                IsMatchingReturnParameter(function, simpleConditional.WhenTrue))
+            {
+                return whenFalse;
+            }
+        }
+        return GetGenericForwardStatementCallInvocation(function);
+    }
+
+    private static InvocationExpression? GetGenericForwardStatementCallInvocation(
+        FunctionDeclaration function)
+    {
+        if (function.Body is not { } body)
+        {
+            return null;
+        }
+
+        var booleanLocals = new HashSet<string>(StringComparer.Ordinal);
+        var flowStart = 0;
+        var aliases = new Dictionary<string, string>(StringComparer.Ordinal);
+        while (flowStart < body.Count &&
+            body[flowStart] is LocalVariableDeclarationStatement local)
+        {
+            var isInferredBooleanLocal = local.DeclaredType is AutoType &&
+                local.Declarators.Count > 0 && local.Declarators.All(declarator =>
+                    declarator.Initializer is { } initializer &&
+                    IsBooleanExpression(initializer, function, booleanLocals));
+            if (local.DeclaredType is BoolType || isInferredBooleanLocal)
+            {
+                if (local.Declarators.Count == 0)
+                {
+                    return null;
+                }
+                foreach (var declarator in local.Declarators)
+                {
+                    if (declarator.Initializer is not { } initializer ||
+                        !IsBooleanExpression(initializer, function, booleanLocals) ||
+                        !booleanLocals.Add(declarator.Name))
+                    {
+                        return null;
+                    }
+                }
+            }
+            else if (local.Declarators is [var aliasDeclarator] &&
+                GetGenericForwardAliasSourceTypeParameter(
+                    function, aliasDeclarator.Name) is { } aliasTypeParameter &&
+                function.ReturnType is GenericType returnType &&
+                aliasTypeParameter == returnType.Name)
+            {
+                aliases.Add(aliasDeclarator.Name, aliasTypeParameter);
+            }
+            else
+            {
+                return null;
+            }
+            flowStart++;
+        }
+
+        var flow = body.Skip(flowStart).ToArray();
+        if (flow is [IfStatement statementIf,
+            ReturnStatement { Expression: IdentifierExpression fallback }] &&
+            statementIf.ElseStatement is null &&
+            IsBooleanExpression(statementIf.Condition, function, booleanLocals) &&
+            GetSingleForwardReturnStatement(statementIf.ThenStatement) is
+                { Expression: InvocationExpression thenInvocation } &&
+            (IsMatchingForwardReturnParameter(function, fallback) ||
+                IsMatchingForwardReturnAlias(function, fallback, aliases)))
+        {
+            return thenInvocation;
+        }
+        if (flow is [IfStatement statementIfElse] &&
+            IsBooleanExpression(statementIfElse.Condition, function, booleanLocals) &&
+            GetSingleForwardReturnStatement(statementIfElse.ElseStatement) is
+            { Expression: IdentifierExpression elseFallback } &&
+            GetSingleForwardReturnStatement(statementIfElse.ThenStatement) is
+            { Expression: InvocationExpression ifElseThenInvocation } &&
+            (IsMatchingForwardReturnParameter(function, elseFallback) ||
+                IsMatchingForwardReturnAlias(function, elseFallback, aliases)))
+        {
+            return ifElseThenInvocation;
+        }
+        if (flow is [IfStatement reverseStatementIf] &&
+            IsBooleanExpression(reverseStatementIf.Condition, function, booleanLocals) &&
+            GetSingleForwardReturnStatement(reverseStatementIf.ThenStatement) is
+            { Expression: IdentifierExpression thenFallback } &&
+            GetSingleForwardReturnStatement(reverseStatementIf.ElseStatement) is
+            { Expression: InvocationExpression elseInvocation } &&
+            (IsMatchingForwardReturnParameter(function, thenFallback) ||
+                IsMatchingForwardReturnAlias(function, thenFallback, aliases)))
+        {
+            return elseInvocation;
+        }
+        return null;
+    }
+
+    private static bool IsMatchingForwardReturnAlias(
+        FunctionDeclaration function,
+        IdentifierExpression identifier,
+        IReadOnlyDictionary<string, string> aliases) =>
+        aliases.TryGetValue(identifier.Identifier.ToString(), out var aliasTypeParameter) &&
+        function.ReturnType is GenericType returnType &&
+        returnType.Name == aliasTypeParameter;
+
+    private static ReturnStatement? GetSingleForwardReturnStatement(
+        StatementBase? statement) => statement switch
+    {
+        ReturnStatement returnStatement => returnStatement,
+        BlockStatement { Statements: [ReturnStatement returnStatement] } => returnStatement,
+        _ => null,
+    };
+
+    private static bool IsMatchingForwardReturnParameter(
+        FunctionDeclaration function,
+        IdentifierExpression identifier) =>
+        function.ReturnType is GenericType returnType &&
+        function.Parameters.Any(parameter =>
+            parameter.Name == identifier.Identifier.ToString() &&
+            parameter.ParameterType is GenericType parameterType &&
+            parameterType.Name == returnType.Name);
+
+    private static bool IsGenericVoidForwardCallBody(FunctionDeclaration function)
+    {
+        if (function.ReturnType is not VoidType ||
+            function.ParentClassDeclaration is { } parent &&
+                (parent.ClassType is not (ClassType.Class or ClassType.Struct) ||
+                    parent.IsStatic) ||
+            function.LambdaOwner is not null || function.IsExtension ||
+            function.GenericTypeNames.Length == 0)
+        {
+            return false;
+        }
+
+        var invocation = function.Body switch
+        {
+            [ExpressionStatement { Expression: InvocationExpression directInvocation }] =>
+                directInvocation,
+            [LocalVariableDeclarationStatement,
+                ExpressionStatement { Expression: InvocationExpression aliasInvocation }] =>
+                aliasInvocation.Arguments.OfType<IdentifierExpression>().Any(argument =>
+                    GetGenericForwardAliasTypeParameter(
+                        function, argument.Identifier.ToString()) is not null)
+                    ? aliasInvocation
+                    : null,
+            _ => null,
+        };
+        if (invocation is null ||
+            invocation.Arguments.Count == 0 ||
+            invocation.Arguments.Any(argument =>
+                !IsPotentialGenericForwardArgument(argument, function)))
+        {
+            return false;
+        }
+
+        return invocation.Arguments.OfType<IdentifierExpression>().Any(argument =>
+            function.Parameters.SingleOrDefault(candidate =>
+                candidate.Name == argument.Identifier.ToString())?.ParameterType is
+                GenericType genericParameter &&
+                function.GenericTypeNames.Contains(
+                    genericParameter.Name, StringComparer.Ordinal) ||
+            GetGenericForwardAliasTypeParameter(
+                function, argument.Identifier.ToString()) is { } aliasTypeParameter &&
+                function.GenericTypeNames.Contains(
+                    aliasTypeParameter, StringComparer.Ordinal));
+    }
+
+    private static string? GetGenericForwardAliasTypeParameter(
+        FunctionDeclaration function,
+        string aliasName)
+    {
+        var sourceTypeParameter = GetGenericForwardAliasSourceTypeParameter(
+            function, aliasName);
+        if (sourceTypeParameter is null)
+        {
+            return null;
+        }
+
+        if (function.Body is { Count: 2 } body)
+        {
+            var terminal = body[1];
+            var (invocation, fallback) = terminal switch
+            {
+                ReturnStatement { Expression: InvocationExpression directInvocation } =>
+                    (directInvocation, (ExpressionBase?)null),
+                ExpressionStatement { Expression: InvocationExpression voidInvocation } =>
+                    (voidInvocation, null),
+                ReturnStatement { Expression: ConditionalExpression trueConditional }
+                    when trueConditional.WhenTrue is InvocationExpression trueInvocation =>
+                    (trueInvocation, trueConditional.WhenFalse),
+                ReturnStatement { Expression: ConditionalExpression falseConditional }
+                    when falseConditional.WhenFalse is InvocationExpression falseInvocation =>
+                    (falseInvocation, falseConditional.WhenTrue),
+                _ => (null, null),
+            };
+            if (invocation is not null &&
+                invocation.Arguments.OfType<IdentifierExpression>().Any(argument =>
+                    argument.Identifier.ToString() == aliasName) &&
+                (fallback is null || fallback is IdentifierExpression fallbackIdentifier &&
+                    (fallbackIdentifier.Identifier.ToString() == aliasName ||
+                        function.Parameters.Any(parameter =>
+                            parameter.Name == fallbackIdentifier.Identifier.ToString() &&
+                            parameter.ParameterType is GenericType fallbackType &&
+                            fallbackType.Name == sourceTypeParameter) ||
+                        GetGenericForwardAliasSourceTypeParameter(
+                            function, fallbackIdentifier.Identifier.ToString()) ==
+                            sourceTypeParameter)))
+            {
+                return sourceTypeParameter;
+            }
+        }
+
+        var statementInvocation = GetGenericForwardStatementCallInvocation(function);
+        if (statementInvocation is not null &&
+            statementInvocation.Arguments.OfType<IdentifierExpression>().Any(argument =>
+                argument.Identifier.ToString() == aliasName))
+        {
+            return sourceTypeParameter;
+        }
+        return null;
+    }
+
+    private static string? GetGenericForwardAliasSourceTypeParameter(
+        FunctionDeclaration function,
+        string aliasName)
+    {
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var localTypes = new List<TypeBase>();
+        var currentName = aliasName;
+        while (visited.Add(currentName))
+        {
+            var matchingLocals = function.Body?
+                .OfType<LocalVariableDeclarationStatement>()
+                .Where(local => local.Declarators is [var declarator] &&
+                    declarator.Name == currentName)
+                .ToArray();
+            if (matchingLocals is not [var local] ||
+                local.Declarators is not [var declarator] ||
+                declarator.Initializer is not IdentifierExpression source)
+            {
+                return null;
+            }
+            localTypes.Add(local.DeclaredType);
+
+            var sourceName = source.Identifier.ToString();
+            if (function.Parameters.SingleOrDefault(parameter =>
+                    parameter.Name == sourceName)?.ParameterType is GenericType parameterType)
+            {
+                return localTypes.All(localType =>
+                    localType is AutoType ||
+                    IsDirectGenericIdentityType(localType, parameterType))
+                    ? parameterType.Name
+                    : null;
+            }
+            currentName = sourceName;
+        }
+        return null;
     }
 
     private static bool IsPotentialGenericForwardArgument(
@@ -252,7 +605,9 @@ public sealed partial class SemanticBinder
         FunctionDeclaration function) => expression switch
     {
         IdentifierExpression identifier => function.Parameters.Any(parameter =>
-            parameter.Name == identifier.Identifier.ToString()),
+            parameter.Name == identifier.Identifier.ToString()) ||
+            GetGenericForwardAliasTypeParameter(
+                function, identifier.Identifier.ToString()) is not null,
         LiteralExpression { SourceText: not "default" } => true,
         UnaryExpression unary when !unary.Postfix && unary.Operator is not ("++" or "--") =>
             IsPotentialGenericForwardArgument(unary.Operand, function),
@@ -302,10 +657,13 @@ public sealed partial class SemanticBinder
         ExpressionBase expression,
         FunctionDeclaration function) =>
         expression is IdentifierExpression identifier &&
-        function.Parameters.SingleOrDefault(parameter =>
+        (function.Parameters.SingleOrDefault(parameter =>
             parameter.Name == identifier.Identifier.ToString())?.ParameterType is
             GenericType genericParameter &&
-        function.GenericTypeNames.Contains(genericParameter.Name, StringComparer.Ordinal) ||
+            function.GenericTypeNames.Contains(genericParameter.Name, StringComparer.Ordinal) ||
+            GetGenericForwardAliasTypeParameter(
+                function, identifier.Identifier.ToString()) is { } aliasTypeParameter &&
+            function.GenericTypeNames.Contains(aliasTypeParameter, StringComparer.Ordinal)) ||
         IsSupportedClosedGenericForwardArgument(expression, function);
 
     private static bool IsGenericNullCoalescingReturnBody(FunctionDeclaration function)
@@ -603,14 +961,22 @@ public sealed partial class SemanticBinder
                 MemberName: "Length",
             } && IsGenericArrayLengthExpression(target, function);
 
-        bool IsUnsignedOperand(ExpressionBase candidate) =>
-            candidate is LiteralExpression literal &&
-                (literal.SourceText.EndsWith('u') ||
-                 uint.TryParse(literal.SourceText, out _)) ||
-            candidate is IdentifierExpression identifier &&
-                function.Parameters.Any(parameter =>
-                    parameter.Name == identifier.Identifier.ToString() &&
-                    parameter.ParameterType is UIntType);
+        bool IsUnsignedOperand(ExpressionBase candidate) => candidate switch
+        {
+            LiteralExpression literal =>
+                literal.SourceText.EndsWith('u') ||
+                uint.TryParse(literal.SourceText, out _),
+            IdentifierExpression identifier => function.Parameters.Any(parameter =>
+                parameter.Name == identifier.Identifier.ToString() &&
+                parameter.ParameterType is UIntType),
+            BinaryExpression
+            {
+                Operator: "+" or "-" or "*" or "/" or "%",
+                OperatorSymbol: null,
+            } arithmetic => IsUnsignedOperand(arithmetic.Left) &&
+                IsUnsignedOperand(arithmetic.Right),
+            _ => false,
+        };
 
         bool IsGenericArrayLengthComparison(ExpressionBase candidate) =>
             candidate is BinaryExpression
@@ -621,7 +987,13 @@ public sealed partial class SemanticBinder
             (IsGenericArrayLength(comparison.Left) &&
                 IsUnsignedOperand(comparison.Right) ||
              IsUnsignedOperand(comparison.Left) &&
-                IsGenericArrayLength(comparison.Right));
+                IsGenericArrayLength(comparison.Right) ||
+             IsGenericArrayLength(comparison.Left) &&
+                IsGenericArrayLength(comparison.Right) &&
+                IsMatchingGenericArrayLengthPair(
+                    ((MemberAccessExpression)comparison.Left).Target!,
+                    ((MemberAccessExpression)comparison.Right).Target!,
+                    function));
 
         bool IsSupportedBooleanExpression(ExpressionBase candidate) => candidate switch
         {
@@ -1268,7 +1640,8 @@ public sealed partial class SemanticBinder
         var flowStart = 0;
         while (flowStart < body.Count && body[flowStart] is LocalVariableDeclarationStatement local)
         {
-            if (local.DeclaredType is not BoolType || local.Declarators.Count == 0)
+            if (local.DeclaredType is not (BoolType or AutoType) ||
+                local.Declarators.Count == 0)
             {
                 return false;
             }

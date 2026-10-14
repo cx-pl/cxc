@@ -23,6 +23,8 @@ public class FieldsDeclarationParserVisitor : CxParserBaseVisitor<FieldDeclarati
         _memberModifiers = new MemberModifiersParserVisitor().Visit(context.memberModifiers());
         _fieldType = new TypeNameContextVisitor().Visit(context.typeName());
         base.VisitChildren(context);
+        foreach (var field in _fieldDeclarations)
+            field.Annotations = AnnotationParser.Parse(context.annotations());
         return _fieldDeclarations.ToArray();
     }
 

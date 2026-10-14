@@ -35,6 +35,9 @@ public sealed class StatementParserVisitor : CxParserBaseVisitor<StatementBase>
         return new ExpressionStatement(expression).WithSourceSpan(context);
     }
 
+    public override StatementBase VisitUnsafeStatement([NotNull] CxParser.UnsafeStatementContext context) =>
+        new BlockStatement(ParseStatements(context.statements(), _namespace), isUnsafe: true).WithSourceSpan(context);
+
     public override StatementBase VisitReturnStatement([NotNull] CxParser.ReturnStatementContext context)
     {
         var expression = context.expression() is { } expressionContext

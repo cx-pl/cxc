@@ -25,6 +25,7 @@ public class ConstructorDeclarationParserVisitor : CxParserBaseVisitor<Construct
             _namespace,
             memberModifiers,
             _parentClassDeclaration).WithSourceSpan(context);
+        _constructorDeclaration.Annotations = AnnotationParser.Parse(context.annotations());
 
         base.VisitChildren(context);
 

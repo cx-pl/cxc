@@ -201,11 +201,14 @@ public sealed partial class SemanticBinder
                 }
 
                 var potentialPrimaries = _symbols
-                    .Where(symbol => symbol.ModuleName == moduleName &&
-                        symbol.Declaration is
-                        {
-                            GenericTypeNames.Length: > 0,
-                        } primaryDeclaration &&
+                    .Where(symbol => symbol.Declaration is
+                        { GenericTypeNames.Length: > 0 } primaryDeclaration &&
+                        (symbol.ModuleName == moduleName ||
+                         !context.IsProjectReference &&
+                         specialization.ParentClassDeclaration is null &&
+                         primaryDeclaration.ParentClassDeclaration is null &&
+                         IsReferencedModule(symbol.ModuleName) &&
+                         IsPublicApiFunction(primaryDeclaration)) &&
                         SameGenericSpecializationOwner(
                             primaryDeclaration.ParentClassDeclaration,
                             specialization.ParentClassDeclaration) &&
@@ -252,12 +255,11 @@ public sealed partial class SemanticBinder
 
                 var (primarySymbol, closedParameters, closedReturnType) = exactPrimaries[0];
                 var primaryDeclaration = primarySymbol.Declaration!;
-                if (primaryDeclaration.MemberModifiers.Any(modifier =>
-                    modifier is MemberModifier.Virtual or MemberModifier.Override or
-                        MemberModifier.Abstract))
+                if (primaryDeclaration.MemberModifiers.Contains(MemberModifier.Abstract))
                 {
                     throw new CompilationErrorException(
-                        "Generic specializations of virtual, override, or abstract methods are not supported.",
+                        "A generic specialization cannot provide an implementation for an " +
+                        "abstract generic method.",
                         specialization.SourceSpan);
                 }
                 if (!primaryDeclaration.MemberModifiers.SequenceEqual(specialization.MemberModifiers) ||
@@ -301,14 +303,15 @@ public sealed partial class SemanticBinder
                     continue;
                 }
 
-                var identity = GenericTypeIdentity.CreateFunction(
+                var specializationIdentity = GenericTypeIdentity.CreateFunction(
                     moduleName,
                     primaryDeclaration.FullName.ToString() +
                         (primaryDeclaration.IsStatic ? string.Empty : "#instance"),
                     specialization.SpecializationTypeArguments,
                     closedParameters,
-                    closedReturnType).CanonicalName;
-                if (!_genericFunctionSpecializations.TryAdd(identity, specialization))
+                    closedReturnType);
+                if (!_genericFunctionSpecializations.TryAdd(
+                    specializationIdentity.CanonicalName, specialization))
                 {
                     throw new CompilationErrorException(
                         $"Duplicate generic function specialization for '{primaryDeclaration.FullName}'.",
@@ -323,7 +326,7 @@ public sealed partial class SemanticBinder
                         primaryInstance.ReturnType,
                         primaryInstance.OverloadIndex,
                         primaryInstance.Declaration,
-                        primaryInstance.SpecializationName,
+                        specializationIdentity.CIdentifier,
                         primaryInstance.ClosedContainingType,
                         primaryInstance.ConceptOperatorBindings,
                         primaryInstance.GenericTypeArguments,
@@ -380,6 +383,9 @@ public sealed partial class SemanticBinder
 
         var typeArguments = declaration.GenericTypeNames
             .Select(name => symbol.GenericTypeArguments[name]).ToArray();
+        var primaryModule = _symbols.FirstOrDefault(candidate =>
+            ReferenceEquals(candidate.Declaration, declaration))?.ModuleName ??
+            symbol.ModuleName;
         if (symbol.ClosedContainingType?.ConstructedIdentity is not null &&
             declaration.ParentClassDeclaration is
                 { GenericTypeNames.Length: > 0 } &&
@@ -399,6 +405,44 @@ public sealed partial class SemanticBinder
                 symbol.ConceptOperatorBindings,
                 symbol.GenericTypeArguments,
                 templateImplementation);
+        }
+
+        var projectIdentity = GenericTypeIdentity.CreateFunction(
+            _project!.Name,
+            symbol.FullName.ToString() +
+                (declaration.IsStatic ? string.Empty : "#instance") +
+                (symbol.ClosedContainingType?.ConstructedIdentity is { } projectOwnerIdentity
+                    ? $"@{projectOwnerIdentity.CanonicalName}"
+                    : string.Empty),
+            typeArguments,
+            symbol.ParameterTypes,
+            symbol.ReturnType);
+        var primaryIdentity = GenericTypeIdentity.CreateFunction(
+            primaryModule,
+            symbol.FullName.ToString() +
+                (declaration.IsStatic ? string.Empty : "#instance") +
+                (symbol.ClosedContainingType?.ConstructedIdentity is { } ownerIdentity
+                    ? $"@{ownerIdentity.CanonicalName}"
+                    : string.Empty),
+            typeArguments,
+            symbol.ParameterTypes,
+            symbol.ReturnType);
+        if (projectIdentity.CanonicalName != primaryIdentity.CanonicalName &&
+            _genericFunctionSpecializations.TryGetValue(
+                projectIdentity.CanonicalName, out var projectImplementation))
+        {
+            return new FunctionSymbol(
+                _project.Name,
+                symbol.FullName,
+                symbol.ParameterTypes,
+                symbol.ReturnType,
+                symbol.OverloadIndex,
+                symbol.Declaration,
+                projectIdentity.CIdentifier,
+                symbol.ClosedContainingType,
+                symbol.ConceptOperatorBindings,
+                symbol.GenericTypeArguments,
+                projectImplementation);
         }
 
         var identity = GenericTypeIdentity.CreateFunction(

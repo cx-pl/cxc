@@ -65,6 +65,7 @@ public class FunctionDeclarationParserVisitor : CxParserBaseVisitor<FunctionDecl
             conceptConstraints,
             [],
             unclassifiedGenericTypeArguments).WithSourceSpan(context);
+        _functionDeclaration.Annotations = AnnotationParser.Parse(context.annotations());
 
         foreach (var parameter in EnumerateFunctionParameters(context.functionParameters()))
         {

@@ -8,6 +8,31 @@ namespace CxCompiler.Tests;
 public sealed class CCodeOutputGeneratorTests
 {
     [Fact]
+    public void EmitsGenericVirtualSlotsWithoutTypedFunctionPointers()
+    {
+        var generatedSource = GenerateSource("""
+            public class Base {
+                public virtual T Echo<T>(T value) { return value; }
+            }
+            public class Derived : Base {
+                public override U Echo<U>(U value) { return value; }
+            }
+            public int Run() {
+                Base value = new Derived();
+                return value.Echo(42);
+            }
+            """);
+
+        Assert.Contains("cx_register_generic_virtual_method", generatedSource);
+        Assert.Contains("cx_require_generic_virtual_method", generatedSource);
+        Assert.Contains("__cx_generic_virtual_thunk_", generatedSource);
+        Assert.Contains("CX_BEGIN_VTABLE_DEF(", generatedSource);
+        Assert.True(generatedSource.Split(
+            "{ .function = (cx_vtable_function)0 },",
+            StringSplitOptions.None).Length >= 3);
+    }
+
+    [Fact]
     public void EmitsHelloWorldFunctionBody()
     {
         const string source = """
@@ -49,7 +74,9 @@ public sealed class CCodeOutputGeneratorTests
         Assert.Contains("CX_ID_5(cxcore, System, String, __constructor, _2)", generatedSource);
         Assert.Contains("CX_ID_6(cxcore, System, Collections, Array, Length, __const_get)(args)", generatedSource);
         Assert.Contains("CX_ID_2(unnamed, Main)(__cx_arguments)", generatedSource);
-        Assert.Contains("return (int)CX_ID_2(unnamed, Main)(__cx_arguments);", generatedSource);
+        Assert.Contains("int __cx_exit_code = (int)CX_ID_2(unnamed, Main)(__cx_arguments);", generatedSource);
+        Assert.Contains("cx_thread_wait_all();", generatedSource);
+        Assert.Contains("return __cx_exit_code;", generatedSource);
     }
 
     [Fact]
@@ -170,6 +197,120 @@ public sealed class CCodeOutputGeneratorTests
 
         Assert.Contains("__cx_delegate_get_invocation_list_CX_FN_", generatedSource);
         Assert.Contains("cx_array_at", generatedSource);
+    }
+
+    [Fact]
+    public void EmitsTypedInvocationListForAnonymousFunctionValues()
+    {
+        var generatedSource = GenerateSource("""
+            int Main() {
+                delegate(int) => int first = value => 11;
+                delegate(int) => int second = value => 12;
+                first += second;
+                var handlers = first.GetInvocationList();
+                delegate(int) => int empty = default;
+                var emptyHandlers = empty.GetInvocationList();
+                return handlers.Length == 2u &&
+                    handlers[0](10) == 11 && handlers[1](10) == 12 &&
+                    emptyHandlers.Length == 0u ? 0 : 1;
+            }
+            """);
+
+        Assert.Contains("__cx_delegate_get_invocation_list_CX_FN_", generatedSource);
+        Assert.Contains("cx_array_at", generatedSource);
+    }
+
+    [Fact]
+    public void EmitsTypedInvocationListsForStaticAndInstanceMethodValues()
+    {
+        var generatedSource = GenerateSource("""
+            public delegate int Transform(int value);
+            public int AddOne(int value) { return value + 1; }
+            public class Counter {
+                public int AddTwo(int value) { return value + 2; }
+            }
+
+            int Main() {
+                Counter counter = new Counter();
+                Transform staticMethod = AddOne;
+                Transform instanceMethod = counter.AddTwo;
+                FunctionInfo topLevelInfo = staticMethod.Method;
+                FunctionInfo methodInfo = instanceMethod.Method;
+                int offset = 3;
+                Transform closure = value => value + offset;
+                FunctionInfo closureInfo = closure.Method;
+                Transform[] staticList = staticMethod.GetInvocationList();
+                Transform[] instanceList = instanceMethod.GetInvocationList();
+                return staticList.Length == 1u && instanceList.Length == 1u &&
+                    staticList[0](40) == 41 && instanceList[0](40) == 42 &&
+                    staticMethod.Target == null && instanceMethod.Target == (object)counter &&
+                    closure.Target != null ? 0 : 1;
+            }
+            """);
+
+        Assert.Equal(3, generatedSource.Split(
+            "__cx_delegate_get_invocation_list_CX_FN_", StringSplitOptions.None).Length - 1);
+        Assert.Contains("__cx_delegate_invoke_CX_FN_", generatedSource);
+        Assert.Contains(".__target = (cx_ptr)__cx_method_value_", generatedSource);
+        Assert.Contains(".__target = CX_NULL", generatedSource);
+        Assert.Contains("__cx_delegate_get_target_CX_FN_", generatedSource);
+        Assert.Contains(".__method = __cx_function_reflection_", generatedSource);
+        Assert.Contains("static struct cx_reflection_function __cx_function_reflection_", generatedSource);
+        Assert.Contains(".__method = __cx_function_reflection_", generatedSource);
+        Assert.Contains("_get()", generatedSource);
+        Assert.Contains("cx_reflection_get_function_info", generatedSource);
+    }
+
+    [Fact]
+    public void EmitsDynamicInvokeForBoxedArgumentsAndVoidDelegates()
+    {
+        var generatedSource = GenerateSource("""
+            public delegate int Transform(int value);
+            public delegate void Setter(int value);
+            public class Target {
+                public int Value;
+                public void SetValue(int value) { Value = value; }
+            }
+
+            int Main() {
+                Transform transform = value => value + 2;
+                object[] arguments = new object[1];
+                arguments[0] = 40;
+                object result = transform.DynamicInvoke(arguments);
+                Target target = new Target();
+                Setter setter = target.SetValue;
+                object[] setterArguments = new object[1];
+                setterArguments[0] = 41;
+                object voidResult = setter.DynamicInvoke(setterArguments);
+                object[] wrongArguments = new object[1];
+                wrongArguments[0] = "wrong type";
+                return (int)result == 42 && voidResult == null &&
+                    setter.DynamicInvoke(wrongArguments) == null && target.Value == 41 ? 0 : 1;
+            }
+            """);
+
+        Assert.Contains("__cx_delegate_dynamic_invoke_CX_FN_", generatedSource);
+        Assert.Contains("cx_unbox_value", generatedSource);
+        Assert.Contains("cx_box_value", generatedSource);
+        Assert.Contains("cx_boxed_value_type", generatedSource);
+    }
+
+    [Fact]
+    public void EmitsTypedNullForAnonymousFunctionValueStorage()
+    {
+        var generatedSource = GenerateSource("""
+            delegate int Transform(int value);
+
+            int Main() {
+                delegate(int) => int empty = null;
+                empty = null;
+                Transform namedEmpty = null;
+                return empty.GetInvocationList().Length == 0u &&
+                    namedEmpty.GetInvocationList().Length == 0u ? 0 : 1;
+            }
+            """);
+
+        Assert.Equal(2, generatedSource.Split(" = (CX_FN_", StringSplitOptions.None).Length - 1);
     }
 
     [Fact]

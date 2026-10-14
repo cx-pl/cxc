@@ -87,6 +87,39 @@ public sealed class ForeachTests
     }
 
     [Fact]
+    public void BindsAndEmitsStringForeachUsingUnicodeScalarAccessors()
+    {
+        var project = CreateProject("""
+            public int Sum(string text) {
+                int sum = 0;
+                foreach (var scalar in text) { sum += scalar; }
+                return sum;
+            }
+            """);
+        new SemanticBinder().Bind(project);
+
+        var function = project.CompilationContexts.Single().DeclarationScope.Declarations
+            .OfType<FunctionDeclaration>().Single();
+        var foreachStatement = Assert.IsType<ForeachStatement>(function.Body![1]);
+        Assert.Same(BuiltInSystemTypes.Char, foreachStatement.VariableType);
+        Assert.True(foreachStatement.IsStringIteration);
+        Assert.Null(foreachStatement.EnumeratorSymbol);
+
+        var (_, source) = GenerateOutput(project);
+        Assert.Contains("CX_ID_5(cxcore, System, String, Length, __const_get)", source);
+        Assert.Contains("CX_ID_5(cxcore, System, String, Item, __const_get)", source);
+
+        var invalidProject = CreateProject("""
+            void Visit(string text) {
+                foreach (int scalar in text) { }
+            }
+            """);
+        var exception = Assert.Throws<CompilationErrorException>(
+            () => new SemanticBinder().Bind(invalidProject));
+        Assert.Contains("Cannot iterate string characters", exception.Message);
+    }
+
+    [Fact]
     public void BindsAndEmitsEnumeratorPatternForeach()
     {
         var project = CreateProject("""

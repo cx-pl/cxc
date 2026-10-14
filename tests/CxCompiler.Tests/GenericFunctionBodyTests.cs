@@ -19,6 +19,228 @@ public sealed class GenericFunctionBodyTests
         """;
 
     [Fact]
+    public void ForwardsGenericCallThroughMatchingLocal()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_forward_call_local");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public T Transform<T>(T value) { return value; }
+            public int Transform<int>(int value) { return value + 1; }
+            public T Forward<T>(T value) {
+                T result = Transform(value);
+                return result;
+            }
+            public T ForwardInferred<T>(T value) {
+                var result = Transform(value);
+                return result;
+            }
+            public int Run() {
+                return Forward(41) + (Forward(7L) == 7L ? 1 : 0) +
+                    ForwardInferred(40) +
+                    (ForwardInferred(8L) == 8L ? 1 : 0);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var forward = project.CompilationContexts.Single()
+            .DeclarationScope.Declarations.OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Forward");
+        var local = Assert.IsType<LocalVariableDeclarationStatement>(forward.Body![0]);
+        var forwardedCall = Assert.IsType<InvocationExpression>(
+            local.Declarators.Single().Initializer);
+        var callers = project.GenericFunctionInstances
+            .Where(instance => instance.Declaration?.Name == "Forward")
+            .ToArray();
+        Assert.Equal(2, callers.Length);
+        Assert.Contains(callers, caller =>
+            forwardedCall.GetClosedGenericTarget(caller.SpecializationName!)?
+                .ImplementationDeclaration?.IsGenericSpecialization == true);
+        Assert.Contains(callers, caller =>
+            forwardedCall.GetClosedGenericTarget(caller.SpecializationName!)?
+                .ImplementationDeclaration is null);
+        var inferredForward = project.CompilationContexts.Single()
+            .DeclarationScope.Declarations.OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "ForwardInferred");
+        var inferredLocal = Assert.IsType<LocalVariableDeclarationStatement>(
+            inferredForward.Body![0]);
+        Assert.IsType<AutoType>(inferredLocal.DeclaredType);
+        var inferredCall = Assert.IsType<InvocationExpression>(
+            inferredLocal.Declarators.Single().Initializer);
+        var inferredCallers = project.GenericFunctionInstances
+            .Where(instance => instance.Declaration?.Name == "ForwardInferred")
+            .ToArray();
+        Assert.True(inferredCallers.Length == 2,
+            string.Join("\n", project.GenericFunctionInstances.Select(instance =>
+                $"{instance.Declaration?.Name}: {instance.SpecializationName}")));
+        Assert.Contains(inferredCallers, caller =>
+            inferredCall.GetClosedGenericTarget(caller.SpecializationName!)?
+                .ImplementationDeclaration?.IsGenericSpecialization == true);
+        Assert.Contains(inferredCallers, caller =>
+            inferredCall.GetClosedGenericTarget(caller.SpecializationName!)?
+                .ImplementationDeclaration is null);
+
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-forward-call-local-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project,
+                Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(directory,
+                "generic_forward_call_local.c"));
+            Assert.DoesNotContain("_unknowntype_", source);
+            foreach (var caller in callers)
+            {
+                var target = forwardedCall.GetClosedGenericTarget(
+                    caller.SpecializationName!)!;
+                Assert.Contains($"{target.SpecializationName}(", source);
+            }
+            foreach (var caller in inferredCallers)
+            {
+                var target = inferredCall.GetClosedGenericTarget(
+                    caller.SpecializationName!)!;
+                Assert.Contains($"{target.SpecializationName}(", source);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RejectsInferredForwardingLocalWithMismatchedGenericResult()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_forward_inferred_local_mismatch");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public U Choose<T, U>(T value, U result) { return result; }
+            public T Invalid<T>(T value) {
+                var result = Choose(value, "not the caller type");
+                return result;
+            }
+            """));
+
+        var exception = Assert.Throws<CompilationErrorException>(
+            () => new SemanticBinder().Bind(project));
+
+        Assert.Contains("returns 'System.String', but 'T' is required",
+            exception.Message);
+    }
+
+    [Fact]
+    public void ForwardsVoidGenericCallsForClosedCallerTypes()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("generic_void_forward");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface IStore { void Touch(); }
+            public class Store : IStore {
+                public void Touch() {}
+            }
+            public class OtherStore : IStore {
+                public void Touch() {}
+            }
+            public void Write<T>(T value) where T : IStore {
+                value.Touch();
+            }
+            public void Write<Store>(Store value) {
+                value.Touch();
+            }
+            public void Forward<T>(T value) where T : IStore {
+                Write(value);
+            }
+            public void Run() {
+                Store value = new Store();
+                Forward(value);
+                OtherStore other = new OtherStore();
+                Forward(other);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        Assert.Equal(4, project.GenericFunctionInstances.Count);
+        var forwardDeclaration = project.CompilationContexts.Single()
+            .DeclarationScope.Declarations.OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "Forward");
+        var forwardedCall = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ExpressionStatement>(forwardDeclaration.Body!.Single()).Expression);
+        var forwards = project.GenericFunctionInstances
+            .Where(instance => instance.Declaration?.Name == "Forward").ToArray();
+        Assert.Equal(2, forwards.Length);
+        var targets = forwards.Select(instance => forwardedCall.GetClosedGenericTarget(
+            instance.SpecializationName!)).ToArray();
+        Assert.Contains(targets, target =>
+            target?.ImplementationDeclaration?.IsGenericSpecialization == true);
+        Assert.Contains(targets, target =>
+            target?.ImplementationDeclaration is null);
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-void-forward-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(directory, "generic_void_forward.c"));
+            foreach (var target in targets)
+            {
+                var call = $"{target!.SpecializationName}(value);";
+                Assert.Contains(call, source);
+                Assert.DoesNotContain($"return {call}", source);
+            }
+            Assert.DoesNotContain("_unknowntype_", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ForwardsVoidGenericCallsFromInstanceMethods()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_void_method_forward");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface IStore { void Touch(); }
+            public class Store : IStore {
+                public void Touch() {}
+            }
+            public void Write<T>(T value) where T : IStore {
+                value.Touch();
+            }
+            public class Forwarder {
+                public void Forward<T>(T value) where T : IStore {
+                    Write(value);
+                }
+            }
+            public void Run() {
+                Forwarder forwarder = new Forwarder();
+                Store value = new Store();
+                forwarder.Forward(value);
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        Assert.Equal(2, project.GenericFunctionInstances.Count);
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-void-method-forward-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(
+                directory, "generic_void_method_forward.c"));
+            Assert.DoesNotContain("_unknowntype_", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void BindsIdentityBodyForDistinctConcreteCalls()
     {
         var project = CreateProject();
@@ -518,6 +740,123 @@ public sealed class GenericFunctionBodyTests
             Assert.Contains("&&", source);
             Assert.Contains("?", source);
             Assert.Contains("cx_array_at(values", source);
+            Assert.DoesNotContain("_unknowntype_", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SupportsComparingLengthsOfMatchingGenericArrays()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("generic_array_length_equality");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            namespace System.Collections;
+            public final class Array<T> {
+                public constructor(uint length) {}
+                public uint Length { const get { return this.Length; } }
+                public T Get(uint index) const { return this[index]; }
+                public void Set(uint index, T value) { this[index] = value; }
+            }
+            """));
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public bool SameLength<T>(T[] first, System.Collections.Array<T> second) {
+                return first.Length == second.Length;
+            }
+            public bool DifferentLength<T>(T[] first, T[] second) {
+                return first.Length != second.Length;
+            }
+            public bool SameFirstRowLength<T>(T[][] first, T[][] second) {
+                return first[0].Length == second[0].Length;
+            }
+            public bool SameLengthIfPresent<T>(T[] first, T[] second) {
+                return first != null && second != null &&
+                    first.Length == second.Length;
+            }
+            public int Run() {
+                int[] first = new int[2];
+                int[] same = new int[2];
+                int[] different = new int[3];
+                long[] longFirst = new long[1];
+                long[] longSame = new long[1];
+                int[][] firstRows = new int[1][];
+                int[][] secondRows = new int[1][];
+                firstRows[0] = new int[2];
+                secondRows[0] = new int[2];
+                int[] missing = null;
+                if (!SameLength(first, same) || !DifferentLength(first, different)) return 0;
+                if (!SameLength(longFirst, longSame)) return 0;
+                if (!SameFirstRowLength(firstRows, secondRows)) return 0;
+                if (!SameLengthIfPresent(first, same) ||
+                    SameLengthIfPresent(missing, same)) return 0;
+                return 1;
+            }
+            """));
+        new SemanticBinder().Bind(project);
+
+        Assert.Equal(5, project.GenericFunctionInstances.Count);
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-array-length-equality-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(directory,
+                "generic_array_length_equality.c"));
+            Assert.True(source.Split(
+                "CX_ID_6(cxcore, System, Collections, Array, Length, __const_get)(").Length - 1 >= 8);
+            Assert.DoesNotContain("_unknowntype_", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SupportsUnsignedArithmeticInGenericArrayLengthComparisons()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_array_length_arithmetic");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            namespace System.Collections;
+            public final class Array<T> {
+                public constructor(uint length) {}
+                public uint Length { const get { return this.Length; } }
+                public T Get(uint index) const { return this[index]; }
+                public void Set(uint index, T value) { this[index] = value; }
+            }
+            """));
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public bool HasOffsetLength<T>(T[] values, uint minimum, uint offset) {
+                return values.Length >= minimum + offset;
+            }
+            public bool HasScaledLength<T>(T[] values, uint baseline, uint scale) {
+                return values.Length == baseline * scale;
+            }
+            public int Run() {
+                int[] values = new int[5];
+                if (!HasOffsetLength(values, 2u, 3u)) return 0;
+                if (!HasScaledLength(values, 1u, 5u)) return 0;
+                return 1;
+            }
+            """));
+        new SemanticBinder().Bind(project);
+
+        Assert.Equal(2, project.GenericFunctionInstances.Count);
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-array-length-arithmetic-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project,
+                Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(directory,
+                "generic_array_length_arithmetic.c"));
+            Assert.Contains("minimum + offset", source);
+            Assert.Contains("baseline * scale", source);
             Assert.DoesNotContain("_unknowntype_", source);
         }
         finally

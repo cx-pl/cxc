@@ -32,6 +32,11 @@ instantiate the closed body in the consumer that closes the generic owner. The
 native project-reference fixture verifies this under static and DLL linking.
 The generated receiver and reflection layout use the generic type's defining
 module even though the closed function body is emitted by the consuming module.
+If a consumer-defined generic derived class invokes a referenced generic
+base's constructor, the binder registers the closed constructor body in the
+consumer project so it links with the defining module's shared class layout.
+Native static and DLL coverage also dispatches exact and fallback generic
+virtual overrides through that closed owner.
 Consumers cannot add replacement specialization declarations. Static generic
 methods on generic classes can be called through a closed owner, for example
 `Utility<string>.Select<int>(value)`. The owner closes containing-type parameters
@@ -93,9 +98,16 @@ while mutating `++`/`--` do not infer from a result context. Focused coverage
 checks specialization, primary fallback, typed-local inference, and rejection
 without a result context.
 
-Virtual and override method specializations remain unsupported because closed
-method-argument dispatch is not represented in vtable metadata; binding rejects
-them with a focused diagnostic test. Generic abstract methods fail earlier
+Generic virtual and override specializations are supported on closed generic
+reference-class owners: dispatch resolves the runtime override first, then
+selects an exact closed method specialization when present and otherwise uses
+that override's primary body. A focused binder test and native execution
+fixture cover exact selection and fallback through a `Base<T>` reference to a
+`Derived<T>` instance. This support is currently bounded by the closed generic
+reference-class layouts accepted by the runtime; it does not imply support for
+all virtual methods on generic owners. A referenced library's concrete closed
+generic class owner also registers exact and primary-fallback dispatch in the
+consuming project under static and DLL linking. Generic abstract methods fail earlier
 under the current generic method-body restrictions and have separate rejection
 coverage. Coroutine method compatibility is deferred to Milestone 18, which
 introduces coroutine bodies. Local generic functions use the lexical declaration scope instead
@@ -106,17 +118,20 @@ argument identity, with the generic local body as fallback.
 
 ### Virtual generic methods
 
-Virtual generic specializations are rejected for virtual and override
-primaries. Generic abstract methods are rejected earlier by the current generic
-method-body rules. A specialization cannot be modeled as another ordinary
-virtual slot: the primary method's slot must continue to dispatch to the most
-derived override, while a custom specialization must be selected by its closed
-method type arguments. Primary-body fallback must follow that same override
-chain when no custom body exists. Supporting this requires closed generic
-dispatch identities shared across the primary and each override, plus vtable
-entries (or equivalent dispatch metadata) with the substituted signature.
-Until that exists, binding reports the unsupported combination before
-modifiers or body emission can make it look like an overload or override.
+Virtual and override generic specializations are supported by a runtime
+registry keyed by runtime implementation, inherited contract identity, and
+closed method type arguments. The primary virtual slot still resolves the
+runtime override first; an exact specialization replaces that implementation's
+body for the matching arguments, and unmatched arguments use that override's
+primary body. A concrete override may specialize an abstract generic contract.
+A specialization declared directly against an abstract primary is rejected,
+since it cannot supply the missing override implementation. Native coverage
+includes class and interface dispatch, exact and fallback bodies, constructed
+generic interfaces, supported constraints, generic callers, project
+references, method values, and closed generic reference-class owners. The
+runtime and compiler still diagnose unsupported owner layouts and caller,
+constraint, and inheritance shapes; see
+[`generic-virtual-specializations-design.md`](generic-virtual-specializations-design.md).
 
 ## Acceptance
 

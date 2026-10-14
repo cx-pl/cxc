@@ -2,6 +2,7 @@ using Antlr4.Runtime.Misc;
 using Antlr4.Runtime.Tree;
 using CxCompiler.Grammar;
 using CxCompiler.Model;
+using CxCompiler.Model.Common;
 using CxCompiler.Model.Types;
 using CxCompiler.Model.Types.BuiltInTypes;
 
@@ -50,9 +51,15 @@ public class TypeNameContextVisitor : CxParserBaseVisitor<TypeBase>
 
         if (context.arrayDimension() != null && context.arrayDimension().Length > 0)
         {
-            foreach (var _ in context.arrayDimension())
+            foreach (var dimension in context.arrayDimension())
             {
-                underlyingType = new ArrayType(underlyingType);
+                if (dimension.IntegerLiteral() is { } count)
+                {
+                    if (!int.TryParse(count.GetText(), out var length) || length <= 0)
+                        throw new CxCompiler.Model.Errors.CompilationErrorException("Fixed native array length must be a positive decimal integer.", SourceSpan.From(dimension));
+                    underlyingType = new FixedArrayType(underlyingType, length);
+                }
+                else underlyingType = new ArrayType(underlyingType);
             }
         }
 
@@ -89,8 +96,14 @@ public class TypeNameContextVisitor : CxParserBaseVisitor<TypeBase>
 
         if (context.ptrType != null)
         {
-            // TODO: Handle generic params if present
-            return BuiltInSystemTypes.Ptr;
+            if (context.Void() is not null)
+                return context.Const() is null ? BuiltInSystemTypes.Ptr
+                    : new PtrType(BuiltInSystemTypes.Ptr.Namespace, new ConstType(BuiltInSystemTypes.Void));
+            var arguments = context.genericTypeArguments() is { } list
+                ? new GenericTypeArgumentsParserVisitor().VisitGenericTypeArguments(list) : [];
+            if (arguments.Length > 1)
+                throw new CxCompiler.Model.Errors.CompilationErrorException("ptr accepts exactly one pointee type.", SourceSpan.From(context));
+            return arguments.Length == 0 ? BuiltInSystemTypes.Ptr : new PtrType(BuiltInSystemTypes.Ptr.Namespace, arguments[0]);
         }
 
         return base.VisitBuiltInType(context);
@@ -116,10 +129,10 @@ public class TypeNameContextVisitor : CxParserBaseVisitor<TypeBase>
             CxLexer.Int16 => BuiltInSystemTypes.Short,
             CxLexer.Int32 => BuiltInSystemTypes.Int,
             CxLexer.Int64 => BuiltInSystemTypes.Long,
-            CxLexer.UInt8 => BuiltInSystemTypes.Byte,
-            CxLexer.UInt16 => BuiltInSystemTypes.UShort,
-            CxLexer.UInt32 => BuiltInSystemTypes.UInt,
-            CxLexer.UInt64 => BuiltInSystemTypes.ULong,
+            CxLexer.Uint8 => BuiltInSystemTypes.Byte,
+            CxLexer.Uint16 => BuiltInSystemTypes.UShort,
+            CxLexer.Uint32 => BuiltInSystemTypes.UInt,
+            CxLexer.Uint64 => BuiltInSystemTypes.ULong,
             _ => throw new InternalCompilerException($"Unknown integer type: {context.GetText()}"),
         };
     }
@@ -146,6 +159,7 @@ public class TypeNameContextVisitor : CxParserBaseVisitor<TypeBase>
         return symbolType switch
         {
             CxLexer.Char => BuiltInSystemTypes.Char,
+            CxLexer.Wchar => BuiltInSystemTypes.WChar,
             CxLexer.String => BuiltInSystemTypes.String,
             _ => throw new InternalCompilerException($"Unknown textual type: {context.GetText()}"),
         };

@@ -15,6 +15,7 @@ public sealed class LocalVariableSymbol(
     bool isThis = false,
     string? cellName = null)
 {
+    public bool BorrowsStackStorage { get; internal set; }
     public string Name { get; } = name;
     public TypeBase Type { get; } = ArrayType.Canonicalize(type);
     public LambdaExpression? OwnerLambda { get; } = ownerLambda;

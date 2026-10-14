@@ -8,6 +8,7 @@ namespace CxCompiler.Model.Types;
 public class FunctionDeclaration : DeclarationBase
 {
     public TypeBase ReturnType { get; internal set; }
+    public NativeImportMetadata? NativeImport { get; internal set; }
     public string[] GenericTypeNames { get; private set; }
     public IReadOnlyList<TypeBase> SpecializationTypeArguments { get; private set; }
     public IReadOnlyList<FunctionGenericTypeArgument> UnclassifiedGenericTypeArguments { get; private set; }

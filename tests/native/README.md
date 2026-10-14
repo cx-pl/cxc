@@ -1,5 +1,22 @@
 # Native conformance checks
 
+`run-threading-e2e.ps1` verifies the Milestone 16 `System.Threading` API and GC
+integration. It generates `fixtures/threading.cx`, builds through the portable
+`fixtures/threading/CMakeLists.txt`, and checks normal execution plus subprocess
+failures for an unobserved worker exception and exiting with a held mutex. The
+positive fixture covers capture/array lifetime, pure-loop polling during GC,
+virtual/multicast actions, atomic wraparound and CAS, recursive mutex use,
+repeat joins, worker failures, self-join, invalid handles/cells, and foreground
+completion. `-Architecture Win32` selects x86; `-StaticLink OFF` selects DLL
+linking; `-Configuration Release` enables optimized execution.
+
+The CMake fixture also builds on Linux after generating the CX source. Set
+`CX_GENERATED_DIR` to the generated source directory, `CXCORE_SOURCE_DIR` to the
+runtime checkout, and `CX_STATIC_LINK` to ON or OFF. All three CTest cases require
+the expected process exit and, for failures, the expected diagnostic. CMake 3.31
+or newer is required. Compiler snapshots allow a full harness run to continue
+while the development compiler is rebuilt.
+
 `run-entry-point-e2e.ps1` compiles a temporary CX program, builds the generated
 C with CMake and `cxcore`, then checks argument count and contents,
 short-circuit evaluation, null coalescing, 64-bit integer limits, deep
@@ -15,6 +32,36 @@ classes with public parameterless constructors, boxed default values from
 non-generic and supported closed generic structs, parameterized class and
 struct construction from exact-type boxed arguments, null results for classes
 without a public constructor,
+generic virtual dispatch through overrides and inherited implementations,
+including a constructed generic runtime class and generic callers forwarding
+closed `int` and `string` method arguments, plus generic interface dispatch
+through an interface-typed receiver and generic callers, with exact
+specialization and fallback, including conditional-expression callers and
+statement-level `if`/`if-else` callers that return a matching type-parameter
+fallback, including block-wrapped return branches, with dispatch in either
+branch and a leading explicit `bool` local, under static and DLL
+project-reference linking,
+and generic virtual callers that store the dispatched result in a matching
+type-parameter local before returning it,
+including `ITransform<int>` implementations on ordinary and closed generic
+classes, plus generic virtual class and interface method values with runtime
+override selection and reflection metadata, and inherited generic interface
+methods called through child, three-level, and diamond interfaces, including
+same-signature generic contract redeclaration and distinct-signature overloads
+on a child interface, plus
+interface-constrained generic callers with exact specialization and fallback,
+and method-level `class`, `struct`, and interface constraints on generic
+virtual interface methods,
+including combined `class, IMarker` and `class, IMarker, IGenericVirtualAuditable`
+constraints and `struct, IMarker`, plus cross-project interface dispatch with
+`struct, IMarker, IGenericVirtualAuditable` and `class, IMarker,
+IGenericVirtualAuditable` constraints with exact/fallback coverage,
+and method-level `class` constraints on class virtual methods and their
+overrides, with exact specialization through a base-typed receiver and primary
+fallback for another reference type, plus combined `class, IMarker` constraints
+and combined `class, IMarker, IGenericVirtualAuditable` constraints with exact
+specialization and fallback through a base-typed receiver,
+and `struct` constraints with an exact `int` specialization and `long` fallback,
 primitive extension method/property/operator receivers, concrete and generic
 array extension methods, concrete and concrete-signature generic read-only array
 properties, non-mutating array operators, concrete and generic array
@@ -42,8 +89,13 @@ concrete and generic fields (including non-generic and closed generic structs
 stored by value, plus concrete primitive, array, and non-generic struct fields in
 generic reference layouts, with nested generic construction, constructor
 assignment, field reads, and generic reference classes inheriting through a
-multi-level closed-generic base chain),
-constructor parameter assignments, literal and arithmetic field initializers,
+multi-level closed-generic base chain). Closed generic owners also allocate
+arrays of constructed generic reference and value elements such as
+`ArrayBox<T>[]` and `Pair<T>[]` in field initializers and constructors; native
+checks cover independent closed owners, lengths, zero-initialized elements,
+reference writes, and value-type element strides across `int` and `long`
+layouts. The native harness also covers constructor parameter assignments,
+literal and arithmetic field initializers,
 default initialization of direct and constructed generic fields (reference and
 value), null
 initialization of generic reference-constrained and array fields,
@@ -53,6 +105,8 @@ string switch expressions with filters and null labels, inferred generic local
 function specialization with interface constraints,
 closed `System.Collections.Array<T>` and `List<T>` storage, including calls to
 the public `Array<T>` API through both `Array<T>` and built-in `T[]` values,
+matching generic array-length comparisons across both spellings, nested arrays,
+and computed unsigned expressions,
 safe array reads and writes, list growth and mutation, self-appending `AddRange`,
 compact `ToArray`, offset `CopyTo`, and structural `foreach` for arrays, lists,
 stacks, queues, linked lists, and dictionary entries; dictionary coverage also
@@ -169,6 +223,9 @@ closed generic class, struct, interface (including a constructed generic
 interface), enum, and primitive targets in native code.
 The fixture also checks a captured generic local function specialization and
 primary-body fallback for another method type argument.
+Generic virtual dispatch is exercised through a base-class reference for a
+derived override specialization, the override's primary-body fallback, and a
+base-class runtime instance.
 It checks generic binary operator specialization and fallback on a value type,
 plus mutating generic specializations and constrained primary fallbacks for all
 five compound assignments on a struct lvalue.
@@ -184,6 +241,9 @@ coverage verifies both a custom tuple specialization and a primary fallback.
 Forwarded concrete arguments can use pure built-in expressions over concrete
 parameters and literals; the native fixture checks specialized and fallback
 calls with an integer offset expression.
+Generic `void` callers also forward one call to a generic `void` callee. The
+native fixture verifies an exact specialized callee and primary fallback for
+two constrained interface implementations.
 Forwarding through by-value struct receivers preserves copy semantics; the
 native fixture verifies that mutations affect only the receiver copy or
 temporary. Cross-project specialization tests run in both static and DLL modes.
@@ -192,6 +252,33 @@ cases include reference, array, constructed alias, two-parameter, recursive,
 and cross-specialization calls.
 The project-reference fixture exercises library-owned generic function and
 method specializations under both static and DLL linking.
+It also calls a library-owned generic virtual method from a library method
+through an app-defined override specialization, checking that the consumer
+registers the closed runtime dispatch target in both link modes.
+The library method also calls a generic interface contract implemented only
+by the consumer, whose exact method specialization dispatches in both modes.
+A library generic caller also forwards a closed caller type parameter through
+that interface, checking exact specialization and primary fallback in both modes.
+The same call closes an interface implemented by a consumer-defined closed
+generic class, covering exact and fallback method arguments in both modes.
+A generic `void` library caller also forwards through the consumer's interface
+implementation, with exact and primary-fallback calls checked in both modes.
+A library generic caller also forwards through a constrained class virtual method
+to a consumer-defined override, checking exact specialization and primary-body
+fallback in both static and DLL modes.
+The same project-reference path also covers `struct` plus interface constraints
+with consumer-defined value types, exact specialization, and fallback.
+It also checks `class` plus two interface constraints through a consumer override
+with exact specialization and primary-body fallback in both link modes.
+The `struct` caller also supports two interface constraints, with exact and
+fallback dispatch through the consumer override in both link modes.
+Library generic callers can also choose between one virtual dispatch call and
+a matching generic value in a conditional expression; native cases exercise the
+call in each branch under static and DLL linking.
+It also verifies consumer-project replacements for imported public generic
+functions: the consumer's exact-type bodies win for direct and delegate calls,
+while unmatched type arguments fall back to the primary body and the library's
+own specialization remains isolated.
 Same-project instance specializations on generic classes are selected for two
 closed reference owner types; their bodies write a matching generic field and
 unmatched method arguments use the primary body. A generic struct owner also
@@ -200,3 +287,26 @@ fixture also instantiates a library-owned generic class method specialization fo
 closed class owners under both link modes. It also calls a library-owned static
 generic method specialization through two closed generic class owners whose type
 parameters appear in the method signature.
+
+## Milestone 17 native interoperability
+
+run-interop-e2e.ps1 copies and compiles native-scalar, native-text and native-abi
+fixtures into an isolated BuildRoot. Run for x64 and Win32, with StaticLink ON/OFF.
+It verifies exact imported symbols across a declarations-only reference, explicit
+runtime loading, pointer outputs, SDK records passed/returned by value, native
+allocation/destruction, 64-byte alignment, UTF-16 arrays/text, typed/static/captured
+callbacks, foreign-thread reentry, GC pressure and in-flight unregistration.
+SDK negative cases require incompatible signatures, layouts and fields to fail.
+
+```powershell
+cxc/tests/native/run-interop-e2e.ps1 -BuildRoot .build/interop-win64
+cxc/tests/native/run-interop-e2e.ps1 -BuildRoot .build/interop-win32 -Architecture Win32
+cxc/tests/native/run-interop-e2e.ps1 -BuildRoot .build/interop-dll -StaticLink OFF
+cxc/tests/native/run-interop-e2e.ps1 -BuildRoot .build/interop-linux -GenerateOnly
+```
+
+For generated Linux sources, run run-interop-e2e.sh with the root, cxcore path and
+gcc/clang. CMAKE selects the CMake executable and CX_STATIC_LINK selects ON/OFF.
+NegativeOnly runs just SDK rejection checks on Windows. The small handwritten C
+fixture is compiler conformance infrastructure; SDK bindings and consuming examples
+contain only CX. Package integration runners are in ../../../examples/native-bindings.

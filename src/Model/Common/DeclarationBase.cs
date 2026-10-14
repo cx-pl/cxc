@@ -6,6 +6,7 @@ namespace CxCompiler.Model.Common;
 public abstract class DeclarationBase : IHasSourceSpan
 {
     public SourceSpan? SourceSpan { get; set; }
+    public IReadOnlyList<AnnotationApplication> Annotations { get; set; } = [];
     public string DeclarationType { get; }
     public string Name { get; }
     public QualifiedIdentifier Namespace { get; }

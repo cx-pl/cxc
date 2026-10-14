@@ -35,6 +35,7 @@ public class PropertyDeclarationParserVisitor : CxParserBaseVisitor<PropertyDecl
             _fieldType,
             _memberModifiers,
             _classDeclaration).WithSourceSpan(context);
+        _propertyDeclaration.Annotations = AnnotationParser.Parse(context.annotations());
 
         base.VisitChildren(context);
 

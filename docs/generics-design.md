@@ -55,22 +55,40 @@ emits and exports the closed body, and the consumer links to that symbol. The
 native entry-point harness verifies closed-owner static method specialization.
 specialized signature must exactly match the primary after substitution, and
 the replacement must preserve its modifiers and return type. Default arguments
-come from the primary declaration. Virtual methods and dependency replacements
-from a consuming project remain future work. Focused tests cover primitive,
+come from the primary declaration. Generic virtual methods dispatch by the
+receiver's runtime type and closed method arguments in non-generic callers.
+Exact virtual and override specializations replace the selected implementation;
+the override's primary body is the fallback. Generic interface methods,
+documented generic caller shapes, and supported closed generic runtime classes
+also dispatch through the runtime registry; the current constraints, caller
+bodies, closed layouts, and cross-project limits are listed in
+[`generic-virtual-specializations-design.md`](generic-virtual-specializations-design.md).
+Generic specializations cannot provide implementations for abstract generic
+methods.
+Focused tests cover primitive,
 reference, array, and constructed alias arguments, multiple type arguments,
 declaration order, ordinary overload precedence, recursion, and a custom body
-that calls another generic function.
+that calls another generic function. A consuming project may declare a
+project-local replacement for an imported public top-level generic function;
+its exact closed-type body wins over the library replacement for calls and
+delegate bindings in that consumer, while unmatched types use the primary
+body. The library and other consumers remain unchanged. See
+[`generic-dependency-specializations-design.md`](generic-dependency-specializations-design.md).
 Binding a generic function or a supported static/instance generic method to a
 delegate closes it against the expected signature and selects the same custom
 or primary implementation used by direct calls.
 A primary generic function may return one inferred call that forwards one or
 more direct parameters whose types are matching caller type parameters to
-another generic function. The same form is supported in generic methods on
-non-generic classes and structs. The binder resolves the call separately
-for each closed caller instance, so a shared declaration body can select a
-custom callee for one closed caller and a primary callee for another. Other
-open-body call shapes, calls, assignments, and side-effecting argument
-expressions remain outstanding.
+another generic function. The call may be returned directly or stored in one
+explicitly typed or inferred local matching the caller's return type and then
+returned.
+A `void` generic caller may also consist of one expression statement that
+forwards to a generic `void` function or method. These forms are supported in
+generic methods on non-generic classes and structs. The binder resolves the call
+separately for each closed caller instance, so a shared declaration body can
+select a custom callee for one closed caller and a primary callee for another.
+Other local call shapes, multiple statements, assignments, and side-effecting
+argument expressions remain outstanding.
 The forwarded call may have multiple generic arguments. Focused coverage
 verifies a two-parameter custom specialization and primary fallback.
 Arguments may also contain pure built-in unary, binary, or conditional
@@ -78,6 +96,10 @@ expressions over literals and non-generic caller parameters. At least one direct
 matching type-parameter argument must remain for inference. Calls, assignments,
 increments, overloaded operators, and expressions depending on an open type
 parameter remain unsupported.
+
+The `void` forwarding form uses the same argument and receiver restrictions and
+must forward at least one direct caller type-parameter value. It does not add a
+runtime generic dispatch mechanism.
 
 Forwarding to an instance generic method accepts the current receiver or a class
 or struct receiver expression whose resolved type exactly matches the target
@@ -261,6 +283,12 @@ struct mutation semantics.
   comparisons may be composed with `!`, `&&`, `||`, or conditional expressions,
   and can be combined with null checks on the same array, as in
   `bool HasLength<T>(T[] values, uint minimum) { return values != null && values.Length >= minimum; }`.
+  The lengths of two matching generic arrays may also be compared, including
+  mixed `T[]` and `Array<T>` spellings and nested array access, as in
+  `bool SameLength<T>(T[] first, Array<T> second) { return first.Length == second.Length; }`.
+  A generic array's length may also be compared with a built-in unsigned
+  arithmetic expression over `uint` parameters and non-negative integer
+  literals, using `+`, `-`, `*`, `/`, or `%`.
   Jagged array types preserve each `[]` rank, allocation may specify trailing
   unsized ranks such as `new int[1][]`, and a generic function may return a
   nested element or assign a value through nested indices, as in
@@ -309,9 +337,17 @@ struct mutation semantics.
   constructed generic class such as `Box<T>`. Closed reference layouts also
   support concrete primitive, array, and non-generic struct fields, with
   concrete field initializers composed of literals and built-in unary or
-  binary operators. Their supported constructors may assign matching concrete
-  fields as well as generic fields, and concrete field-backed properties may
-  read or assign their matching field. Closed generic reference classes may
+  binary operators, and calls to non-generic instance methods through earlier
+  concrete reference fields. A constructed interface field such as
+  `IEqualityComparer<TKey>` may use the existing `cx_iface_ref` representation
+  and be initialized from a matching constructor parameter. Mixed constructors
+  may also initialize concrete array fields with literal lengths, including
+  arrays whose element is a constructed generic class or struct type such as
+  `Box<T>[]` or `Pair<T>[]`; element types close for each owner, and struct
+  elements require a supported closed value layout. Their
+  supported constructors may assign matching concrete fields as well as
+  generic fields, and concrete field-backed properties may read or assign their
+  matching field. Closed generic reference classes may
   derive through generic or non-generic base classes when the base hierarchy uses
   only inherited `System.Object` virtual slots and no interfaces. Each closed
   class in the hierarchy must satisfy the shared-reference-layout constraints,
@@ -320,7 +356,11 @@ struct mutation semantics.
   direct generic fields, recursively nested generic arrays, and concrete
   primitive, reference, enum, or array fields, and non-generic or closed
   constructed generic structs stored by value. Nested layouts are emitted in
-  dependency order. Constructed generic struct fields can use an empty
+  dependency order. An explicit constructor in a closed generic struct may
+  initialize an array field whose element is concrete, the owner type
+  parameter, or a supported constructed generic type; each instance allocates
+  storage using the closed element size, while `default` remains zero-initialized.
+  Constructed generic struct fields can use an empty
   parameterless constructor, including when their type arguments depend on the
   enclosing type parameter. Constructors may copy a matching constructed
   generic struct parameter into its field.
@@ -364,7 +404,9 @@ struct mutation semantics.
   type argument is a class. Storage is already zero-initialized, so no
   pointer-shaped assignment is emitted for value fields. Other initializers on
   generic-typed fields remain unsupported, except `default` on a constructed
-  generic reference or value field such as `Box<T>` or `Pair<T>`. Direct generic-field getters and
+  generic reference or value field such as `Box<T>` or `Pair<T>`, and supported
+  array allocations in closed generic reference and value constructors. Direct
+  generic-field getters and
   setters are specialized for closed value layouts. Null initializers are
   supported for array fields and `T` fields with reference-type or class
   constraints. Other initializers on

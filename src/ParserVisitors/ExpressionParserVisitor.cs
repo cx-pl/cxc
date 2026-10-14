@@ -230,6 +230,12 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
 
     public override ExpressionBase VisitPrimaryExpressionStart([NotNull] CxParser.PrimaryExpressionStartContext context)
     {
+        if (context.nativeStackAllocation() is { } allocation)
+            return new NativeStackAllocationExpression(new TypeNameContextVisitor().Visit(allocation.typeName()),
+                Visit(allocation.expression())).WithSourceSpan(allocation);
+        if (context.nativeTypeQuery() is { } query)
+            return new NativeTypeQueryExpression(query.GetChild(0).GetText(),
+                new TypeNameContextVisitor().Visit(query.typeName()), query.Identifier()?.GetText()).WithSourceSpan(query);
         if (context.literal() is { } literal)
         {
             return Visit(literal);

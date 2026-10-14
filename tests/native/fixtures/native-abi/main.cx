@@ -1,0 +1,133 @@
+import System;
+import System.Interop;
+import System.Threading;
+@NativeType("fixture_point", header = "native_fixture.h", size = 8, alignment = 4)
+public struct Point { public int x; public int y; }
+@NativeType("fixture_owner", header = "native_fixture.h", opaque = true)
+public struct Owner;
+@NativeLayout(layout = "union", size = 8, alignment = 4)
+public struct Bits { @NativeField(offset = 0) public int value; public byte[8] bytes; }
+@NativeLayout(alignment = 64, size = 64)
+public struct Aligned { public int value; }
+@NativeType("fixture_aligned", header = "native_fixture.h", size = 64, alignment = 64)
+public struct SdkAligned { public int value; }
+@NativeImport("fixture", entryPoint = "fixture_aligned_echo", blocking = true)
+public extern SdkAligned EchoAligned(SdkAligned value);
+@NativeFunction(callingConvention = NativeCallingConvention.Cdecl, failureResult = "-1")
+public delegate int Callback(int number, uint other);
+@NativeFunction(contextParameter = 1, failureResult = "-1")
+public delegate int RetainedCallback(int number, ptr context);
+public unsafe NativeCallbackRegistration CreateRegistration() {
+    int captured = 22;
+    return NativeCallback.Register<RetainedCallback>((int number) => number + captured);
+}
+public int Add(int number, uint other) { return number + (int)other; }
+public int Allocating(int number, uint other) {
+    string text = "";
+    for (int index = 0; index < 3000; ++index) { text = text + "abcdefghijklmnopqrstuvwxyz"; }
+    if (text.Length == 0u) return -1;
+    return number + (int)other;
+}
+public int Throwing(int number, uint other) { throw new Exception("callback failure"); }
+public int ErrorChanging(int number, uint other) { unsafe { Fail(); } return number + (int)other; }
+@NativeImport("fixture", entryPoint = "fixture_call") public extern int Call(Callback callback);
+@NativeImport("fixture", entryPoint = "fixture_preserve_error") public extern int PreserveError(Callback callback);
+@NativeImport("fixture", entryPoint = "fixture_call", blocking = true) public extern int ReentrantCall(Callback callback);
+@NativeImport("fixture", entryPoint = "fixture_foreign_call", blocking = true) public extern int ForeignCall(Callback callback);
+@NativeImport("fixture", entryPoint = "fixture_retained_foreign", blocking = true)
+public extern int RetainedForeignCall(RetainedCallback callback, ptr context);
+@NativeImport("fixture", entryPoint = "fixture_make") public extern Point Make(int x, int y);
+@NativeImport("fixture", entryPoint = "fixture_sum") public extern int Sum(Point point);
+@NativeImport("fixture", entryPoint = "fixture_output") public extern void Output(ptr<int> value);
+@NativeImport("fixture", entryPoint = "fixture_open") public extern ptr<Owner> Open();
+@NativeImport("fixture", entryPoint = "fixture_close") public extern void Close(ptr<Owner> owner);
+@NativeImport("fixture", entryPoint = "fixture_fail", captureError = NativeErrorPolicy.Errno) public extern int Fail();
+#if WINDOWS
+@NativeImport("fixture", entryPoint = "fixture_fail_last_error", captureError = NativeErrorPolicy.LastError)
+public extern int FailLastError();
+#endif
+public unsafe int Main() {
+    SdkAligned sdkValue = default; sdkValue.value = 42;
+    SdkAligned echoed = EchoAligned(sdkValue);
+    if (echoed.value != 42) return 24;
+    ptr<Aligned> alignedStack = stackalloc<Aligned>(1);
+    if ((ulong)(UIntPtr)alignedStack % 64ul != 0ul) return 21;
+    NativeBuffer alignedBuffer = NativeBuffer.AllocateAligned((ulong)sizeof(Aligned), 64u);
+    try {
+        if ((ulong)(UIntPtr)alignedBuffer.Data % 64ul != 0ul) return 22;
+        ((ptr<Aligned>)alignedBuffer.Data)[0].value = 42;
+        alignedStack[0].value = ((ptr<Aligned>)alignedBuffer.Data)[0].value;
+        if (alignedStack[0].value != 42) return 23;
+    } finally { alignedBuffer.Dispose(); }
+    AtomicInt entered = new AtomicInt();
+    AtomicInt release = new AtomicInt();
+    AtomicInt unregistered = new AtomicInt();
+    NativeCallbackRegistration concurrent = NativeCallback.Register<RetainedCallback>((int number) => {
+        entered.Value = 1;
+        while (release.Value == 0) Thread.Yield();
+        return number + 22;
+    });
+    RetainedCallback concurrentCallback = concurrent.Function<RetainedCallback>();
+    ptr concurrentContext = concurrent.Context;
+    Thread invoking = Thread.Start(() => {
+        if (RetainedForeignCall(concurrentCallback, concurrentContext) != 42) throw new Exception("Concurrent callback result");
+    });
+    while (entered.Value == 0) Thread.Yield();
+    Thread closing = Thread.Start(() => { concurrent.Unregister(() => { unregistered.Value = 1; }); });
+    while (unregistered.Value == 0) Thread.Yield();
+    if (!closing.IsAlive) return 17;
+    if (concurrentCallback(20, concurrentContext) != -1) return 18;
+    Allocating(20, 22u);
+    release.Value = 1;
+    invoking.Join(); closing.Join();
+    NativeCallbackRegistration selfClosing = null;
+    selfClosing = NativeCallback.Register<RetainedCallback>((int number) => { selfClosing.Unregister(() => {}); return 0; });
+    RetainedCallback selfCallback = selfClosing.Function<RetainedCallback>();
+    if (selfCallback(20, selfClosing.Context) != -1 || selfClosing.LastException == null) return 19;
+    selfClosing.Unregister(() => {});
+    ptr<int> stackValue = stackalloc<int>(1);
+    Output(stackValue);
+    if (stackValue[0] != 42) return 16;
+    NativeCallbackRegistration registration = CreateRegistration();
+    RetainedCallback retained = registration.Function<RetainedCallback>();
+    ptr retainedContext = registration.Context;
+    Allocating(20, 22u);
+    if (retained(20, retainedContext) != 42) return 10;
+    if (RetainedForeignCall(retained, retainedContext) != 42) return 12;
+    try { registration.Unregister(() => { throw new Exception("unregister failed"); }); return 13; }
+    catch (Exception error) {}
+    registration.Unregister(() => {});
+    if (retained(20, retainedContext) != -1) return 11;
+    registration.Unregister(() => {});
+    NativeCallbackRegistration failedRegistration = NativeCallback.Register<RetainedCallback>((int number) => { throw new Exception("retained failure"); });
+    RetainedCallback failed = failedRegistration.Function<RetainedCallback>();
+    if (RetainedForeignCall(failed, failedRegistration.Context) != -1 || failedRegistration.LastException == null) return 14;
+    failedRegistration.Unregister(() => {});
+    if (failedRegistration.LastException == null) return 15;
+    Callback callback = (Callback)Add;
+    if (PreserveError((Callback)ErrorChanging) != 42 || PreserveError((Callback)Throwing) != -1) return 20;
+    if (callback(20, 22u) != 42 || Call(callback) != 42) return 7;
+    Callback throwing = (Callback)Throwing;
+    if (Call(throwing) != -1 || NativeCallback.GetLastException() == null) return 8;
+    NativeCallback.ClearLastException();
+    Callback allocating = (Callback)Allocating;
+    if (ReentrantCall(allocating) != 42 || ForeignCall(allocating) != 42) return 9;
+    Bits bits = default;
+    bits.value = 42;
+    if (bits.bytes[0] != (byte)42 || (ulong)sizeof(Bits) != 8ul) return 6;
+    if ((ulong)sizeof(Point) != 8ul || (ulong)alignof(Point) != 4ul || (ulong)offsetof(Point, y) != 4ul) return 5;
+    Point point = Make(20, 22);
+    if (point.x != 20 || point.y != 22 || Sum(point) != 42) return 1;
+    int value = 0;
+    Output(&value);
+    if (value != 42) return 2;
+    ptr<Owner> owner = Open();
+    if (owner == null) return 3;
+    Close(owner);
+    if (Fail() != -1 || NativeError.GetErrno() == 0) return 4;
+#if WINDOWS
+    if (FailLastError() != -1 || NativeError.GetLastError() != 1234u) return 25;
+#endif
+    Console.WriteLine("native ABI passed");
+    return 0;
+}

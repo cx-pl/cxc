@@ -11,6 +11,8 @@ public sealed class InvocationExpression : ExpressionBase
     public FunctionSymbol? TargetSymbol { get; private set; }
     private readonly Dictionary<string, FunctionSymbol> _closedGenericTargets =
         new(StringComparer.Ordinal);
+    private readonly Dictionary<string, GenericVirtualDispatchTarget>
+        _genericVirtualDispatchTargets = new(StringComparer.Ordinal);
     public CxCompiler.Model.Types.BuiltInTypes.FunctionType? FunctionType { get; private set; }
     public ExpressionBase? Receiver { get; private set; }
     public int ReceiverBaseDepth { get; private set; }
@@ -20,9 +22,17 @@ public sealed class InvocationExpression : ExpressionBase
     public string? ReceiverTemporaryName { get; private set; }
     public string? FunctionValueTemporaryName { get; private set; }
     public bool IsDelegateInvocationList { get; private set; }
+    public bool IsDelegateDynamicInvoke { get; private set; }
+    public bool IsNativeResolve { get; private set; }
+    public bool IsNativeRegistration { get; private set; }
+    public bool IsNativeRegistrationFunction { get; private set; }
+    public CxCompiler.Model.Types.BuiltInTypes.FunctionType? ManagedCallbackSignature { get; private set; }
     public bool IsConceptMethodInvocation { get; private set; }
     public ExpressionBase? DelegateInvocationListReceiver { get; private set; }
+    public ExpressionBase? DelegateDynamicInvokeReceiver { get; private set; }
     public IReadOnlyList<CxCompiler.Model.Types.TypeBase> ConceptMethodTypeArguments { get; private set; } = [];
+    public IReadOnlyCollection<GenericVirtualDispatchTarget> GenericVirtualDispatchTargets =>
+        _genericVirtualDispatchTargets.Values;
 
     public InvocationExpression(
         ExpressionBase target,
@@ -63,6 +73,24 @@ public sealed class InvocationExpression : ExpressionBase
         FunctionValueTemporaryName = temporaryName;
     }
 
+    public void BindNativeResolve(CxCompiler.Model.Types.BuiltInTypes.NativeFunctionType signature,
+        ExpressionBase receiver, string temporaryName)
+    {
+        FunctionType = signature;
+        Receiver = receiver;
+        FunctionValueTemporaryName = temporaryName;
+        IsNativeResolve = true;
+    }
+
+    public void BindNativeRegistration(CxCompiler.Model.Types.BuiltInTypes.NativeFunctionType native,
+        CxCompiler.Model.Types.BuiltInTypes.FunctionType managed, string temporaryName, ExpressionBase? receiver = null)
+    {
+        FunctionType = native; ManagedCallbackSignature = managed;
+        FunctionValueTemporaryName = temporaryName; Receiver = receiver;
+        IsNativeRegistration = receiver is null;
+        IsNativeRegistrationFunction = receiver is not null;
+    }
+
     public void BindDelegateInvocationList(
         CxCompiler.Model.Types.BuiltInTypes.FunctionType functionType,
         ExpressionBase receiver,
@@ -72,6 +100,17 @@ public sealed class InvocationExpression : ExpressionBase
         FunctionValueTemporaryName = temporaryName;
         IsDelegateInvocationList = true;
         DelegateInvocationListReceiver = receiver;
+    }
+
+    public void BindDelegateDynamicInvoke(
+        CxCompiler.Model.Types.BuiltInTypes.FunctionType functionType,
+        ExpressionBase receiver,
+        string temporaryName)
+    {
+        FunctionType = functionType;
+        FunctionValueTemporaryName = temporaryName;
+        IsDelegateDynamicInvoke = true;
+        DelegateDynamicInvokeReceiver = receiver;
     }
 
     public void AddDefaultArguments(IEnumerable<ExpressionBase> arguments) =>
@@ -99,4 +138,26 @@ public sealed class InvocationExpression : ExpressionBase
 
     public void RestoreTargetSymbol(FunctionSymbol? targetSymbol) =>
         TargetSymbol = targetSymbol;
+
+    public void BindGenericVirtualDispatchTarget(
+        CxCompiler.Model.Types.NamedType runtimeType,
+        FunctionSymbol implementation)
+    {
+        var runtimeIdentity = runtimeType.ConstructedIdentity?.CanonicalName ??
+            runtimeType.ResolvedTypeFullName.ToString();
+        var declaration = implementation.Declaration;
+        var methodArguments = declaration is null
+            ? []
+            : declaration.GenericTypeNames.Select(name =>
+                implementation.GenericTypeArguments.GetValueOrDefault(name)?.FullName.ToString() ??
+                throw new InternalCompilerException(
+                    $"Generic virtual implementation '{implementation.FullName}' has no closed type argument for '{name}'."));
+        var key = $"{runtimeIdentity}|{string.Join("|", methodArguments)}";
+        _genericVirtualDispatchTargets[key] =
+            new GenericVirtualDispatchTarget(runtimeType, implementation);
+    }
 }
+
+public sealed record GenericVirtualDispatchTarget(
+    CxCompiler.Model.Types.NamedType RuntimeType,
+    FunctionSymbol Implementation);

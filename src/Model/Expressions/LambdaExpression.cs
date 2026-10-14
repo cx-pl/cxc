@@ -13,6 +13,7 @@ public sealed class LambdaExpression(
     public ExpressionBase? ExpressionBody { get; } = expressionBody;
     public IReadOnlyList<StatementBase>? StatementBody { get; } = statementBody;
     public FunctionDeclaration? GeneratedFunction { get; private set; }
+    public string? EnvironmentTemporaryName { get; private set; }
     public IReadOnlyList<LambdaCapture> Captures => _captures;
     public ClassDeclaration? EnclosingClassDeclaration { get; private set; }
     public LocalVariableSymbol? ThisSymbol { get; private set; }
@@ -44,9 +45,13 @@ public sealed class LambdaExpression(
         EnclosingLambda = enclosingLambda;
     }
 
-    public void Bind(FunctionDeclaration function, FunctionType functionType)
+    public void Bind(
+        FunctionDeclaration function,
+        FunctionType functionType,
+        string environmentTemporaryName)
     {
         GeneratedFunction = function;
+        EnvironmentTemporaryName = environmentTemporaryName;
         function.SetLambdaOwner(this);
         SetInferredType(functionType);
     }

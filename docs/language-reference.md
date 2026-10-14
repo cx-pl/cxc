@@ -31,6 +31,27 @@ and generic methods. Generic implementations are specialized for closed types;
 only the supported generic body and layout patterns described by compiler
 diagnostics are accepted.
 
+Fixed-width numeric spellings are aliases for the existing built-in types:
+
+| Alias | Built-in type |
+| --- | --- |
+| `int8` | `sbyte` |
+| `int16` | `short` |
+| `int32` | `int` |
+| `int64` | `long` |
+| `uint8` | `byte` |
+| `uint16` | `ushort` |
+| `uint32` | `uint` |
+| `uint64` | `ulong` |
+| `float32` | `float` |
+| `float64` | `double` |
+
+These spellings have identical type identity, conversions, reflection metadata,
+and generated C representation, including inside arrays, delegates, and typed
+pointers. They do not introduce distinct types or overloads. Native C integer
+types whose widths vary by platform use the separate `System.Interop` scalar
+aliases described in the native interop section.
+
 Classes support single class inheritance and multiple interfaces. Interfaces can
 inherit multiple interfaces. Members can be `public`, `protected`, `private`, or
 `internal`. Methods support `static`, `virtual`, `abstract`, `override`, and
@@ -83,16 +104,49 @@ primary declaration's constraints; other closed type arguments use the primary
 body. The signature must match after substitution. This slice currently applies
 to top-level functions and static or instance methods on non-generic classes and
 structs. Public specializations on these targets can be consumed through project
-references and are emitted by their defining project. Virtual methods and
-consumer-defined replacements are not supported yet; declaring a specialization
-for a virtual, override, or abstract generic method produces a semantic error.
+references and are emitted by their defining project. Method-level generic
+methods may be declared `virtual`, `override`, or `abstract`. Closed calls from
+non-generic callers dispatch through a typed runtime registration keyed by the
+receiver's runtime class and the closed method type arguments. Virtual and
+override specializations replace the selected implementation for exact type
+arguments; otherwise that override's primary body runs. Generic virtual methods
+and overrides on generic reference classes also dispatch this way when the
+containing owner is closed at the call site. Generic interface
+methods, including constructed generic interfaces, dispatch through ordinary
+and supported closed generic class implementations. Class virtual methods and
+overrides also support a `class` constraint combined with three interfaces,
+and a `struct` constraint combined with three interfaces, including consumer
+overrides across project references. Generic callers support
+the documented direct forwarding call, matching local-result, and void-call
+shapes, including conditional `if`/`if-else` returns with block-wrapped
+branches and leading explicit `bool` or inferred `var` locals initialized by
+supported boolean expressions controlling dispatch, when method
+arguments and receiver types close for each caller
+specialization. The consuming project registers known implementations of
+referenced generic interfaces, including exact specializations under static and
+DLL linking. In statement-level forwarding returns, explicitly typed copies of
+the caller's return type parameter may form a chain from a matching parameter;
+the copies may use an explicit type or `var`, may appear before or after leading
+boolean locals, and may supply both the virtual-call argument and fallback
+return. In interface inheritance, a
+generic method redeclared with the same signature on both branches of a diamond
+shares one dispatch target and supports exact specialization and primary-body
+fallback. Other generic caller body shapes, unsupported closed class layouts
+or overrides, and runtime-loaded types outside the compiled project graph
+remain unsupported. Generic specializations of abstract methods cannot provide
+an implementation. A consumer may declare a project-local replacement for an imported public
+top-level generic function in the same namespace. It affects calls and delegate
+bindings in that consumer only, takes precedence over the library's matching
+specialization, and falls back to the primary body for unmatched type arguments.
+See [`generic-dependency-specializations-design.md`](generic-dependency-specializations-design.md).
 The virtual-dispatch constraint and acceptance matrix are recorded in
 [`generic-virtual-specializations-design.md`](generic-virtual-specializations-design.md).
 A primary generic function
 or method on a non-static, non-generic class or struct may also return one
 inferred generic call that forwards one or more direct parameters whose types
-are matching caller type parameters to a generic function or method; the target
-resolves separately for each closed caller instance. Instance-method forwarding
+are matching caller type parameters to a generic function or method, either
+directly or through one explicitly typed or inferred matching local that is returned; the
+target resolves separately for each closed caller instance. Instance-method forwarding
 supports the current receiver of the same non-generic class or struct, a class
 receiver expression whose resolved type exactly matches the target method's
 non-generic owner, or a struct receiver expression whose type exactly matches
@@ -104,6 +158,12 @@ overloaded operators and other open-body forms remain unsupported.
 Binding a generic function or a supported static/instance generic method to a
 delegate uses the expected signature to close it and selects the matching
 custom implementation or primary body.
+Generic virtual forwarding calls are also supported in generic methods declared
+on a generic class when the owner is closed at each call site. The owner type
+arguments are substituted while resolving the virtual method arguments; exact
+specialization and primary-body fallback are available through class and
+interface contracts. Other generic caller body shapes and open owner contexts
+remain unsupported.
 Static generic methods on generic classes can be called through a closed owner,
 for example `Utility<string>.Select<int>(value)`. The owner type arguments are
 checked against the class constraints and close the method signature before
@@ -279,10 +339,20 @@ signature can initialize a named delegate variable. Delegate values support
 sequence, and `+=` and `-=` to update a variable; compound assignment returns
 `void`. Invocation runs handlers in order, and a non-void invocation returns
 the last handler's result. Equality compares the ordered invocation lists, and
-delegates can be compared with `null`. `GetInvocationList()` returns a typed
-array containing one single-cast delegate per entry, in invocation order; a null
-delegate returns an empty array. Named delegates currently use the compiler's
-closure and invocation-list representation, without a common object base type.
+delegates can be compared with `null`. `GetInvocationList()` is available on
+named delegates and anonymous function-type values. It returns a typed array
+with one single-cast value per entry, in invocation order; static and instance
+method values, including closed generic methods, use the same API. A
+null/default value returns an empty array. Named delegates and anonymous function types share the
+compiler's closure and invocation-list representation, without a common object
+base type. Anonymous function-type values can be initialized or assigned from
+`null`; their native value is zeroed and their invocation list is empty.
+`DynamicInvoke(object[])` is supported for concrete reflection-supported
+signatures. It requires exactly one boxed argument per parameter, returns
+`null` for a null delegate or an incompatible argument list, boxes value-type
+results, and returns `null` for `void`. Open generic, pointer, and
+delegate-valued signatures are rejected; see
+[`delegate-dynamic-invoke-design.md`](delegate-dynamic-invoke-design.md).
 For mixed numeric operands, the compiler chooses a common type when one operand
 type accepts an implicit numeric conversion from the other; otherwise it
 reports an error. The current implicit numeric conversions are widening
@@ -298,7 +368,8 @@ the candidate with the better conversion for each argument. If no candidate
 applies, or multiple candidates remain equally good, binding reports an error;
 ambiguous diagnostics include candidate signatures. Literal and `default` parameter
 values and qualified enum member constants are supported on functions, methods,
-and constructors. The `default` literal takes its type from the parameter or another
+and constructors. Numeric defaults may have a leading `+` or `-` sign, such as
+`int contextParameter = -1`. The `default` literal takes its type from the parameter or another
 contextual target and zero-initializes that type; it is rejected where no target type
 is available. Omitted trailing values are inserted at each call site after overload
 selection. Once one
@@ -485,8 +556,10 @@ Labels are literals, enum members, or strings; string labels compare by content,
 and `null` is a valid string label. Arm values must have a compatible common
 type, and an unfiltered `_` discard arm must appear last.
 
-`foreach` iterates built-in arrays directly. It also accepts a collection with a
-zero-argument `GetEnumerator()` whose result has a `bool MoveNext()` method and
+`foreach` iterates built-in arrays directly. String values are also iterable;
+each loop reads one Unicode scalar through the existing string length and index
+accessors. Other collections can expose a zero-argument `GetEnumerator()` whose
+result has a `bool MoveNext()` method and
 either a readable `Current` property or a zero-argument `Current()` method.
 The collection expression and enumerator are each evaluated once. `Array<T>`,
 `List<T>`, `Stack<T>`, `Queue<T>`, and `LinkedList<T>` currently use the method
@@ -494,9 +567,14 @@ form; `Dictionary<TKey, TValue>` yields `KeyValuePair<TKey, TValue>` values in
 insertion order. Explicit iteration-variable types are resolved like local
 declaration types, including constructed generic types. An interface-typed
 `IEnumerable<T>` value can be iterated when its `GetEnumerator()` result
-implements `IEnumerator<T>`. The core generic collections still expose their
-concrete enumerator types; closed generic enumerator classes cannot yet emit the
-required interface metadata.
+implements `IEnumerator<T>`. The core generic collections expose their
+constructed `IEnumerable<T>` contracts, and their closed generic enumerators
+implement the matching `IEnumerator<T>` interface; both structural and
+interface-typed iteration are supported for arrays and the core collections.
+The core collection types implement `System.Collections.ICollection<T>`, which
+inherits `IEnumerable<T>` and adds a read-only `uint Count` property. Dictionary's
+collection element type is `KeyValuePair<TKey, TValue>`; built-in `T[]` shares
+`Array<T>`'s implementation.
 
 ## Initialization, dispatch, and errors
 
@@ -560,6 +638,30 @@ checked cast and an uncaught exception terminate the process with diagnostics.
 Bounds failures and allocation failures also terminate according to the current
 runtime contract; they are not specified as typed CX exceptions.
 
+## Threads and synchronization
+
+Import `System.Threading` to use the shared value handles `Thread`, `Mutex`, and
+`AtomicInt`. Copies retain the same managed state. `Thread.Start` accepts a
+`delegate() => void`, including a captured lambda, method value, or multicast
+value. `Join` waits for completion, publishes the worker's writes, and rethrows
+its failure on the joining thread; repeated joins are permitted. Normal process
+exit waits for owned workers and reports unobserved worker failures.
+
+`Thread.Id` and static `Thread.CurrentId` are logical runtime IDs. `Sleep(int)`
+parks for a non-negative millisecond duration; `Yield()` polls and yields.
+`Mutex.Lock`/`Unlock` provide recursive exclusion and release/acquire publication;
+pair them with `finally`. A thread must release every mutex before exiting.
+`AtomicInt` has zero/value constructors, a synchronized `Value` property,
+`Increment`, `Decrement`, `Exchange`, and `CompareExchange(value, comparand)`.
+Atomic adjustments wrap in the 32-bit representation. Mutable collections and
+application fields need explicit synchronization.
+
+Generated functions and supported loops cooperate with stop-the-world GC.
+Native callers attach before managed entry, park for native-only blocking waits,
+and root retained managed values. Foreign callback scope/root ownership and the
+future task-worker contracts are specified in
+[`threading-gc-design.md`](../../cxcore/docs/threading-gc-design.md).
+
 ## Implementation-defined behavior and current limits
 
 CX currently targets C11 runtimes on Windows (MSVC, x86/x64) and Linux (GCC,
@@ -569,16 +671,22 @@ a portable CX guarantee. String data is UTF-8; `char` represents a 32-bit
 Unicode scalar, while several `Char` classification helpers are ASCII-only.
 
 The `cxcore` managed-memory collector is non-moving and conservative. It supports
-one OS thread per process; native C static roots that retain managed pointers
-must be registered, and dynamically unloading a module that registered roots is
+registered OS threads with cooperative safepoints; native C storage retaining
+managed pointers must be rooted, and dynamically unloading a module with static roots is
 unsupported. See the linked runtime contracts and managed-memory design for
 ownership, `Memory.Free`, and rooting rules.
 
-The current compiler gaps include reflection-based delegate APIs, `async`/`await`,
-concept features outside the operator-, method-, and property-accessor-based
+Function values expose `Method` and `Target` and support `DynamicInvoke` for the
+documented concrete signatures; see
+[`delegate-reflection-design.md`](delegate-reflection-design.md) and
+[`delegate-dynamic-invoke-design.md`](delegate-dynamic-invoke-design.md). Current
+compiler gaps include `async`/`await`, concept features outside the
+operator-, method-, and property-accessor-based
 generic subset in
 [`concepts-design.md`](concepts-design.md), and the unsupported extension
-target and member forms described above. An associated-types direction is
+target and member forms described above. Broader generic function bodies,
+closed layouts, and runtime-loaded generic types remain limited to the subsets
+described above. An associated-types direction is
 recorded only as a suggestion in
 [`associated-types-design.md`](associated-types-design.md); it has not been adopted.
 Concept-constrained `void` bodies can
@@ -615,12 +723,19 @@ explicitly typed or inferred matching generic local followed by matching local
 copies or reassignments, or returning the element from `Get(uint)` on a matching
 `T[]` or `Array<T>` parameter, reading its length, and comparing a
 matching generic array's length with a non-negative integer literal
-(with or without a `u` suffix) or `uint` parameter, assigning a matching value to one indexed element or
+(with or without a `u` suffix) or `uint` parameter, or comparing the lengths of
+two matching generic arrays using `T[]` and `Array<T>` spellings, including
+nested array access. A length may also be compared with an unsigned arithmetic
+expression over `uint` parameters and non-negative integer literals using
+`+`, `-`, `*`, `/`, or `%`; assigning a matching value to one indexed element or
 copying one indexed element between matching generic array parameters,
 constructing and filling a matching generic array, comparing a reference-constrained
 generic value or matching generic array with `null`, and copying a matching
 generic array with the documented indexed `for` or `while` loop, or a `foreach`
-over the source array. Jagged array
+over the source array. A generic `void` function or non-static method may also
+forward one call to another generic `void` function or method when at least one
+direct argument carries a caller type parameter; exact specializations and
+primary fallback are selected for each closed caller type. Jagged array
 types preserve all array ranks, and allocation supports trailing unsized ranks
 such as `new int[1][]`. Generic functions may return, assign, or copy nested
 array elements, read a
@@ -632,7 +747,12 @@ types. Closed generic layouts may also contain concrete primitive, reference,
 enum, or array fields, and non-generic or closed constructed generic structs
 stored by value. Closed generic reference layouts also support concrete
 primitive, array, and non-generic struct fields, including matching constructor
-parameter assignments and direct-field properties. They may derive from one
+parameter assignments and direct-field properties. They may also store a
+constructed interface field such as `IEqualityComparer<TKey>` and initialize
+it from a matching constructor parameter; mixed constructors may initialize
+concrete array fields with `uint` literals or supported built-in expressions
+over constructor parameters and literals. These interface fields keep the
+existing `cx_iface_ref` representation. They may derive from one
 generic or non-generic base class when the base hierarchy uses only inherited
 `System.Object` virtual slots and no interfaces. Each closed class in that
 hierarchy must satisfy the shared-reference-layout constraints, and forwarded
@@ -679,9 +799,45 @@ type. Methods with concrete return types may use the same `if`/`else` shape when
 each branch returns a supported built-in expression over concrete fields,
 parameters, and literals; direct calls, constructed-interface thunks, and
 interface-constrained generic calls are supported.
-Initializers with calls, variable references, object creation, overloaded operators, and other
-generic-typed field initializers remain unsupported. Broader accessor bodies and
-layouts remain limited. Instance field
+Method calls, variable references other than the earlier concrete fields
+described below, overloaded operators, and other generic-typed field
+initializers remain unsupported. A closed generic reference
+class may initialize a concrete non-generic class field with a parameterless
+`new` expression, or a concrete field with a constructed generic class or
+struct `new` expression whose arguments are literals or supported built-in
+expressions over earlier concrete fields. A constructed target may use
+the owner's type parameters; the target and constructor close separately for
+each closed owner. Reference and value initializers run before the owner
+constructor body; see
+[`generic-constructed-field-initializer-design.md`](generic-constructed-field-initializer-design.md).
+Closed generic reference classes may also initialize an array field whose
+element is a constructed generic class or struct type such as `Box<T>[]` or
+`Pair<T>[]`; the element type arguments close separately for each owner, and
+struct elements require a supported closed value layout. A constructor may
+allocate the same array shape using a supported `uint` length expression over
+its parameters and literals. Non-generic static fields may also allocate arrays
+in the module initializer; see
+[`static-array-field-initializers-design.md`](static-array-field-initializers-design.md)
+and [`generic-array-field-initializer-design.md`](generic-array-field-initializer-design.md).
+An explicit constructor in a closed generic struct may also initialize an
+array field whose element type is concrete, the owner type parameter, or a
+supported constructed generic type. The allocation uses the closed element
+size; `default` struct values remain zero-initialized. See
+[`generic-struct-array-initializers-design.md`](generic-struct-array-initializers-design.md).
+Closed generic field initializers may also read earlier concrete instance fields
+in declaration order; self, forward, static, and generic-field references are
+outside that subset. See
+[`generic-field-initializer-order-design.md`](generic-field-initializer-order-design.md).
+An initializer may call a non-generic instance method through an earlier
+concrete reference field when the method signature and arguments are concrete;
+the earlier field is initialized before the call. Calls through other receiver
+forms are outside this subset. The same design note describes this boundary.
+They may also allocate concrete array fields, or `T[]` fields where `T` is an
+owner type parameter, with a `uint` literal length or a supported built-in
+expression over earlier concrete fields and literals; each owner gets its own
+storage with the closed element size. See
+[`generic-array-field-initializer-design.md`](generic-array-field-initializer-design.md).
+Broader accessor bodies and layouts remain limited. Instance field
 initializers may use expressions and are evaluated in the constructor after base
 initialization. Static field initializers may use expressions; dynamic values
 are assigned during module initialization after referenced modules initialize
@@ -689,3 +845,65 @@ and before the executable entry point. Within a module, initializers follow the
 deterministic generated type order and each type's field declaration order.
 Consult compiler diagnostics and tests for the exact supported subset of each
 feature.
+
+## Native C interoperability and UTF-16
+
+`@Name` annotations use exact type names and positional/named constant constructor
+arguments. Named annotation arguments use `name = value`; ordinary calls retain
+`name: value`. User annotations derive from `System.Annotation`; AnnotationUsage
+defines targets and repeatability. `@return:Tag` targets a function result.
+Annotations are compile-time metadata; compilation never executes constructors.
+
+`System.Interop.NativeImport` selects a foreign C symbol on a nongeneric extern
+top-level function/static method. Plain extern retains the CX ABI. Native signatures
+use scalars, typed pointers, checked native records and native function pointers;
+managed values are not automatically marshaled. Raw calls require an unsafe
+function or `unsafe { ... }` block. SDK declarations validate signatures and layout.
+
+```cx
+import System.Interop;
+@NativeImport("kernel32", entryPoint = "GetTickCount",
+    callingConvention = NativeCallingConvention.Winapi)
+public extern uint TickCount();
+public uint Elapsed() { unsafe { return TickCount(); } }
+```
+
+Declare the logical library in `native_libraries` in the project. Target CMake
+selects OS, architecture and compiler settings. Supported ABIs are MSVC Windows
+x86/x64 and GCC/Clang Linux x64. Cdecl, Stdcall, Winapi and PlatformDefault are
+explicit; SDK-backed PlatformDefault honors the SDK convention. Optional errno
+and Windows last-error capture happens immediately after the call.
+
+`ptr<T>` preserves the pointee; `ptr<const T>` differs from `const ptr<T>`.
+Null, address-of native locals, dereference/indexing, pointer-to-pointer parameters
+and explicit conversions require unsafe operations. `ptr<const void>` is a
+read-only void borrow. CLong/CULong, SizeT, PtrDiffT and IntPtr/UIntPtr map to target
+C scalars; CX long remains 64-bit. NativeType uses SDK records/scalars/opaque types;
+opaque types are legal through pointers only. NativeLayout supports sequential and
+union storage, packing, alignment, checked offsets and inline `T[count]` fields.
+Native enums have explicit underlying types. sizeof/alignof/offsetof query native
+storage; stackalloc<T>(count) allocates aligned caller storage, limited to 1 MiB.
+Known stack borrows cannot escape or enter a parked blocking native call.
+
+`wchar` is an unsigned 16-bit UTF-16 code unit, distinct from scalar `char` and C
+wchar_t. Out-of-range constant conversions are diagnosed. WideString is immutable:
+Length/Item use code units, ScalarCount/ScalarAt use validated scalars. Embedded
+zeros are preserved. String.ToWideString and WideString.ToString explicitly and
+strictly transcode; ToString overrides Object.ToString. EncodingException.Position
+reports the failing byte/unit. No implicit conversion or automatic native marshaling
+exists. NativeBuffer makes owned UTF-8/UTF-16 copies and length-based output strings;
+Dispose is explicit. AllocateAligned supports records with stronger alignment.
+
+NativeFunction delegates contain a single typed native function pointer. Static
+noncapturing CX functions convert to guarded callback entries. Captured callbacks
+use NativeCallback.Register<T> with an explicit native context parameter and rooted
+registration. Unregister runs SDK cleanup and waits for in-flight callbacks.
+Exceptions produce an ABI-valid failure result and are available through callback
+failure APIs. Foreign threads attach to the GC; blocking imports support reentry.
+NativeLibrary.Load/Resolve<T> provide explicit runtime discovery, with libraries
+kept open until process exit. Symbol-only function values differ from data pointers.
+
+The complete ownership, dependency and callback contract is in
+`../../cxcore/docs/native-interop-design.md`; SDK binding examples are in
+`../../examples/native-bindings`. C varargs, C++/COM, automatic marshaling/header
+generation, unloading and runtime annotation reflection remain later features.

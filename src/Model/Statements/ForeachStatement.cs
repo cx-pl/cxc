@@ -13,6 +13,7 @@ public sealed class ForeachStatement : StatementBase
     public TypeBase? VariableType { get; private set; }
     public LocalVariableSymbol? VariableSymbol { get; private set; }
     public LocalVariableSymbol? EnumeratorSymbol { get; private set; }
+    public bool IsStringIteration { get; private set; }
     public InvocationExpression? GetEnumeratorInvocation { get; private set; }
     public InvocationExpression? MoveNextInvocation { get; private set; }
     public ExpressionBase? CurrentExpression { get; private set; }
@@ -33,6 +34,13 @@ public sealed class ForeachStatement : StatementBase
     {
         VariableType = type;
         VariableSymbol = symbol;
+    }
+
+    public void BindString(TypeBase variableType, LocalVariableSymbol variableSymbol)
+    {
+        VariableType = variableType;
+        VariableSymbol = variableSymbol;
+        IsStringIteration = true;
     }
 
     public void BindEnumerator(

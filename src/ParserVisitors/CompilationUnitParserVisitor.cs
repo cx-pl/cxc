@@ -16,6 +16,12 @@ public class CompilationUnitParserVisitor : CxParserBaseVisitor<CompilationConte
         compilationContext = new CompilationContext();
     }
 
+    public override CompilationContext VisitCompilationUnit([NotNull] CxParser.CompilationUnitContext context)
+    {
+        base.VisitCompilationUnit(context);
+        return compilationContext;
+    }
+
     public override CompilationContext VisitImportStatement([NotNull] CxParser.ImportStatementContext context)
     {
         var importName = new QualifiedIdentifierContextVisitor().Visit(context.qualifiedIdentifier());
@@ -72,11 +78,7 @@ public class CompilationUnitParserVisitor : CxParserBaseVisitor<CompilationConte
         var genericTypeNames = new GenericParamsParserVisitor()
             .VisitGenericTypeParameters(context.genericTypeParameters());
         var targetType = GenericTypeSubstitution.BindParameters(
-            NamedType.CreateWithTypeArguments(
-                context.target.GetText(),
-                context.genericTypeArguments() is { } typeArguments
-                    ? new GenericTypeArgumentsParserVisitor().VisitGenericTypeArguments(typeArguments)
-                    : []),
+            new TypeNameContextVisitor().Visit(context.target),
             genericTypeNames);
         var declaration = new AliasDeclaration(
             context.Identifier().GetText(),

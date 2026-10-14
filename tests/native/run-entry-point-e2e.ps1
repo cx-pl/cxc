@@ -33,6 +33,7 @@ try {
 import System;
 
 public delegate int SpecializationTransform(int value);
+public delegate int StateTransform(int state, int value);
 public extension IntArrayExtensions : int[] {
     public uint Count { const get => this.Length; }
     public uint operator +(int[] other) const {
@@ -83,6 +84,14 @@ public class GenericArrayStorage<T> {
     public T Get(uint index) const { return _items[index]; }
     public void Set(uint index, T value) { _items[index] = value; }
 }
+public struct GenericStructArrayInitializer<T> {
+    public uint Capacity = 2u;
+    public T[] Values = new T[Capacity + 1u];
+    public ArrayBox<T>[] Boxes = new ArrayBox<T>[2u];
+    public ConstructedValueArrayPair<T>[] Pairs =
+        new ConstructedValueArrayPair<T>[2u];
+    public constructor() {}
+}
 public extension GenericJaggedArrayExtensions<T> : T[][] {
     public T GetFirstNestedElement() const { return this[0][0]; }
     public uint operator +(T[][] other) const {
@@ -90,6 +99,25 @@ public extension GenericJaggedArrayExtensions<T> : T[][] {
     }
 }
 public class ArrayBox<T> { public T Value; }
+public class ConstructedGenericArrayHolder<T> {
+    public ArrayBox<T>[] Initial = new ArrayBox<T>[2u];
+    public ArrayBox<T>[] Created;
+    public constructor(uint length) {
+        Created = new ArrayBox<T>[length];
+    }
+}
+public struct ConstructedValueArrayPair<T> {
+    public T Value;
+    public constructor(T value) { Value = value; }
+}
+public class ConstructedValueArrayHolder<T> {
+    public ConstructedValueArrayPair<T>[] Initial =
+        new ConstructedValueArrayPair<T>[2u];
+    public ConstructedValueArrayPair<T>[] Created;
+    public constructor(uint length) {
+        Created = new ConstructedValueArrayPair<T>[length];
+    }
+}
 public extension ConstructedArrayExtensions<T> : ArrayBox<T>[] {
     public ArrayBox<T> GetFirstBox() const { return this[0]; }
 }
@@ -129,6 +157,36 @@ public int Step <int>(int value) {
     return Step(value - 1);
 }
 public int RunRecursiveSpecialization() { return Step(3); }
+public interface IVoidForwardStore { void Touch(); }
+public class SpecializedVoidForwardStore : IVoidForwardStore {
+    public int Value;
+    public void Touch() { Value += 1; }
+    public void TouchSpecialized() { Value += 10; }
+}
+public class PrimaryVoidForwardStore : IVoidForwardStore {
+    public int Value;
+    public void Touch() { Value += 1; }
+}
+public void WriteForwarded<T>(T value) where T : IVoidForwardStore {
+    value.Touch();
+}
+public void WriteForwarded<SpecializedVoidForwardStore>(
+    SpecializedVoidForwardStore value) {
+    value.TouchSpecialized();
+}
+public class VoidForwarder {
+    public void ForwardWrite<T>(T value) where T : IVoidForwardStore {
+        WriteForwarded(value);
+    }
+}
+public int RunGenericVoidForwarding() {
+    SpecializedVoidForwardStore specialized = new SpecializedVoidForwardStore();
+    PrimaryVoidForwardStore primary = new PrimaryVoidForwardStore();
+    VoidForwarder forwarder = new VoidForwarder();
+    forwarder.ForwardWrite(specialized);
+    forwarder.ForwardWrite(primary);
+    return specialized.Value == 10 && primary.Value == 1 ? 0 : 1;
+}
 public class SpecializationBox<T> {
     public int Value;
     public constructor(int value) { Value = value; }
@@ -410,6 +468,7 @@ public concept CMarkedEcho {
     T Echo<T>(T value) : T = CHasMarker;
 }
 public interface IMarker { }
+public interface IGenericVirtualAuditable { }
 public interface IBoxedStructRead { int ReadBoxedValue() const; }
 public interface IBoxedComputedScore { int Score { const get; } }
 public interface IBoxedGenericComputedScore<T> {
@@ -1981,6 +2040,32 @@ public int RunClosedGenericClassArrayMethods() {
     return ints.Get(0u);
 }
 
+public int RunClosedGenericStructArrayInitializers() {
+    GenericStructArrayInitializer<int> first =
+        new GenericStructArrayInitializer<int>();
+    GenericStructArrayInitializer<int> second =
+        new GenericStructArrayInitializer<int>();
+    GenericStructArrayInitializer<long> wide =
+        new GenericStructArrayInitializer<long>();
+    GenericStructArrayInitializer<int> zero = default;
+    if (first.Capacity != 2u || second.Capacity != 2u || wide.Capacity != 2u ||
+        first.Values.Length != 3u || second.Values.Length != 3u ||
+        wide.Values.Length != 3u || zero.Values != null ||
+        first.Boxes.Length != 2u || first.Pairs.Length != 2u ||
+        first.Boxes[0] != null || first.Pairs[0].Value != 0) return 1;
+    first.Values[0] = 42;
+    second.Values[0] = 7;
+    wide.Values[1] = 35L;
+    ArrayBox<int> box = new ArrayBox<int>();
+    box.Value = 40;
+    first.Boxes[0] = box;
+    first.Pairs[1] = new ConstructedValueArrayPair<int>(2);
+    if (first.Values[0] != 42 || second.Values[0] != 7 ||
+        wide.Values[1] != 35L || first.Boxes[0].Value != 40 ||
+        first.Pairs[1].Value != 2) return 2;
+    return 42;
+}
+
 public int RunGenericConstructorExpression() {
     ConstructorExpressionPair<int> pair = new ConstructorExpressionPair<int>(40, 1);
     return pair.Value + pair.Count;
@@ -2005,6 +2090,49 @@ public int RunConstructedGenericArrayExtension() {
     ArrayBox<int>[] values = new ArrayBox<int>[1];
     values[0] = box;
     return values.GetFirstBox().Value;
+}
+
+public int RunConstructedGenericArrayOwner() {
+    ConstructedGenericArrayHolder<int> ints =
+        new ConstructedGenericArrayHolder<int>(3u);
+    ConstructedGenericArrayHolder<long> longs =
+        new ConstructedGenericArrayHolder<long>(5u);
+    if (ints.Initial.Length != 2u || ints.Created.Length != 3u ||
+        longs.Initial.Length != 2u || longs.Created.Length != 5u)
+        return 1;
+    if (ints.Initial[0] != null || longs.Initial[0] != null) return 2;
+
+    ArrayBox<int> initialItem = new ArrayBox<int>();
+    initialItem.Value = 40;
+    ints.Initial[0] = initialItem;
+    ArrayBox<int> createdItem = new ArrayBox<int>();
+    createdItem.Value = 2;
+    ints.Created[2] = createdItem;
+    if (ints.Initial[0].Value + ints.Created[2].Value != 42) return 3;
+    if (longs.Initial[0] != null || longs.Created[2] != null) return 4;
+    return 42;
+}
+
+public int RunConstructedGenericValueArrayOwner() {
+    ConstructedValueArrayHolder<int> ints =
+        new ConstructedValueArrayHolder<int>(3u);
+    ConstructedValueArrayHolder<long> longs =
+        new ConstructedValueArrayHolder<long>(4u);
+    if (ints.Initial.Length != 2u || ints.Created.Length != 3u ||
+        longs.Initial.Length != 2u || longs.Created.Length != 4u)
+        return 1;
+    if (ints.Initial[0].Value != 0 || ints.Initial[1].Value != 0 ||
+        longs.Initial[0].Value != 0L || longs.Initial[1].Value != 0L)
+        return 2;
+
+    ints.Initial[0] = new ConstructedValueArrayPair<int>(40);
+    ints.Initial[1] = new ConstructedValueArrayPair<int>(2);
+    longs.Created[0] = new ConstructedValueArrayPair<long>(7L);
+    longs.Created[1] = new ConstructedValueArrayPair<long>(9L);
+    if (ints.Initial[0].Value + ints.Initial[1].Value != 42) return 3;
+    if (longs.Created[0].Value + longs.Created[1].Value != 16L) return 4;
+    if (longs.Created[2].Value != 0L || longs.Created[3].Value != 0L) return 5;
+    return 42;
 }
 
 public int RunMultipleGenericArrayExtension() {
@@ -2322,8 +2450,361 @@ public int RunBoxedGenericInterface() {
     return value.ReadGenericValue();
 }
 
+public class GenericVirtualDispatchBase {
+    public virtual T Transform<T>(T value) { return value; }
+}
+public class GenericVirtualDispatchDerived : GenericVirtualDispatchBase {
+    public override U Transform<U>(U value) { return value; }
+    public override int Transform<int>(int value) { return value + 10; }
+}
+public class GenericVirtualDispatchGenericDerived<TState> : GenericVirtualDispatchBase {
+    public TState State;
+}
+public class GenericVirtualOwnerBase<TState> {
+    public virtual U Transform<U>(U value) { return value; }
+}
+public class GenericVirtualOwnerDerived<TState> : GenericVirtualOwnerBase<TState> {
+    public override U Transform<U>(U value) { return value; }
+    public override int Transform<int>(int value) { return value + 90; }
+}
+public class GenericVirtualDispatchConstraintBase {
+    public virtual T EchoReference<T>(T value) where T : class { return value; }
+}
+public class GenericVirtualDispatchConstraintDerived :
+    GenericVirtualDispatchConstraintBase {
+    public override U EchoReference<U>(U value) where U : class { return value; }
+    public override string EchoReference<string>(string value) {
+        return value + "!";
+    }
+}
+public interface IGenericVirtualDispatch {
+    T Transform<T>(T value);
+}
+public interface IGenericVirtualDispatchChild : IGenericVirtualDispatch { }
+public interface IGenericVirtualDispatchRedeclared : IGenericVirtualDispatch {
+    T Transform<T>(T value);
+    T Transform<T>(T value, int offset);
+}
+public interface IGenericVirtualDispatchGrandchild : IGenericVirtualDispatchChild { }
+public interface IGenericVirtualDiamondLeft : IGenericVirtualDispatch {
+    T Transform<T>(T value);
+}
+public interface IGenericVirtualDiamondRight : IGenericVirtualDispatch {
+    T Transform<T>(T value);
+}
+public interface IGenericVirtualDiamond :
+    IGenericVirtualDiamondLeft, IGenericVirtualDiamondRight { }
+public interface IGenericVirtualDispatchReference {
+    T EchoReference<T>(T value) where T : class;
+}
+public interface IGenericVirtualDispatchState<TState> {
+    U TransformState<U>(TState state, U value);
+}
+public class GenericVirtualDispatchInterfaceImpl : IGenericVirtualDispatch {
+    public T Transform<T>(T value) { return value; }
+    public int Transform<int>(int value) { return value + 20; }
+}
+public class GenericVirtualDispatchInheritedInterfaceImpl :
+    IGenericVirtualDispatchChild {
+    public T Transform<T>(T value) { return value; }
+    public int Transform<int>(int value) { return value + 50; }
+}
+public class GenericVirtualDispatchRedeclaredInterfaceImpl :
+    IGenericVirtualDispatchRedeclared {
+    public T Transform<T>(T value) { return value; }
+    public int Transform<int>(int value) { return value + 55; }
+    public T Transform<T>(T value, int offset) { return value; }
+    public int Transform<int>(int value, int offset) {
+        return value + offset + 100;
+    }
+}
+public class GenericVirtualDispatchDeepInterfaceImpl :
+    IGenericVirtualDispatchGrandchild {
+    public T Transform<T>(T value) { return value; }
+    public int Transform<int>(int value) { return value + 60; }
+}
+public class GenericVirtualDispatchDiamondInterfaceImpl :
+    IGenericVirtualDiamond {
+    public T Transform<T>(T value) { return value; }
+    public int Transform<int>(int value) { return value + 70; }
+}
+public class GenericVirtualDispatchReferenceImpl : IGenericVirtualDispatchReference {
+    public T EchoReference<T>(T value) where T : class { return value; }
+    public string EchoReference<string>(string value) { return value + "!"; }
+}
+public class GenericVirtualDispatchReferenceFallback { }
+public class GenericVirtualMarker : IMarker, IGenericVirtualAuditable { public int Value; }
+public class GenericVirtualMarkerFallback : IMarker, IGenericVirtualAuditable { public int Value; }
+public class GenericVirtualMultiMarker : IMarker, IGenericVirtualAuditable {
+    public int Value;
+}
+public class GenericVirtualMultiMarkerFallback : IMarker, IGenericVirtualAuditable {
+    public int Value;
+}
+public struct GenericVirtualStructMarker : IMarker { public int Value; }
+public struct GenericVirtualStructMarkerFallback : IMarker { public int Value; }
+public class GenericVirtualCombinedConstraintBase {
+    public virtual T TransformCombined<T>(T value)
+        where T : class, IMarker, IGenericVirtualAuditable {
+        return value;
+    }
+}
+public class GenericVirtualCombinedConstraintDerived :
+    GenericVirtualCombinedConstraintBase {
+    public override U TransformCombined<U>(U value)
+        where U : class, IMarker, IGenericVirtualAuditable {
+        return value;
+    }
+    public override GenericVirtualMarker TransformCombined<GenericVirtualMarker>(
+        GenericVirtualMarker value) {
+        value.Value += 20;
+        return value;
+    }
+}
+public class GenericVirtualStructConstraintBase {
+    public virtual T TransformValue<T>(T value) where T : struct { return value; }
+}
+public class GenericVirtualStructConstraintDerived :
+    GenericVirtualStructConstraintBase {
+    public override U TransformValue<U>(U value) where U : struct { return value; }
+    public override int TransformValue<int>(int value) { return value + 30; }
+}
+public interface IGenericVirtualMarkerTransform {
+    T TransformMarker<T>(T value) where T : IMarker;
+}
+public class GenericVirtualMarkerTransformImpl : IGenericVirtualMarkerTransform {
+    public T TransformMarker<T>(T value) where T : IMarker { return value; }
+    public GenericVirtualMarker TransformMarker<GenericVirtualMarker>(
+        GenericVirtualMarker value) {
+        value.Value += 1;
+        return value;
+    }
+}
+public interface IGenericVirtualCombinedConstraintTransform {
+    T TransformCombined<T>(T value) where T : class, IMarker;
+}
+public class GenericVirtualCombinedConstraintTransformImpl :
+    IGenericVirtualCombinedConstraintTransform {
+    public T TransformCombined<T>(T value) where T : class, IMarker { return value; }
+    public GenericVirtualMarker TransformCombined<GenericVirtualMarker>(
+        GenericVirtualMarker value) {
+        value.Value += 10;
+        return value;
+    }
+}
+public interface IGenericVirtualMultiConstraintTransform {
+    T TransformMany<T>(T value)
+        where T : class, IMarker, IGenericVirtualAuditable;
+}
+public class GenericVirtualMultiConstraintTransformImpl :
+    IGenericVirtualMultiConstraintTransform {
+    public T TransformMany<T>(T value)
+        where T : class, IMarker, IGenericVirtualAuditable { return value; }
+    public GenericVirtualMultiMarker TransformMany<GenericVirtualMultiMarker>(
+        GenericVirtualMultiMarker value) {
+        value.Value += 5;
+        return value;
+    }
+}
+public interface IGenericVirtualStructConstraintTransform {
+    T TransformStruct<T>(T value) where T : struct, IMarker;
+}
+public class GenericVirtualStructConstraintTransformImpl :
+    IGenericVirtualStructConstraintTransform {
+    public T TransformStruct<T>(T value) where T : struct, IMarker { return value; }
+    public GenericVirtualStructMarker TransformStruct<GenericVirtualStructMarker>(
+        GenericVirtualStructMarker value) {
+        value.Value += 7;
+        return value;
+    }
+}
+public interface IGenericVirtualValueTransform {
+    T TransformValue<T>(T value) where T : struct;
+}
+public class GenericVirtualValueTransformImpl : IGenericVirtualValueTransform {
+    public T TransformValue<T>(T value) where T : struct { return value; }
+    public int TransformValue<int>(int value) { return value + 1; }
+}
+public class GenericVirtualDispatchConstructedInterfaceImpl :
+    IGenericVirtualDispatchState<int> {
+    public U TransformState<U>(int state, U value) { return value; }
+    public int TransformState<int>(int state, int value) {
+        return state + value + 30;
+    }
+}
+public class GenericVirtualDispatchGenericInterfaceImpl<TState> :
+    IGenericVirtualDispatchState<TState> {
+    public U TransformState<U>(TState state, U value) { return value; }
+    public int TransformState<int>(TState state, int value) { return value + 40; }
+}
+public T ForwardGenericVirtual<T>(GenericVirtualDispatchBase receiver, T value) {
+    return receiver.Transform(value);
+}
+public T ForwardGenericVirtualWithInferredAlias<T>(
+    bool dispatch, IGenericVirtualDispatch receiver, T value) {
+    var forwarded = value;
+    if (dispatch) { return receiver.Transform(forwarded); }
+    else { return forwarded; }
+}
+public T ForwardGenericVirtualThroughLocal<T>(
+    GenericVirtualDispatchBase receiver, T value) {
+    T result = receiver.Transform(value);
+    return result;
+}
+public T ForwardGenericInterface<T>(IGenericVirtualDispatch receiver, T value) {
+    return receiver.Transform(value);
+}
+public T ForwardGenericConstructedInterface<T>(
+    IGenericVirtualDispatchState<int> receiver, int state, T value) {
+    return receiver.TransformState(state, value);
+}
+public T ForwardConstrainedGenericInterface<TReceiver, T>(
+    TReceiver receiver, T value)
+    where TReceiver : IGenericVirtualDispatchState<int> {
+    return receiver.TransformState(1, value);
+}
+public int RunGenericVirtualDispatch() {
+    GenericVirtualDispatchBase derived = new GenericVirtualDispatchDerived();
+    if (derived.Transform(2) != 12) return 1;
+    if (derived.Transform(11L) != 11L) return 2;
+    SpecializationTransform classMethodValue = derived.Transform;
+    if (classMethodValue(3) != 13) return 11;
+    if (classMethodValue.Method.Name != "Transform") return 12;
+    GenericVirtualDispatchBase baseValue = new GenericVirtualDispatchBase();
+    if (baseValue.Transform(2) != 2) return 3;
+    GenericVirtualDispatchBase genericString =
+        new GenericVirtualDispatchGenericDerived<string>();
+    if (genericString.Transform(3) != 3) return 4;
+    if (ForwardGenericVirtual(genericString, 14) != 14) return 5;
+    if (ForwardGenericVirtual(genericString, "forwarded").Length != 9u) return 6;
+    GenericVirtualOwnerBase<string> closedOwner =
+        new GenericVirtualOwnerDerived<string>();
+    if (closedOwner.Transform(2) != 92) return 47;
+    if (closedOwner.Transform(11L) != 11L) return 48;
+    if (ForwardGenericVirtualThroughLocal(derived, 5) != 15) return 22;
+    GenericVirtualDispatchConstraintBase constrainedBase =
+        new GenericVirtualDispatchConstraintDerived();
+    if (constrainedBase.EchoReference("base") != "base!") return 35;
+    GenericVirtualDispatchReferenceFallback constraintFallback =
+        new GenericVirtualDispatchReferenceFallback();
+    if (constrainedBase.EchoReference(constraintFallback) != constraintFallback)
+        return 36;
+    GenericVirtualCombinedConstraintBase combinedConstraintBase =
+        new GenericVirtualCombinedConstraintDerived();
+    GenericVirtualMarker combinedExact = new GenericVirtualMarker();
+    if (combinedConstraintBase.TransformCombined(combinedExact).Value != 20)
+        return 37;
+    GenericVirtualMarkerFallback combinedFallback =
+        new GenericVirtualMarkerFallback();
+    if (combinedConstraintBase.TransformCombined(combinedFallback) != combinedFallback)
+        return 38;
+    GenericVirtualStructConstraintBase structConstraintBase =
+        new GenericVirtualStructConstraintDerived();
+    if (structConstraintBase.TransformValue(7) != 37) return 39;
+    if (structConstraintBase.TransformValue(7L) != 7L) return 40;
+    IGenericVirtualDispatch interfaceValue = new GenericVirtualDispatchInterfaceImpl();
+    if (interfaceValue.Transform(2) != 22) return 7;
+    if (interfaceValue.Transform(11L) != 11L) return 8;
+    if (ForwardGenericVirtualWithInferredAlias(true, interfaceValue, 2) != 22)
+        return 49;
+    if (ForwardGenericVirtualWithInferredAlias(false, interfaceValue, 11L) != 11L)
+        return 50;
+    SpecializationTransform interfaceMethodValue = interfaceValue.Transform;
+    if (interfaceMethodValue(4) != 24) return 13;
+    if (interfaceMethodValue.Method.Name != "Transform") return 14;
+    IGenericVirtualDispatchRedeclared redeclaredInterface =
+        new GenericVirtualDispatchRedeclaredInterfaceImpl();
+    if (redeclaredInterface.Transform(2) != 57) return 45;
+    if (redeclaredInterface.Transform(11L) != 11L) return 46;
+    if (redeclaredInterface.Transform(2, 3) != 105) return 47;
+    if (redeclaredInterface.Transform(11L, 3) != 11L) return 48;
+    IGenericVirtualDispatchGrandchild deepInterface =
+        new GenericVirtualDispatchDeepInterfaceImpl();
+    if (deepInterface.Transform(2) != 62) return 41;
+    if (deepInterface.Transform(11L) != 11L) return 42;
+    IGenericVirtualDiamond diamondInterface =
+        new GenericVirtualDispatchDiamondInterfaceImpl();
+    if (diamondInterface.Transform(2) != 72) return 43;
+    if (diamondInterface.Transform(11L) != 11L) return 44;
+    IGenericVirtualDispatchState<int> constructedInterface =
+        new GenericVirtualDispatchConstructedInterfaceImpl();
+    if (constructedInterface.TransformState(1, 2) != 33) return 15;
+    if (ForwardGenericConstructedInterface(constructedInterface, 1, 2) != 33)
+        return 20;
+    StateTransform constructedInterfaceMethodValue =
+        constructedInterface.TransformState;
+    if (constructedInterfaceMethodValue(1, 4) != 35) return 16;
+    if (constructedInterfaceMethodValue.Method.Name != "TransformState") return 17;
+    IGenericVirtualDispatchState<int> genericClassInterface =
+        new GenericVirtualDispatchGenericInterfaceImpl<int>();
+    if (genericClassInterface.TransformState(2, 2) != 42) return 18;
+    if (ForwardGenericConstructedInterface(genericClassInterface, 2, 3L) != 3L)
+        return 21;
+    StateTransform genericClassMethodValue = genericClassInterface.TransformState;
+    if (genericClassMethodValue(2, 3) != 43) return 19;
+    if (ForwardConstrainedGenericInterface(genericClassInterface, 42) != 82)
+        return 25;
+    if (ForwardConstrainedGenericInterface(genericClassInterface, 3L) != 3L)
+        return 26;
+    if (ForwardGenericInterface(interfaceValue, 3) != 23) return 9;
+    if (ForwardGenericInterface(interfaceValue, 12L) != 12L) return 10;
+    IGenericVirtualDispatchChild inheritedInterface =
+        new GenericVirtualDispatchInheritedInterfaceImpl();
+    if (inheritedInterface.Transform(2) != 52) return 23;
+    if (inheritedInterface.Transform(11L) != 11L) return 24;
+    IGenericVirtualDispatchReference referenceInterface =
+        new GenericVirtualDispatchReferenceImpl();
+    if (referenceInterface.EchoReference("seed") != "seed!") return 27;
+    GenericVirtualDispatchReferenceFallback referenceFallback =
+        new GenericVirtualDispatchReferenceFallback();
+    if (referenceInterface.EchoReference(referenceFallback) != referenceFallback)
+        return 28;
+    IGenericVirtualMarkerTransform markerTransform =
+        new GenericVirtualMarkerTransformImpl();
+    GenericVirtualMarker marker = new GenericVirtualMarker();
+    marker.Value = 40;
+    if (markerTransform.TransformMarker(marker).Value != 41) return 29;
+    GenericVirtualMarkerFallback markerFallback =
+        new GenericVirtualMarkerFallback();
+    markerFallback.Value = 42;
+    if (markerTransform.TransformMarker(markerFallback) != markerFallback ||
+        markerFallback.Value != 42) return 30;
+    IGenericVirtualCombinedConstraintTransform combinedMarkerTransform =
+        new GenericVirtualCombinedConstraintTransformImpl();
+    marker.Value = 50;
+    if (combinedMarkerTransform.TransformCombined(marker).Value != 60) return 33;
+    markerFallback.Value = 51;
+    if (combinedMarkerTransform.TransformCombined(markerFallback) != markerFallback ||
+        markerFallback.Value != 51) return 34;
+    IGenericVirtualMultiConstraintTransform multiConstraintTransform =
+        new GenericVirtualMultiConstraintTransformImpl();
+    GenericVirtualMultiMarker multiMarker = new GenericVirtualMultiMarker();
+    multiMarker.Value = 60;
+    if (multiConstraintTransform.TransformMany(multiMarker).Value != 65) return 49;
+    GenericVirtualMultiMarkerFallback multiFallback =
+        new GenericVirtualMultiMarkerFallback();
+    multiFallback.Value = 61;
+    if (multiConstraintTransform.TransformMany(multiFallback) != multiFallback ||
+        multiFallback.Value != 61) return 50;
+    IGenericVirtualStructConstraintTransform structMarkerTransform =
+        new GenericVirtualStructConstraintTransformImpl();
+    GenericVirtualStructMarker structMarker = default;
+    structMarker.Value = 62;
+    if (structMarkerTransform.TransformStruct(structMarker).Value != 69) return 51;
+    GenericVirtualStructMarkerFallback structMarkerFallback = default;
+    structMarkerFallback.Value = 63;
+    if (structMarkerTransform.TransformStruct(structMarkerFallback).Value != 63)
+        return 52;
+    IGenericVirtualValueTransform valueTransform =
+        new GenericVirtualValueTransformImpl();
+    if (valueTransform.TransformValue(41) != 42) return 31;
+    if (valueTransform.TransformValue(8L) != 8L) return 32;
+    return 0;
+}
+
 public int Main(string[] args) {
     if (args.Length != 2u) return 21;
+    if (RunGenericVirtualDispatch() != 0) return 228;
     if (RunConcreteArrayExtension() != 42) return 212;
     if (RunConcreteArrayExtensionCompoundAssignment() != 42) return 221;
     if (RunConcreteArrayExtensionIncrementDecrement() != 42)
@@ -2332,14 +2813,18 @@ public int Main(string[] args) {
     if (RunGenericArrayExtension() != 42) return 213;
     if (RunGenericPropertyLocalCopy() != 42) return 219;
     if (RunClosedGenericClassArrayMethods() != 41) return 223;
+    if (RunClosedGenericStructArrayInitializers() != 42) return 227;
     if (RunGenericPropertyLocalCopyThroughInterface() != 126) return 220;
     if (RunGenericConstructorExpression() != 42) return 214;
     if (RunGenericJaggedArrayExtension() != 42) return 215;
     if (RunGenericArrayExtensionOperator() != 42) return 218;
     if (RunConstructedGenericArrayExtension() != 42) return 216;
+    if (RunConstructedGenericArrayOwner() != 42) return 224;
+    if (RunConstructedGenericValueArrayOwner() != 42) return 225;
     if (RunMultipleGenericArrayExtension() != 42) return 217;
     if (RunGenericSpecialization() != 0) return 171;
     if (RunRecursiveSpecialization() != 42) return 174;
+    if (RunGenericVoidForwarding() != 0) return 226;
     if (RunSpecializationShapes() != 31) return 175;
     if (RunGenericMethodSpecialization() != 0) return 172;
     if (RunGenericContainingTypeSpecialization() != 0) return 183;
@@ -2501,7 +2986,7 @@ public int Main(string[] args) {
     if (ConceptUtils.EchoConstrained(echoProvider, echoMarker).Value != 23) return 85;
     ConceptConstrainedEchoProvider conceptEchoProvider =
         new ConceptConstrainedEchoProvider();
-    MarkedValue markedValue;
+    MarkedValue markedValue = default;
     MarkedValue echoedMarkedValue =
         ConceptUtils.EchoConceptConstrained(conceptEchoProvider, markedValue);
     if (echoedMarkedValue.Marker != 0) return 83;
@@ -2724,7 +3209,7 @@ public int Main(string[] args) {
     OperatorBox<long> secondLongBox = new OperatorBox<long>(127L);
     OperatorBox<long> sumLongBox = firstLongBox + secondLongBox;
     if (sumLongBox.value != 127L) return 62;
-    GenericOperatorMethodBox genericOperatorMethod;
+    GenericOperatorMethodBox genericOperatorMethod = default;
     if (genericOperatorMethod + 139 != 139 ||
         genericOperatorMethod + 149L != 149L) return 71;
     GenericOperatorMethodContainer<GenericOperatorMarker> genericClassOperator =
@@ -2797,6 +3282,25 @@ public int Main(string[] args) {
     GenericReflectionPoint<int> defaultGenericReflectionPoint =
         (GenericReflectionPoint<int>)reflectedGenericPoint;
     if (defaultGenericReflectionPoint.Value != 0) return 120;
+    object genericArrayInitializerSeed =
+        new GenericStructArrayInitializer<int>();
+    TypeInfo genericArrayInitializerType = genericArrayInitializerSeed.Type;
+    object defaultGenericArrayInitializer =
+        genericArrayInitializerType.CreateInstance();
+    if (defaultGenericArrayInitializer == null ||
+        ((GenericStructArrayInitializer<int>)defaultGenericArrayInitializer).Values != null ||
+        ((GenericStructArrayInitializer<int>)defaultGenericArrayInitializer).Boxes != null ||
+        ((GenericStructArrayInitializer<int>)defaultGenericArrayInitializer).Pairs != null)
+        return 228;
+    object initializedGenericArrayInitializer =
+        genericArrayInitializerType.CreateInstance(null);
+    if (initializedGenericArrayInitializer == null ||
+        ((GenericStructArrayInitializer<int>)initializedGenericArrayInitializer)
+            .Values.Length != 3u ||
+        ((GenericStructArrayInitializer<int>)initializedGenericArrayInitializer)
+            .Boxes.Length != 2u ||
+        ((GenericStructArrayInitializer<int>)initializedGenericArrayInitializer)
+            .Pairs.Length != 2u) return 229;
     object[] genericPointArguments = new object[1];
     genericPointArguments[0] = 31;
     object constructedGenericPoint = genericReflectionPointType.CreateInstance(
@@ -3021,7 +3525,7 @@ public int Main(string[] args) {
     $collectionsOutput = Join-Path $collectionsRoot 'generated'
     New-Item -ItemType Directory -Path $collectionsSourceDirectory, $collectionsOutput -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $collectionsRoot 'collections-array.cxproj'), "name: collections_array_e2e`ntype: Executable`n", [Text.UTF8Encoding]::new($false))
-    foreach ($collectionSource in @('Array.cx', 'IEnumerable.cx', 'IEnumerator.cx')) {
+    foreach ($collectionSource in @('Array.cx', 'ICollection.cx', 'IEnumerable.cx', 'IEnumerator.cx')) {
         Copy-Item -LiteralPath (Join-Path $cxCorePath "src\System\Collections\$collectionSource") -Destination (Join-Path $collectionsSourceDirectory $collectionSource)
     }
     [IO.File]::WriteAllText((Join-Path $collectionsSourceDirectory 'main.cx'), @'
@@ -3055,9 +3559,40 @@ public T[] EchoBuiltInArray<T>(T[] values) { return values; }
 public Array<T> EchoPublicArray<T>(Array<T> values) { return values; }
 public T FirstThroughArrayApi<T>(T[] values) { return values.Get(0u); }
 public T FirstThroughPublicArrayApi<T>(Array<T> values) { return values.Get(0u); }
+public bool SameArrayLength<T>(T[] first, Array<T> second) {
+    return first.Length == second.Length;
+}
+public bool DifferentArrayLength<T>(T[] first, T[] second) {
+    return first.Length != second.Length;
+}
+public bool SameFirstNestedArrayLength<T>(T[][] first, T[][] second) {
+    return first[0].Length == second[0].Length;
+}
+public bool SameArrayLengthIfPresent<T>(T[] first, T[] second) {
+    return first != null && second != null && first.Length == second.Length;
+}
+public bool HasOffsetArrayLength<T>(T[] values, uint minimum, uint offset) {
+    return values.Length >= minimum + offset;
+}
+public bool HasScaledArrayLength<T>(T[] values, uint baseline, uint scale) {
+    return values.Length == baseline * scale;
+}
 public int Main(string[] args) {
     int[] builtinInts = new int[2];
     Array<int> publicInts = builtinInts;
+    int[] differentLengthInts = new int[3];
+    int[][] firstNested = new int[1][];
+    int[][] secondNested = new int[1][];
+    firstNested[0] = new int[2];
+    secondNested[0] = new int[2];
+    int[] missingArray = null;
+    if (!SameArrayLength(builtinInts, publicInts) ||
+        !DifferentArrayLength(builtinInts, differentLengthInts) ||
+        !SameFirstNestedArrayLength(firstNested, secondNested) ||
+        !SameArrayLengthIfPresent(builtinInts, publicInts) ||
+        SameArrayLengthIfPresent(missingArray, publicInts) ||
+        !HasOffsetArrayLength(builtinInts, 1u, 1u) ||
+        !HasScaledArrayLength(builtinInts, 1u, 2u)) return 36;
     publicInts.Set(0u, 42);
     if (builtinInts[0] != 42 || builtinInts.Get(0u) != 42) return 18;
     builtinInts.Set(0u, 45);
@@ -3086,6 +3621,7 @@ public int Main(string[] args) {
     if (!interfaceEnumerator.MoveNext() || interfaceEnumerator.Current != 102) return 33;
 
     Array<int> ints = new Array<int>(2u);
+    if (ints.Count != 2u || builtinInts.Count != 2u) return 35;
     ints.Set(0u, 17);
     ints.Set(1u, 24);
     if (ints.Length != 2u || ints.Get(0u) != 17 || ints.Get(1u) != 24) return 1;
@@ -3158,14 +3694,57 @@ public int Main(string[] args) {
     if ($LASTEXITCODE -ne 0) {
         throw "System.Collections.Array<T> native run failed (exit $LASTEXITCODE)."
     }
-    Write-Output 'PASS System.Collections.Array<T>/T[]: shared API and storage, Fill, TryCopyTo, enumeration, and closed-owner construction'
+    Write-Output 'PASS System.Collections.Array<T>/T[]: shared API and storage, matching and computed generic length comparisons, Fill, TryCopyTo, enumeration, and closed-owner construction'
+
+    $stringForeachRoot = Join-Path $buildRoot 'string-foreach'
+    $stringForeachOutput = Join-Path $stringForeachRoot 'generated'
+    New-Item -ItemType Directory -Path $stringForeachRoot, $stringForeachOutput -Force | Out-Null
+    $stringForeachSource = Join-Path $stringForeachRoot 'string_foreach.cx'
+    [IO.File]::WriteAllText($stringForeachSource, @'
+public int Main(string[] args) {
+    string text = "AÄ🙂";
+    int count = 0;
+    int sum = 0;
+    foreach (var scalar in text) { count += 1; sum += scalar; }
+    if (count != 3 || sum != 128839) return 1;
+    int emptyCount = 0;
+    foreach (char scalar in "") { emptyCount += 1; }
+    if (emptyCount != 0) return 2;
+    string nullText = null;
+    foreach (char scalar in nullText) { emptyCount += 1; }
+    if (emptyCount != 0) return 3;
+    return 0;
+}
+'@, [Text.UTF8Encoding]::new($false))
+    $stringForeachCompilerArguments = @(
+        '--compile', '--cxcore-dir', $cxCorePath, '--verbosity', 'quiet',
+        '--output-dir', $stringForeachOutput, $stringForeachSource
+    )
+    if ([IO.Path]::GetExtension($compilerPath) -ieq '.dll') {
+        & dotnet $compilerPath @stringForeachCompilerArguments
+    } else {
+        & $compilerPath @stringForeachCompilerArguments
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "String foreach native compilation failed (exit $LASTEXITCODE). Build files are in '$stringForeachRoot'."
+    }
+    $stringForeachExecutable = Get-ChildItem -LiteralPath (Join-Path $stringForeachRoot '.bin') `
+        -Filter 'string_foreach.exe' -File -Recurse | Select-Object -First 1
+    if ($null -eq $stringForeachExecutable) {
+        throw "String foreach native executable was not created. Build files are in '$stringForeachRoot'."
+    }
+    & $stringForeachExecutable.FullName
+    if ($LASTEXITCODE -ne 0) {
+        throw "String foreach native run failed (exit $LASTEXITCODE)."
+    }
+    Write-Output 'PASS string foreach: ASCII, Unicode scalar, empty-string, and null-string iteration'
 
     $listRoot = Join-Path $buildRoot 'collections-list'
     $listSourceDirectory = Join-Path $listRoot 'src'
     $listOutput = Join-Path $listRoot 'generated'
     New-Item -ItemType Directory -Path $listSourceDirectory, $listOutput -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $listRoot 'collections-list.cxproj'), "name: collections_list_e2e`ntype: Executable`n", [Text.UTF8Encoding]::new($false))
-    foreach ($collectionSource in @('Array.cx', 'IEnumerable.cx', 'IEnumerator.cx', 'List.cx')) {
+    foreach ($collectionSource in @('Array.cx', 'ICollection.cx', 'IEnumerable.cx', 'IEnumerator.cx', 'List.cx')) {
         Copy-Item -LiteralPath (Join-Path $cxCorePath "src\System\Collections\$collectionSource") -Destination (Join-Path $listSourceDirectory $collectionSource)
     }
     [IO.File]::WriteAllText((Join-Path $listSourceDirectory 'main.cx'), @'
@@ -3178,6 +3757,8 @@ public int Main(string[] args) {
     foreach (int value in values) { sum += value; }
     if (sum != 21) return 10;
     IEnumerable<int> listSequence = values;
+    ICollection<int> listCollection = values;
+    if (listCollection.Count != 6u) return 22;
     int interfaceListSum = 0;
     foreach (int value in listSequence) { interfaceListSum += value; }
     if (interfaceListSum != 21) return 21;
@@ -3199,7 +3780,7 @@ public int Main(string[] args) {
     values.RemoveAt(0u);
     if (values.Count != 5u || values.Get(0u) != 2) return 5;
     values.Clear();
-    if (values.Count != 0u || values.GetOrDefault(0u) != 0) return 6;
+    if (values.Count != 0u || listCollection.Count != 0u || values.GetOrDefault(0u) != 0) return 6;
       values.Add(7); values.Add(8);
       values.AddRange(values);
       if (values.Count != 4u || values.Get(0u) != 7 || values.Get(1u) != 8 || values.Get(2u) != 7 || values.Get(3u) != 8) return 7;
@@ -3263,7 +3844,7 @@ public int Main(string[] args) {
     $adaptersOutput = Join-Path $adaptersRoot 'generated'
     New-Item -ItemType Directory -Path $adaptersSourceDirectory, $adaptersOutput -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $adaptersRoot 'collections-adapters.cxproj'), "name: collections_adapters_e2e`ntype: Executable`n", [Text.UTF8Encoding]::new($false))
-    foreach ($collectionSource in @('Array.cx', 'IEnumerable.cx', 'IEnumerator.cx', 'List.cx', 'Stack.cx', 'Queue.cx')) {
+    foreach ($collectionSource in @('Array.cx', 'ICollection.cx', 'IEnumerable.cx', 'IEnumerator.cx', 'List.cx', 'Stack.cx', 'Queue.cx')) {
         Copy-Item -LiteralPath (Join-Path $cxCorePath "src\System\Collections\$collectionSource") -Destination (Join-Path $adaptersSourceDirectory $collectionSource)
     }
     [IO.File]::WriteAllText((Join-Path $adaptersSourceDirectory 'main.cx'), @'
@@ -3278,12 +3859,14 @@ public int Main(string[] args) {
     }
     if (expectedNumber != 0) return 6;
     IEnumerable<int> stackSequence = numbers;
+    ICollection<int> stackCollection = numbers;
+    if (stackCollection.Count != 3u) return 13;
     int stackInterfaceCount = 0;
     foreach (int number in stackSequence) { stackInterfaceCount += number; }
     if (stackInterfaceCount != 60) return 11;
-    if (numbers.Count != 3u || numbers.Peek() != 30 || numbers.Pop() != 30 || numbers.Pop() != 20 || numbers.Pop() != 10 || numbers.Count != 0u) return 1;
+    if (numbers.Count != 3u || numbers.Peek() != 30 || numbers.Pop() != 30 || numbers.Pop() != 20 || numbers.Pop() != 10 || numbers.Count != 0u || stackCollection.Count != 0u) return 1;
     numbers.Push(40); numbers.Push(50); numbers.Clear();
-    if (numbers.Count != 0u) return 9;
+    if (numbers.Count != 0u || stackCollection.Count != 0u) return 9;
 
     Stack<string> words = new Stack<string>();
     words.Push("first"); words.Push("second");
@@ -3298,12 +3881,14 @@ public int Main(string[] args) {
     }
     if (expectedValue != 4) return 8;
     IEnumerable<int> queueSequence = values;
+    ICollection<int> queueCollection = values;
+    if (queueCollection.Count != 3u) return 14;
     int queueInterfaceSum = 0;
     foreach (int value in queueSequence) { queueInterfaceSum += value; }
     if (queueInterfaceSum != 6) return 12;
-    if (values.Count != 3u || values.Peek() != 1 || values.Dequeue() != 1 || values.Dequeue() != 2 || values.Dequeue() != 3 || values.Count != 0u) return 3;
+    if (values.Count != 3u || values.Peek() != 1 || values.Dequeue() != 1 || values.Dequeue() != 2 || values.Dequeue() != 3 || values.Count != 0u || queueCollection.Count != 0u) return 3;
     values.Enqueue(4); values.Enqueue(5); values.Clear();
-    if (values.Count != 0u) return 10;
+    if (values.Count != 0u || queueCollection.Count != 0u) return 10;
 
     Queue<string> names = new Queue<string>();
     names.Enqueue("alpha"); names.Enqueue("beta");
@@ -3339,7 +3924,7 @@ public int Main(string[] args) {
     $linkedListOutput = Join-Path $linkedListRoot 'generated'
     New-Item -ItemType Directory -Path $linkedListSourceDirectory, $linkedListOutput -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $linkedListRoot 'collections-linked-list.cxproj'), "name: collections_linked_list_e2e`ntype: Executable`n", [Text.UTF8Encoding]::new($false))
-    foreach ($collectionSource in @('IEnumerable.cx', 'IEnumerator.cx', 'LinkedList.cx')) {
+    foreach ($collectionSource in @('ICollection.cx', 'IEnumerable.cx', 'IEnumerator.cx', 'LinkedList.cx')) {
         Copy-Item -LiteralPath (Join-Path $cxCorePath "src\System\Collections\$collectionSource") -Destination (Join-Path $linkedListSourceDirectory $collectionSource)
     }
     [IO.File]::WriteAllText((Join-Path $linkedListSourceDirectory 'main.cx'), @'
@@ -3354,12 +3939,14 @@ public int Main(string[] args) {
     }
     if (expected != 4) return 4;
     IEnumerable<int> linkedSequence = numbers;
+    ICollection<int> linkedCollection = numbers;
+    if (linkedCollection.Count != 3u) return 9;
     int linkedInterfaceSum = 0;
     foreach (int number in linkedSequence) { linkedInterfaceSum += number; }
     if (linkedInterfaceSum != 6) return 8;
-    if (numbers.Count != 3u || numbers.RemoveFirst() != 1 || numbers.RemoveLast() != 3 || numbers.RemoveFirst() != 2 || numbers.Count != 0u) return 1;
+    if (numbers.Count != 3u || numbers.RemoveFirst() != 1 || numbers.RemoveLast() != 3 || numbers.RemoveFirst() != 2 || numbers.Count != 0u || linkedCollection.Count != 0u) return 1;
     numbers.AddLast(4); numbers.AddLast(5); numbers.Clear();
-    if (numbers.Count != 0u) return 5;
+    if (numbers.Count != 0u || linkedCollection.Count != 0u) return 5;
     numbers.AddFirst(6);
     if (numbers.Count != 1u || numbers.RemoveFirst() != 6) return 6;
 
@@ -3399,7 +3986,7 @@ public int Main(string[] args) {
     $dictionaryOutput = Join-Path $dictionaryRoot 'generated'
     New-Item -ItemType Directory -Path $dictionarySourceDirectory, $dictionaryOutput -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $dictionaryRoot 'collections-dictionary.cxproj'), "name: collections_dictionary_e2e`ntype: Executable`n", [Text.UTF8Encoding]::new($false))
-    foreach ($collectionSource in @('Array.cx', 'IEnumerable.cx', 'IEnumerator.cx', 'IEqualityComparer.cx', 'Dictionary.cx')) {
+    foreach ($collectionSource in @('Array.cx', 'ICollection.cx', 'IEnumerable.cx', 'IEnumerator.cx', 'IEqualityComparer.cx', 'Dictionary.cx')) {
         Copy-Item -LiteralPath (Join-Path $cxCorePath "src\System\Collections\$collectionSource") -Destination (Join-Path $dictionarySourceDirectory $collectionSource)
     }
     [IO.File]::WriteAllText((Join-Path $dictionarySourceDirectory 'main.cx'), @'
@@ -3418,7 +4005,10 @@ public final class CollisionKey {
 
 public int Main(string[] args) {
     Dictionary<string, int> values = new Dictionary<string, int>();
+    ICollection<KeyValuePair<string, int>> pairCollection = values;
+    if (pairCollection.Count != 0u) return 34;
     values.Set("one", 1); values.Set("two", 2); values.Set("three", 3); values.Set("four", 4); values.Set("five", 5);
+    if (pairCollection.Count != 5u) return 35;
     if (values.Count != 5u || !values.ContainsKey("one") || values.ContainsKey("missing") || values.GetValueOrDefault("three") != 3 || values.GetValueOrDefault("missing") != 0) return 1;
     string prefix = "o";
     string equalOne = prefix + "ne";
@@ -3451,7 +4041,7 @@ public int Main(string[] args) {
     if (values.GetValueOrDefault("three") != 33 || !values.Remove("two") || values.Remove("missing") || values.Count != 4u) return 2;
     if (values.GetValueOrDefault("four") != 4 || values.GetValueOrDefault("five") != 5) return 3;
     values.Clear();
-    if (values.Count != 0u || values.ContainsKey("one") || values.GetValueOrDefault("one") != 0) return 4;
+    if (values.Count != 0u || pairCollection.Count != 0u || values.ContainsKey("one") || values.GetValueOrDefault("one") != 0) return 4;
 
     Dictionary<CollisionKey, int> colliding = new Dictionary<CollisionKey, int>();
     CollisionKey first = new CollisionKey();
@@ -3554,6 +4144,129 @@ public int Main(string[] args) {
     }
     Write-Output 'PASS System.Collections.Dictionary<TKey, TValue>: string equality, reference and value elements, null keys, TryAdd, collisions, entry foreach, and clear'
 
+    $genericFieldInitializerRoot = Join-Path $buildRoot 'generic-field-initializer'
+    $genericFieldInitializerOutput = Join-Path $genericFieldInitializerRoot 'generated'
+    New-Item -ItemType Directory -Path $genericFieldInitializerRoot, $genericFieldInitializerOutput -Force | Out-Null
+    $genericFieldInitializerSource = Join-Path $genericFieldInitializerRoot 'generic_field_initializer.cx'
+    [IO.File]::WriteAllText($genericFieldInitializerSource, @'
+public class Seed {
+    public static int Created;
+    public int Value;
+    public constructor() { Created += 1; Value = 17; }
+    public int Compute(int amount) { return Value + amount; }
+}
+public class GenericHolder<T> {
+    public Seed SeedValue = new Seed();
+    public int Computed = SeedValue.Compute(5);
+    public constructor(Seed seed) { SeedValue = seed; }
+}
+public class GenericSeed<T> {
+    public Seed Marker = new Seed();
+    public T Value;
+    public constructor(T value) { Value = value; }
+}
+public class GenericDefaultSeed<T> {
+    public Seed Marker = new Seed();
+    public T Value;
+}
+public struct GenericPair<T> {
+    public T Value;
+    public constructor(T value) { Value = value; }
+}
+public class GenericHolderWithConstructedSeed<T> {
+    public int Seed = 40;
+    public GenericSeed<int> SeedValue = new GenericSeed<int>(Seed + 2);
+    public constructor() {}
+}
+public class GenericHolderWithOwnerTypeSeed<T> {
+    public int Seed = 17;
+    public int Copy = Seed + 1;
+    public GenericDefaultSeed<T> SeedValue = new GenericDefaultSeed<T>();
+    public constructor(GenericDefaultSeed<T> seed) { SeedValue = seed; }
+}
+public class GenericHolderWithPair<T> {
+    public int Seed = 40;
+    public GenericPair<int> Pair = new GenericPair<int>(Seed + 2);
+    public uint DataLength = 3u;
+    public int[] Data = new int[DataLength + 2u];
+    public T[] TypedData = new T[DataLength + 1u];
+    public constructor() {}
+}
+public class GenericBuffer<T> {
+    public T[] Values;
+    public constructor(uint capacity) {
+        Values = new T[capacity + 2u];
+    }
+}
+public int Main(string[] args) {
+    Seed firstSeed = new Seed();
+    Seed secondSeed = new Seed();
+    GenericHolder<Seed> first = new GenericHolder<Seed>(firstSeed);
+    GenericHolder<Seed> second = new GenericHolder<Seed>(secondSeed);
+    GenericHolderWithConstructedSeed<int> firstConstructed =
+        new GenericHolderWithConstructedSeed<int>();
+    GenericHolderWithConstructedSeed<long> secondConstructed =
+        new GenericHolderWithConstructedSeed<long>();
+    GenericDefaultSeed<int> intSeed = new GenericDefaultSeed<int>();
+    intSeed.Value = 31;
+    GenericDefaultSeed<long> longSeed = new GenericDefaultSeed<long>();
+    longSeed.Value = 37L;
+    GenericHolderWithOwnerTypeSeed<int> intOwner =
+        new GenericHolderWithOwnerTypeSeed<int>(intSeed);
+    GenericHolderWithOwnerTypeSeed<long> longOwner =
+        new GenericHolderWithOwnerTypeSeed<long>(longSeed);
+    GenericHolderWithPair<int> intPairOwner = new GenericHolderWithPair<int>();
+    GenericHolderWithPair<long> longPairOwner = new GenericHolderWithPair<long>();
+    GenericBuffer<int> shortBuffer = new GenericBuffer<int>(3u);
+    GenericBuffer<long> longBuffer = new GenericBuffer<long>(5u);
+    intPairOwner.Data[0] = 43;
+    longPairOwner.Data[1] = 47;
+    intPairOwner.TypedData[3] = 53;
+    longPairOwner.TypedData[3] = 59L;
+    shortBuffer.Values[0] = 53;
+    longBuffer.Values[6] = 59L;
+    return Seed.Created == 10 && first.SeedValue == firstSeed &&
+        second.SeedValue == secondSeed && first.SeedValue.Value == 17 &&
+        second.SeedValue.Value == 17 && first.Computed == 22 &&
+        second.Computed == 22 &&
+        firstConstructed.SeedValue.Value == 42 &&
+        secondConstructed.SeedValue.Value == 42 &&
+        firstConstructed.SeedValue != secondConstructed.SeedValue &&
+        intOwner.SeedValue.Value == 31 && longOwner.SeedValue.Value == 37L &&
+        intOwner.Seed == 17 && intOwner.Copy == 18 &&
+        longOwner.Seed == 17 && longOwner.Copy == 18 &&
+        intPairOwner.Pair.Value == 42 && longPairOwner.Pair.Value == 42 &&
+        intPairOwner.Data.Length == 5u && longPairOwner.Data.Length == 5u &&
+        intPairOwner.Data[0] == 43 && longPairOwner.Data[1] == 47 &&
+        intPairOwner.TypedData.Length == 4u && longPairOwner.TypedData.Length == 4u &&
+        intPairOwner.TypedData[3] == 53 && longPairOwner.TypedData[3] == 59L &&
+        shortBuffer.Values.Length == 5u && longBuffer.Values.Length == 7u &&
+        shortBuffer.Values[0] == 53 && longBuffer.Values[6] == 59 ? 0 : 1;
+}
+'@, [Text.UTF8Encoding]::new($false))
+    $genericFieldInitializerArguments = @(
+        '--compile', '--cxcore-dir', $cxCorePath, '--verbosity', 'quiet',
+        '--output-dir', $genericFieldInitializerOutput, $genericFieldInitializerSource
+    )
+    if ([IO.Path]::GetExtension($compilerPath) -ieq '.dll') {
+        & dotnet $compilerPath @genericFieldInitializerArguments
+    } else {
+        & $compilerPath @genericFieldInitializerArguments
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Closed generic field initializer compilation failed (exit $LASTEXITCODE). Build files are in '$genericFieldInitializerRoot'."
+    }
+    $genericFieldInitializerExecutable = Get-ChildItem -LiteralPath (Join-Path $genericFieldInitializerRoot '.bin') `
+        -Filter 'generic_field_initializer.exe' -File -Recurse | Select-Object -First 1
+    if ($null -eq $genericFieldInitializerExecutable) {
+        throw "Closed generic field initializer executable was not created. Build files are in '$genericFieldInitializerRoot'."
+    }
+    & $genericFieldInitializerExecutable.FullName
+    if ($LASTEXITCODE -ne 0) {
+        throw "Closed generic field initializer native run failed (exit $LASTEXITCODE)."
+    }
+    Write-Output 'PASS closed generic class field initializers: earlier concrete fields, instance method calls, and constructed-generic objects before constructor bodies'
+
     $projectRoot = Join-Path $buildRoot 'project-reference'
     $appDirectory = Join-Path $projectRoot 'app'
     $libraryDirectory = Join-Path $projectRoot 'math'
@@ -3566,6 +4279,10 @@ public class Box<T> { }
 public int AddOne(int value) { return value + 1; }
 public T Identity<T>(T value) { return value; }
 public int Identity <int>(int value) { return value + 1; }
+public static class StaticArrays {
+    public static int[] Values = new int[2];
+    public static string[] Names = new string[0];
+}
 public class Counter {
     public int Value = 10;
     public T Adjust<T>(T value) { return value; }
@@ -3582,6 +4299,266 @@ public class GenericRouter<TState> {
 public class GenericStaticRouter<TState> {
     public static U Route<U>(TState state, U value) { return value; }
     public static int Route<int>(TState state, int value) { return value + 20; }
+}
+public class GenericVirtualBase {
+    public virtual T Transform<T>(T value) { return value; }
+    public int TransformInt(int value) { return this.Transform(value); }
+}
+public class GenericVirtualOwnerBase<TState> {
+    public constructor() { }
+    public virtual U Transform<U>(U value) { return value; }
+}
+public interface IGenericVirtualCrossProjectMarker { }
+public interface IGenericVirtualCrossProjectAuditable { }
+public interface IGenericVirtualCrossProjectStamped { }
+public class GenericVirtualCrossProjectBase {
+    public virtual T Transform<T>(T value)
+        where T : class, IGenericVirtualCrossProjectMarker { return value; }
+    public T Forward<T>(T value)
+        where T : class, IGenericVirtualCrossProjectMarker {
+        return this.Transform(value);
+    }
+}
+public class GenericVirtualCrossProjectStructBase {
+    public virtual T Transform<T>(T value)
+        where T : struct, IGenericVirtualCrossProjectMarker { return value; }
+    public T Forward<T>(T value)
+        where T : struct, IGenericVirtualCrossProjectMarker {
+        return this.Transform(value);
+    }
+}public class GenericVirtualCrossProjectMultiBase {
+    public virtual T Transform<T>(T value)
+        where T : class, IGenericVirtualCrossProjectMarker,
+            IGenericVirtualCrossProjectAuditable { return value; }
+    public T Forward<T>(T value)
+        where T : class, IGenericVirtualCrossProjectMarker,
+            IGenericVirtualCrossProjectAuditable {
+        return this.Transform(value);
+    }
+}public class GenericVirtualCrossProjectMultiStructBase {
+    public virtual T Transform<T>(T value)
+        where T : struct, IGenericVirtualCrossProjectMarker,
+            IGenericVirtualCrossProjectAuditable { return value; }
+    public T Forward<T>(T value)
+        where T : struct, IGenericVirtualCrossProjectMarker,
+            IGenericVirtualCrossProjectAuditable {
+        return this.Transform(value);
+    }
+}
+public class GenericVirtualCrossProjectTripleBase {
+    public virtual T Transform<T>(T value)
+        where T : class, IGenericVirtualCrossProjectMarker,
+            IGenericVirtualCrossProjectAuditable,
+            IGenericVirtualCrossProjectStamped { return value; }
+    public T Forward<T>(T value)
+        where T : class, IGenericVirtualCrossProjectMarker,
+            IGenericVirtualCrossProjectAuditable,
+            IGenericVirtualCrossProjectStamped {
+        return this.Transform(value);
+    }
+}
+public class GenericVirtualCrossProjectTripleStructBase {
+    public virtual T Transform<T>(T value)
+        where T : struct, IGenericVirtualCrossProjectMarker,
+            IGenericVirtualCrossProjectAuditable,
+            IGenericVirtualCrossProjectStamped { return value; }
+    public T Forward<T>(T value)
+        where T : struct, IGenericVirtualCrossProjectMarker,
+            IGenericVirtualCrossProjectAuditable,
+            IGenericVirtualCrossProjectStamped {
+        return this.Transform(value);
+    }
+}
+public interface IGenericVirtualRouter {
+    T TransformInterface<T>(T value);
+}
+public interface IGenericVirtualMultiStructRouter {
+    T TransformMultiStruct<T>(T value)
+        where T : struct, IGenericVirtualCrossProjectMarker,
+            IGenericVirtualCrossProjectAuditable;
+}
+public interface IGenericVirtualMultiClassRouter {
+    T TransformMultiClass<T>(T value)
+        where T : class, IGenericVirtualCrossProjectMarker,
+            IGenericVirtualCrossProjectAuditable;
+}
+public interface IGenericVirtualClassRouter {
+    T TransformClass<T>(T value)
+        where T : class, IGenericVirtualCrossProjectMarker;
+}
+public interface IGenericVirtualStructRouter {
+    T TransformStruct<T>(T value)
+        where T : struct, IGenericVirtualCrossProjectMarker;
+}
+public interface IGenericVirtualTripleClassRouter {
+    T TransformTripleClass<T>(T value)
+        where T : class, IGenericVirtualCrossProjectMarker,
+            IGenericVirtualCrossProjectAuditable,
+            IGenericVirtualCrossProjectStamped;
+}
+public interface IGenericVirtualBaseRouter {
+    T Transform<T>(T value);
+}
+public interface IGenericVirtualChildRouter : IGenericVirtualBaseRouter {
+    T Transform<T>(T value, int offset);
+}
+public interface IGenericVirtualDiamondLeftRouter : IGenericVirtualBaseRouter {
+    T Transform<T>(T value);
+}
+public interface IGenericVirtualDiamondRightRouter : IGenericVirtualBaseRouter {
+    T Transform<T>(T value);
+}
+public interface IGenericVirtualDiamondRouter :
+    IGenericVirtualDiamondLeftRouter, IGenericVirtualDiamondRightRouter { }
+public interface ITripleStructInterfaceRouter {
+    T TransformTripleStruct<T>(T value)
+        where T : struct, IGenericVirtualCrossProjectMarker,
+            IGenericVirtualCrossProjectAuditable,
+            IGenericVirtualCrossProjectStamped;
+}
+public interface IGenericVirtualStateRouter<TState> {
+    T TransformState<T>(TState state, T value);
+}
+public interface IGenericOwnerStateRouter {
+    T TransformState<TState, T>(TState state, T value);
+}
+public class GenericOwnerStateRouter<TState> {
+    public T Forward<T>(IGenericOwnerStateRouter value,
+        TState state, T item) {
+        return value.TransformState(state, item);
+    }
+}
+public interface IActionMarker {
+    void Mark(int value);
+}
+public interface IGenericVirtualAction {
+    T Apply<T>(T value);
+}
+public class GenericInterfaceCaller {
+    public int Transform(IGenericVirtualRouter value) {
+        return value.TransformInterface(6);
+    }
+}
+public T ForwardInterface<T>(IGenericVirtualRouter value, T item) {
+    return value.TransformInterface(item);
+}public T ForwardMultiStructInterface<T>(
+    IGenericVirtualMultiStructRouter value, T item)
+    where T : struct, IGenericVirtualCrossProjectMarker,
+        IGenericVirtualCrossProjectAuditable {
+    return value.TransformMultiStruct(item);
+}public T ForwardMultiClassInterface<T>(
+    IGenericVirtualMultiClassRouter value, T item)
+    where T : class, IGenericVirtualCrossProjectMarker,
+        IGenericVirtualCrossProjectAuditable {
+    return value.TransformMultiClass(item);
+}public T ForwardClassInterface<T>(
+    IGenericVirtualClassRouter value, T item)
+    where T : class, IGenericVirtualCrossProjectMarker {
+    return value.TransformClass(item);
+}public T ForwardStructInterface<T>(
+    IGenericVirtualStructRouter value, T item)
+    where T : struct, IGenericVirtualCrossProjectMarker {
+    return value.TransformStruct(item);
+}public T ForwardTripleClassInterface<T>(
+    IGenericVirtualTripleClassRouter value, T item)
+    where T : class, IGenericVirtualCrossProjectMarker,
+        IGenericVirtualCrossProjectAuditable,
+        IGenericVirtualCrossProjectStamped {
+    return value.TransformTripleClass(item);
+}public T ForwardInheritedTransform<T>(
+    IGenericVirtualChildRouter value, T item) {
+    return value.Transform(item);
+}public T ForwardAddedTransform<T>(
+    IGenericVirtualChildRouter value, T item, int offset) {
+    return value.Transform(item, offset);
+}public T ForwardDiamondTransform<T>(
+    IGenericVirtualDiamondRouter value, T item) {
+    return value.Transform(item);
+}public T ForwardChildAlias<T>(
+    IGenericVirtualChildRouter value, T item) {
+    T forwarded = item;
+    return value.Transform(forwarded);
+}public T ForwardChildAliasConditional<T>(
+    IGenericVirtualChildRouter value, T item, bool dispatch) {
+    T forwarded = item;
+    return dispatch ? value.Transform(forwarded) : forwarded;
+}public T ForwardChildAliasIf<T>(
+    IGenericVirtualChildRouter value, T item, bool dispatch) {
+    T forwarded = item;
+    if (dispatch) return value.Transform(forwarded);
+    return forwarded;
+}public T ForwardChildAliasIfElse<T>(
+    IGenericVirtualChildRouter value, T item, bool dispatch) {
+    T forwarded = item;
+    bool shouldDispatch = dispatch;
+    if (shouldDispatch) return forwarded;
+    else return value.Transform(forwarded);
+}public T ForwardChildAliasAfterBool<T>(
+    IGenericVirtualChildRouter value, T item, bool dispatch) {
+    bool shouldDispatch = dispatch;
+    T forwarded = item;
+    if (shouldDispatch) return value.Transform(forwarded);
+    return forwarded;
+}public T ForwardChildAliasChain<T>(
+    IGenericVirtualChildRouter value, T item, bool dispatch) {
+    T first = item;
+    T forwarded = first;
+    if (dispatch) return value.Transform(forwarded);
+    return forwarded;
+}public T ForwardChildInferredAlias<T>(
+    IGenericVirtualChildRouter value, T item, bool dispatch) {
+    var forwarded = item;
+    if (dispatch) return value.Transform(forwarded);
+    return forwarded;
+}public T ForwardTripleStructInterface<T>(
+    ITripleStructInterfaceRouter value, T item)
+    where T : struct, IGenericVirtualCrossProjectMarker,
+        IGenericVirtualCrossProjectAuditable,
+        IGenericVirtualCrossProjectStamped {
+    return value.TransformTripleStruct(item);
+}public T ForwardInterfaceConditional<T>(
+    IGenericVirtualRouter value, T item, bool dispatch) {
+    return dispatch ? value.TransformInterface(item) : item;
+}public T ReverseInterfaceConditional<T>(
+    IGenericVirtualRouter value, T item, bool dispatch) {
+    return dispatch ? item : value.TransformInterface(item);
+}public T ForwardInterfaceStatement<T>(
+    IGenericVirtualRouter value, T item, bool dispatch) {
+    if (dispatch) return value.TransformInterface(item);
+    return item;
+}public T ReverseInterfaceStatement<T>(
+    IGenericVirtualRouter value, T item, bool dispatch) {
+    if (dispatch) return item;
+    else return value.TransformInterface(item);
+}public T ForwardInterfaceBlockStatement<T>(
+    IGenericVirtualRouter value, T item, bool dispatch) {
+    if (dispatch) { return value.TransformInterface(item); }
+    else { return item; }
+}public T ReverseInterfaceBlockStatement<T>(
+    IGenericVirtualRouter value, T item, bool dispatch) {
+    if (dispatch) { return item; }
+    else { return value.TransformInterface(item); }
+}public T ForwardInterfaceLocalCondition<T>(
+    IGenericVirtualRouter value, T item, bool dispatch) {
+    bool shouldDispatch = dispatch;
+    if (shouldDispatch) { return value.TransformInterface(item); }
+    return item;
+}public T ForwardInterfaceInferredLocalCondition<T>(
+    IGenericVirtualRouter value, T item, bool dispatch) {
+    var shouldDispatch = dispatch;
+    if (shouldDispatch) { return value.TransformInterface(item); }
+    return item;
+}
+public T ForwardConstructedInterface<TState, T>(
+    IGenericVirtualStateRouter<TState> value, TState state, T item) {
+    return value.TransformState(state, item);
+}
+public void ForwardInterfaceAction<T>(IGenericVirtualAction value, T item) {
+    value.Apply(item);
+}public void ForwardInterfaceActionAlias<T>(
+    IGenericVirtualAction value, T item) {
+    T forwarded = item;
+    value.Apply(forwarded);
 }
 public concept CComparable {
     bool operator >(const CComparable other) const;
@@ -3654,11 +4631,287 @@ public extension IntExtensions : int {
 }
 '@, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $appDirectory 'app.cxproj'), "name: app`ntype: Executable`nproject_references:`n- ../math/math.cxproj`n", [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $appDirectory 'overrides.cx'), @'
+namespace Math;
+public int Identity<int>(int value) { return value + 100; }
+public long Identity<long>(long value) { return value + 200L; }
+'@, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $appDirectory 'main.cx'), @'
 import Math;
 import NumericExtensions;
 namespace App;
+public T ForwardReferencedIdentity<T>(T value) {
+    T forwarded = Identity(value);
+    return forwarded;
+}
+public T ForwardReferencedIdentityInferred<T>(T value) {
+    var forwarded = Identity(value);
+    return forwarded;
+}
 public delegate int MathTransform(int value);
+public delegate int DynamicTransform(int value);
+public delegate void DynamicSetter(int value);
+public class DynamicInvokeTarget {
+    public int Value;
+    public void SetValue(int value) { Value = value; }
+}
+public class GenericMethodTarget<T> {
+    public T Echo(T value) { return value; }
+}
+public class GenericVirtualOwnerDerived<TState> :
+    Math.GenericVirtualOwnerBase<TState> {
+    public constructor() : base() { }
+    public override U Transform<U>(U value) { return value; }
+    public override int Transform<int>(int value) { return value - (-90); }
+}
+public class GenericVirtualDerived : GenericVirtualBase {
+    public override U Transform<U>(U value) { return value; }
+    public override int Transform<int>(int value) { return value - (-10); }
+}
+public class GenericVirtualRecursiveDerived : GenericVirtualBase {
+    public override U Transform<U>(U value) { return value; }
+    public override int Transform<int>(int value) {
+        if (value == 0) return 0;
+        return this.Transform(value - 1) - (-1);
+    }
+}
+public class GenericVirtualCrossProjectDerived :
+    Math.GenericVirtualCrossProjectBase {
+    public override U Transform<U>(U value)
+        where U : class, Math.IGenericVirtualCrossProjectMarker { return value; }
+    public override GenericVirtualCrossProjectMarker Transform<GenericVirtualCrossProjectMarker>(
+        GenericVirtualCrossProjectMarker value) {
+        value.Value = 50;
+        return value;
+    }
+}
+public class GenericVirtualCrossProjectMarker :
+    Math.IGenericVirtualCrossProjectMarker { public int Value; }
+public class GenericVirtualCrossProjectFallback :
+    Math.IGenericVirtualCrossProjectMarker { public int Value = 7; }public class GenericVirtualCrossProjectMultiMarker :
+    Math.IGenericVirtualCrossProjectMarker,
+    Math.IGenericVirtualCrossProjectAuditable { public int Value; }
+public class GenericVirtualCrossProjectMultiFallback :
+    Math.IGenericVirtualCrossProjectMarker,
+    Math.IGenericVirtualCrossProjectAuditable { public int Value = 9; }
+public class GenericVirtualCrossProjectMultiDerived :
+    Math.GenericVirtualCrossProjectMultiBase {
+    public override U Transform<U>(U value)
+        where U : class, Math.IGenericVirtualCrossProjectMarker,
+            Math.IGenericVirtualCrossProjectAuditable { return value; }
+    public override GenericVirtualCrossProjectMultiMarker Transform<GenericVirtualCrossProjectMultiMarker>(
+        GenericVirtualCrossProjectMultiMarker value) {
+        value.Value = 52;
+        return value;
+    }
+}public class GenericVirtualCrossProjectTripleMarker :
+    Math.IGenericVirtualCrossProjectMarker,
+    Math.IGenericVirtualCrossProjectAuditable,
+    Math.IGenericVirtualCrossProjectStamped { public int Value; }
+public class GenericVirtualCrossProjectTripleFallback :
+    Math.IGenericVirtualCrossProjectMarker,
+    Math.IGenericVirtualCrossProjectAuditable,
+    Math.IGenericVirtualCrossProjectStamped { public int Value = 17; }
+public class GenericVirtualCrossProjectTripleDerived :
+    Math.GenericVirtualCrossProjectTripleBase {
+    public override U Transform<U>(U value)
+        where U : class, Math.IGenericVirtualCrossProjectMarker,
+            Math.IGenericVirtualCrossProjectAuditable,
+            Math.IGenericVirtualCrossProjectStamped { return value; }
+    public override GenericVirtualCrossProjectTripleMarker Transform<GenericVirtualCrossProjectTripleMarker>(
+        GenericVirtualCrossProjectTripleMarker value) {
+        value.Value = 63;
+        return value;
+    }
+}public struct GenericVirtualCrossProjectTripleStructMarker :
+    Math.IGenericVirtualCrossProjectMarker,
+    Math.IGenericVirtualCrossProjectAuditable,
+    Math.IGenericVirtualCrossProjectStamped { public int Value; }
+public struct GenericVirtualCrossProjectTripleStructFallback :
+    Math.IGenericVirtualCrossProjectMarker,
+    Math.IGenericVirtualCrossProjectAuditable,
+    Math.IGenericVirtualCrossProjectStamped { public int Value; }
+public class GenericVirtualCrossProjectTripleStructDerived :
+    Math.GenericVirtualCrossProjectTripleStructBase {
+    public override U Transform<U>(U value)
+        where U : struct, Math.IGenericVirtualCrossProjectMarker,
+            Math.IGenericVirtualCrossProjectAuditable,
+            Math.IGenericVirtualCrossProjectStamped { return value; }
+    public override GenericVirtualCrossProjectTripleStructMarker Transform<GenericVirtualCrossProjectTripleStructMarker>(
+        GenericVirtualCrossProjectTripleStructMarker value) {
+        value.Value = 64;
+        return value;
+    }
+}public struct GenericVirtualCrossProjectMultiStructMarker :
+    Math.IGenericVirtualCrossProjectMarker,
+    Math.IGenericVirtualCrossProjectAuditable { public int Value; }
+public struct GenericVirtualCrossProjectMultiStructFallback :
+    Math.IGenericVirtualCrossProjectMarker,
+    Math.IGenericVirtualCrossProjectAuditable { public int Value; }
+public class GenericVirtualCrossProjectMultiStructDerived :
+    Math.GenericVirtualCrossProjectMultiStructBase {
+    public override U Transform<U>(U value)
+        where U : struct, Math.IGenericVirtualCrossProjectMarker,
+            Math.IGenericVirtualCrossProjectAuditable { return value; }
+    public override GenericVirtualCrossProjectMultiStructMarker Transform<GenericVirtualCrossProjectMultiStructMarker>(
+        GenericVirtualCrossProjectMultiStructMarker value) {
+        value.Value = 53;
+        return value;
+    }
+}
+public struct GenericVirtualCrossProjectStructMarker :
+    Math.IGenericVirtualCrossProjectMarker { public int Value; }
+public struct GenericVirtualCrossProjectStructFallback :
+    Math.IGenericVirtualCrossProjectMarker { public int Value; }
+public class GenericVirtualCrossProjectStructDerived :
+    Math.GenericVirtualCrossProjectStructBase {
+    public override U Transform<U>(U value)
+        where U : struct, Math.IGenericVirtualCrossProjectMarker { return value; }
+    public override GenericVirtualCrossProjectStructMarker Transform<GenericVirtualCrossProjectStructMarker>(
+        GenericVirtualCrossProjectStructMarker value) {
+        value.Value = 51;
+        return value;
+    }
+}
+public class GenericVirtualInterfaceImplementation : Math.IGenericVirtualRouter {
+    public T TransformInterface<T>(T value) { return value; }
+    public int TransformInterface<int>(int value) { return value + 70; }
+}
+public struct GenericVirtualMultiStructMarker :
+    Math.IGenericVirtualCrossProjectMarker,
+    Math.IGenericVirtualCrossProjectAuditable { public int Value; }
+public struct GenericVirtualMultiStructFallback :
+    Math.IGenericVirtualCrossProjectMarker,
+    Math.IGenericVirtualCrossProjectAuditable { public int Value; }
+public class GenericVirtualMultiStructInterfaceImplementation :
+    Math.IGenericVirtualMultiStructRouter {
+    public T TransformMultiStruct<T>(T value)
+        where T : struct, Math.IGenericVirtualCrossProjectMarker,
+            Math.IGenericVirtualCrossProjectAuditable { return value; }
+    public GenericVirtualMultiStructMarker TransformMultiStruct<GenericVirtualMultiStructMarker>(
+        GenericVirtualMultiStructMarker value) {
+        value.Value = 54;
+        return value;
+    }
+}
+public class GenericVirtualMultiClassInterfaceImplementation :
+    Math.IGenericVirtualMultiClassRouter {
+    public T TransformMultiClass<T>(T value)
+        where T : class, Math.IGenericVirtualCrossProjectMarker,
+            Math.IGenericVirtualCrossProjectAuditable { return value; }
+    public GenericVirtualCrossProjectMultiMarker TransformMultiClass<GenericVirtualCrossProjectMultiMarker>(
+        GenericVirtualCrossProjectMultiMarker value) {
+        value.Value = 55;
+        return value;
+    }
+}
+public class GenericVirtualClassInterfaceImplementation :
+    Math.IGenericVirtualClassRouter {
+    public T TransformClass<T>(T value)
+        where T : class, Math.IGenericVirtualCrossProjectMarker { return value; }
+    public GenericVirtualCrossProjectMarker TransformClass<GenericVirtualCrossProjectMarker>(
+        GenericVirtualCrossProjectMarker value) {
+        value.Value = 56;
+        return value;
+    }
+}
+public struct GenericVirtualStructMarker :
+    Math.IGenericVirtualCrossProjectMarker { public int Value; }
+public struct GenericVirtualStructFallback :
+    Math.IGenericVirtualCrossProjectMarker { public int Value; }
+public class GenericVirtualStructInterfaceImplementation :
+    Math.IGenericVirtualStructRouter {
+    public T TransformStruct<T>(T value)
+        where T : struct, Math.IGenericVirtualCrossProjectMarker { return value; }
+    public GenericVirtualStructMarker TransformStruct<GenericVirtualStructMarker>(
+        GenericVirtualStructMarker value) {
+        value.Value = 57;
+        return value;
+    }
+}
+public class GenericVirtualTripleClassMarker :
+    Math.IGenericVirtualCrossProjectMarker,
+    Math.IGenericVirtualCrossProjectAuditable,
+    Math.IGenericVirtualCrossProjectStamped { public int Value; }
+public class GenericVirtualTripleClassFallback :
+    Math.IGenericVirtualCrossProjectMarker,
+    Math.IGenericVirtualCrossProjectAuditable,
+    Math.IGenericVirtualCrossProjectStamped { public int Value = 14; }
+public class GenericVirtualTripleClassInterfaceImplementation :
+    Math.IGenericVirtualTripleClassRouter {
+    public T TransformTripleClass<T>(T value)
+        where T : class, Math.IGenericVirtualCrossProjectMarker,
+            Math.IGenericVirtualCrossProjectAuditable,
+            Math.IGenericVirtualCrossProjectStamped { return value; }
+    public GenericVirtualTripleClassMarker TransformTripleClass<GenericVirtualTripleClassMarker>(
+        GenericVirtualTripleClassMarker value) {
+        value.Value = 59;
+        return value;
+    }
+}
+public class GenericVirtualChildRouterImplementation :
+    Math.IGenericVirtualChildRouter {
+    public T Transform<T>(T value) { return value; }
+    public int Transform<int>(int value) { return value + 55; }
+    public T Transform<T>(T value, int offset) { return value; }
+    public int Transform<int>(int value, int offset) {
+        return value + offset + 100;
+    }
+}
+public class GenericVirtualDiamondRouterImplementation :
+    Math.IGenericVirtualDiamondRouter {
+    public T Transform<T>(T value) { return value; }
+    public int Transform<int>(int value) { return value + 75; }
+}
+public struct GenericVirtualTripleStructMarker :
+    Math.IGenericVirtualCrossProjectMarker,
+    Math.IGenericVirtualCrossProjectAuditable,
+    Math.IGenericVirtualCrossProjectStamped { public int Value; }
+public struct GenericVirtualTripleStructFallback :
+    Math.IGenericVirtualCrossProjectMarker,
+    Math.IGenericVirtualCrossProjectAuditable,
+    Math.IGenericVirtualCrossProjectStamped { public int Value; }
+public class GenericVirtualTripleStructInterfaceImplementation :
+    Math.ITripleStructInterfaceRouter {
+    public T TransformTripleStruct<T>(T value)
+        where T : struct, Math.IGenericVirtualCrossProjectMarker,
+            Math.IGenericVirtualCrossProjectAuditable,
+            Math.IGenericVirtualCrossProjectStamped { return value; }
+    public GenericVirtualTripleStructMarker TransformTripleStruct<GenericVirtualTripleStructMarker>(
+        GenericVirtualTripleStructMarker value) {
+        value.Value = 61;
+        return value;
+    }
+}
+public class GenericVirtualStateInterfaceImplementation<TState> :
+    Math.IGenericVirtualStateRouter<TState> {
+    public T TransformState<T>(TState state, T value) { return value; }
+    public int TransformState<int>(TState state, int value) {
+        return value + 80;
+    }
+}
+public class GenericOwnerStateImplementation : Math.IGenericOwnerStateRouter {
+    public T TransformState<TState, T>(TState state, T value) { return value; }
+    public int TransformState<int, int>(int state, int value) {
+        return value + 80;
+    }
+}
+public class GenericVirtualActionImplementation : Math.IGenericVirtualAction {
+    public T Apply<T>(T value) { return value; }
+    public GenericVirtualActionMarker Apply<GenericVirtualActionMarker>(
+        GenericVirtualActionMarker value) {
+        value.Mark(2);
+        return value;
+    }
+}
+public class GenericVirtualActionMarker : Math.IActionMarker {
+    public int Value;
+    public void Mark(int value) { Value = value; }
+}
+public class GenericVirtualActionMarkerFallback : Math.IActionMarker {
+    public int Value;
+    public void Mark(int value) { Value = value; }
+}
 public interface IReflectable { void Mark(); }
 public class Reflectable : IReflectable {
     public int Value;
@@ -3714,6 +4967,23 @@ public class ConceptAdjuster {
 public void AddAdjustment<T>(T item) : T = CAdjustable {
     item.Value += item.Adjustment();
 }
+public int RunDynamicInvoke() {
+    DynamicTransform transform = value => value;
+    object[] arguments = new object[1];
+    arguments[0] = 40;
+    object result = transform.DynamicInvoke(arguments);
+    DynamicInvokeTarget target = new DynamicInvokeTarget();
+    DynamicSetter setter = target.SetValue;
+    object[] setterArguments = new object[1];
+    setterArguments[0] = 41;
+    object voidResult = setter.DynamicInvoke(setterArguments);
+    object[] wrongArguments = new object[1];
+    wrongArguments[0] = "wrong type";
+    if ((int)result != 40 || voidResult != null || target.Value != 41 ||
+        transform.DynamicInvoke(null) != null ||
+        transform.DynamicInvoke(wrongArguments) != null) return 0;
+    return 42;
+}
 public bool HasRepeatedValue<T>(T item, int minimum) : T = CRepeatedReadable {
     return item.Read(item.Read(0)) == item.Read(0) && item.Read(0) > minimum;
 }
@@ -3728,11 +4998,291 @@ public T[] DefaultArrayLocal<T>() {
     return values;
 }
 public int Run() {
+    if (RunDynamicInvoke() != 42) return 231;
+    if (Math.StaticArrays.Values.Length != 2u ||
+        Math.StaticArrays.Names.Length != 0u) return 275;
+    Math.StaticArrays.Values[1] = 73;
+    if (Math.StaticArrays.Values[1] != 73) return 276;
+    if (ForwardReferencedIdentity(6) != 106) return 271;
+    if (ForwardReferencedIdentity(11L) != 211L) return 272;
+    if (ForwardReferencedIdentityInferred(7) != 107) return 273;
+    if (ForwardReferencedIdentityInferred(12L) != 212L) return 274;
+    Math.GenericVirtualOwnerBase<string> genericOwnerVirtual =
+        new GenericVirtualOwnerDerived<string>();
+    if (genericOwnerVirtual.Transform(2) != 92) return 300;
+    if (genericOwnerVirtual.Transform(11L) != 11L) return 301;
+    GenericVirtualBase crossModuleVirtual = new GenericVirtualDerived();
+    if (crossModuleVirtual.TransformInt(2) != 12) return 232;
+    Math.GenericVirtualCrossProjectBase constrainedCrossModuleVirtual =
+        new GenericVirtualCrossProjectDerived();
+    GenericVirtualCrossProjectMarker exactCrossModuleMarker =
+        new GenericVirtualCrossProjectMarker();
+    if (constrainedCrossModuleVirtual.Forward<GenericVirtualCrossProjectMarker>(
+        exactCrossModuleMarker).Value != 50) return 241;
+    GenericVirtualCrossProjectFallback fallbackCrossModuleMarker =
+        new GenericVirtualCrossProjectFallback();
+    if (constrainedCrossModuleVirtual.Forward<GenericVirtualCrossProjectFallback>(
+        fallbackCrossModuleMarker).Value != 7) return 242;
+    Math.GenericVirtualCrossProjectStructBase constrainedStructCrossModuleVirtual =
+        new GenericVirtualCrossProjectStructDerived();
+    GenericVirtualCrossProjectStructMarker exactCrossModuleStruct = default;
+    if (constrainedStructCrossModuleVirtual.Forward<
+        GenericVirtualCrossProjectStructMarker>(exactCrossModuleStruct).Value != 51)
+        return 243;
+    GenericVirtualCrossProjectStructFallback fallbackCrossModuleStruct = default;
+    fallbackCrossModuleStruct.Value = 8;
+    if (constrainedStructCrossModuleVirtual.Forward<
+        GenericVirtualCrossProjectStructFallback>(fallbackCrossModuleStruct).Value != 8)
+        return 244;    Math.GenericVirtualCrossProjectMultiBase multiCrossModuleVirtual =
+        new GenericVirtualCrossProjectMultiDerived();
+    GenericVirtualCrossProjectMultiMarker exactMultiCrossModuleMarker =
+        new GenericVirtualCrossProjectMultiMarker();
+    if (multiCrossModuleVirtual.Forward<GenericVirtualCrossProjectMultiMarker>(
+        exactMultiCrossModuleMarker).Value != 52) return 245;
+    GenericVirtualCrossProjectMultiFallback fallbackMultiCrossModuleMarker =
+        new GenericVirtualCrossProjectMultiFallback();
+    if (multiCrossModuleVirtual.Forward<GenericVirtualCrossProjectMultiFallback>(
+        fallbackMultiCrossModuleMarker).Value != 9) return 246;
+    Math.GenericVirtualCrossProjectTripleBase tripleCrossModuleVirtual =
+        new GenericVirtualCrossProjectTripleDerived();
+    GenericVirtualCrossProjectTripleMarker exactTripleCrossModuleMarker =
+        new GenericVirtualCrossProjectTripleMarker();
+    if (tripleCrossModuleVirtual.Forward<
+        GenericVirtualCrossProjectTripleMarker>(exactTripleCrossModuleMarker).Value != 63)
+        return 296;
+    GenericVirtualCrossProjectTripleFallback fallbackTripleCrossModuleMarker =
+        new GenericVirtualCrossProjectTripleFallback();
+    if (tripleCrossModuleVirtual.Forward<
+        GenericVirtualCrossProjectTripleFallback>(fallbackTripleCrossModuleMarker).Value != 17)
+        return 297;
+    Math.GenericVirtualCrossProjectTripleStructBase tripleStructCrossModuleVirtual =
+        new GenericVirtualCrossProjectTripleStructDerived();
+    GenericVirtualCrossProjectTripleStructMarker exactTripleCrossModuleStruct = default;
+    if (tripleStructCrossModuleVirtual.Forward<
+        GenericVirtualCrossProjectTripleStructMarker>(exactTripleCrossModuleStruct).Value != 64)
+        return 298;
+    GenericVirtualCrossProjectTripleStructFallback fallbackTripleCrossModuleStruct = default;
+    fallbackTripleCrossModuleStruct.Value = 18;
+    if (tripleStructCrossModuleVirtual.Forward<
+        GenericVirtualCrossProjectTripleStructFallback>(fallbackTripleCrossModuleStruct).Value != 18)
+        return 299;
+    Math.GenericVirtualCrossProjectMultiStructBase multiStructCrossModuleVirtual =
+        new GenericVirtualCrossProjectMultiStructDerived();
+    GenericVirtualCrossProjectMultiStructMarker exactMultiCrossModuleStruct = default;
+    if (multiStructCrossModuleVirtual.Forward<
+        GenericVirtualCrossProjectMultiStructMarker>(exactMultiCrossModuleStruct).Value != 53)
+        return 247;
+    GenericVirtualCrossProjectMultiStructFallback fallbackMultiCrossModuleStruct = default;
+    fallbackMultiCrossModuleStruct.Value = 10;
+    if (multiStructCrossModuleVirtual.Forward<
+        GenericVirtualCrossProjectMultiStructFallback>(fallbackMultiCrossModuleStruct).Value != 10)
+        return 248;
+    Math.IGenericVirtualMultiStructRouter multiStructInterfaceRouter =
+        new GenericVirtualMultiStructInterfaceImplementation();
+    GenericVirtualMultiStructMarker exactMultiStructInterface = default;
+    if (Math.ForwardMultiStructInterface(
+        multiStructInterfaceRouter, exactMultiStructInterface).Value != 54)
+        return 257;
+    GenericVirtualMultiStructFallback fallbackMultiStructInterface = default;
+    fallbackMultiStructInterface.Value = 11;
+    if (Math.ForwardMultiStructInterface(
+        multiStructInterfaceRouter, fallbackMultiStructInterface).Value != 11)
+        return 258;
+    Math.IGenericVirtualMultiClassRouter multiClassInterfaceRouter =
+        new GenericVirtualMultiClassInterfaceImplementation();
+    GenericVirtualCrossProjectMultiMarker exactMultiClassInterface =
+        new GenericVirtualCrossProjectMultiMarker();
+    if (Math.ForwardMultiClassInterface(
+        multiClassInterfaceRouter, exactMultiClassInterface).Value != 55)
+        return 259;
+    GenericVirtualCrossProjectMultiFallback fallbackMultiClassInterface =
+        new GenericVirtualCrossProjectMultiFallback();
+    if (Math.ForwardMultiClassInterface(
+        multiClassInterfaceRouter, fallbackMultiClassInterface).Value != 9)
+        return 260;
+    Math.IGenericVirtualClassRouter classInterfaceRouter =
+        new GenericVirtualClassInterfaceImplementation();
+    GenericVirtualCrossProjectMarker exactClassInterface =
+        new GenericVirtualCrossProjectMarker();
+    if (Math.ForwardClassInterface(
+        classInterfaceRouter, exactClassInterface).Value != 56)
+        return 269;
+    GenericVirtualCrossProjectFallback fallbackClassInterface =
+        new GenericVirtualCrossProjectFallback();
+    if (Math.ForwardClassInterface(
+        classInterfaceRouter, fallbackClassInterface).Value != 7)
+        return 270;
+    Math.IGenericVirtualStructRouter structInterfaceRouter =
+        new GenericVirtualStructInterfaceImplementation();
+    GenericVirtualStructMarker exactStructInterface = default;
+    if (Math.ForwardStructInterface(
+        structInterfaceRouter, exactStructInterface).Value != 57)
+        return 271;
+    GenericVirtualStructFallback fallbackStructInterface = default;
+    fallbackStructInterface.Value = 12;
+    if (Math.ForwardStructInterface(
+        structInterfaceRouter, fallbackStructInterface).Value != 12)
+        return 272;
+    Math.IGenericVirtualTripleClassRouter tripleClassInterfaceRouter =
+        new GenericVirtualTripleClassInterfaceImplementation();
+    GenericVirtualTripleClassMarker exactTripleClassInterface =
+        new GenericVirtualTripleClassMarker();
+    if (Math.ForwardTripleClassInterface(
+        tripleClassInterfaceRouter, exactTripleClassInterface).Value != 59)
+        return 273;
+    GenericVirtualTripleClassFallback fallbackTripleClassInterface =
+        new GenericVirtualTripleClassFallback();
+    if (Math.ForwardTripleClassInterface(
+        tripleClassInterfaceRouter, fallbackTripleClassInterface).Value != 14)
+        return 274;
+    Math.IGenericVirtualChildRouter genericChildRouter =
+        new GenericVirtualChildRouterImplementation();
+    Math.IGenericVirtualDiamondRouter genericDiamondRouter =
+        new GenericVirtualDiamondRouterImplementation();
+    if (Math.ForwardInheritedTransform(genericChildRouter, 2) != -35)
+        return 275;
+    if (Math.ForwardInheritedTransform(genericChildRouter, 2L) != 2L)
+        return 276;
+    if (Math.ForwardDiamondTransform(genericDiamondRouter, 2) != -55)
+        return 298;
+    if (Math.ForwardDiamondTransform(genericDiamondRouter, 2L) != 2L)
+        return 299;
+    if (Math.ForwardAddedTransform(genericChildRouter, 2, 3) != 70)
+        return 277;
+    if (Math.ForwardAddedTransform(genericChildRouter, 2L, 3) != 2L)
+        return 278;
+    if (Math.ForwardChildAlias(genericChildRouter, 2) != -35)
+        return 281;
+    if (Math.ForwardChildAlias(genericChildRouter, 2L) != 2L)
+        return 282;
+    if (Math.ForwardChildAliasConditional(
+        genericChildRouter, 2, true) != -35)
+        return 285;
+    if (Math.ForwardChildAliasConditional(
+        genericChildRouter, 2, false) != 2)
+        return 286;
+    if (Math.ForwardChildAliasIf(genericChildRouter, 2, true) != -35)
+        return 288;
+    if (Math.ForwardChildAliasIf(genericChildRouter, 2, false) != 2)
+        return 289;
+    if (Math.ForwardChildAliasIfElse(genericChildRouter, 2, false) != -35)
+        return 290;
+    if (Math.ForwardChildAliasIfElse(genericChildRouter, 2, true) != 2)
+        return 291;
+    if (Math.ForwardChildAliasAfterBool(genericChildRouter, 2, true) != -35)
+        return 292;
+    if (Math.ForwardChildAliasAfterBool(genericChildRouter, 2, false) != 2)
+        return 293;
+    if (Math.ForwardChildAliasChain(genericChildRouter, 2, true) != -35)
+        return 294;
+    if (Math.ForwardChildAliasChain(genericChildRouter, 2, false) != 2)
+        return 295;
+    if (Math.ForwardChildInferredAlias(genericChildRouter, 2, true) != -35)
+        return 296;
+    if (Math.ForwardChildInferredAlias(genericChildRouter, 2L, false) != 2L)
+        return 297;
+    if (Math.ForwardChildAliasConditional(
+        genericChildRouter, 11L, true) != 11L)
+        return 287;
+    Math.ITripleStructInterfaceRouter tripleStructInterfaceRouter =
+        new GenericVirtualTripleStructInterfaceImplementation();
+    GenericVirtualTripleStructMarker exactTripleStructInterface = default;
+    if (Math.ForwardTripleStructInterface(
+        tripleStructInterfaceRouter, exactTripleStructInterface).Value != 61)
+        return 279;
+    GenericVirtualTripleStructFallback fallbackTripleStructInterface = default;
+    fallbackTripleStructInterface.Value = 15;
+    if (Math.ForwardTripleStructInterface(
+        tripleStructInterfaceRouter, fallbackTripleStructInterface).Value != 15)
+        return 280;
+    GenericVirtualBase recursiveVirtual = new GenericVirtualRecursiveDerived();
+    if (recursiveVirtual.Transform(5) != 5) return 240;
+    Math.GenericInterfaceCaller crossModuleInterfaceCaller =
+        new Math.GenericInterfaceCaller();
+    if (crossModuleInterfaceCaller.Transform(
+        new GenericVirtualInterfaceImplementation()) != -10) return 233;
+    GenericVirtualInterfaceImplementation crossModuleInterfaceImplementation =
+        new GenericVirtualInterfaceImplementation();
+    if (ForwardInterface(crossModuleInterfaceImplementation, 6) != -10) return 234;
+    if (ForwardInterface(crossModuleInterfaceImplementation, 11L) != 11L) return 235;    if (Math.ForwardInterfaceConditional(
+        crossModuleInterfaceImplementation, 6, true) != -10) return 249;
+    if (Math.ForwardInterfaceConditional(
+        crossModuleInterfaceImplementation, 6, false) != 6) return 250;    if (Math.ReverseInterfaceConditional(
+        crossModuleInterfaceImplementation, 6, false) != -10) return 251;
+    if (Math.ReverseInterfaceConditional(
+        crossModuleInterfaceImplementation, 6, true) != 6) return 252;
+    if (Math.ForwardInterfaceStatement(
+        crossModuleInterfaceImplementation, 6, true) != -10) return 253;
+    if (Math.ForwardInterfaceStatement(
+        crossModuleInterfaceImplementation, 6, false) != 6) return 254;
+    if (Math.ReverseInterfaceStatement(
+        crossModuleInterfaceImplementation, 6, false) != -10) return 255;
+    if (Math.ReverseInterfaceStatement(
+        crossModuleInterfaceImplementation, 6, true) != 6) return 256;
+    if (Math.ForwardInterfaceBlockStatement(
+        crossModuleInterfaceImplementation, 6, true) != -10) return 261;
+    if (Math.ForwardInterfaceBlockStatement(
+        crossModuleInterfaceImplementation, 6, false) != 6) return 262;
+    if (Math.ReverseInterfaceBlockStatement(
+        crossModuleInterfaceImplementation, 6, false) != -10) return 263;
+    if (Math.ReverseInterfaceBlockStatement(
+        crossModuleInterfaceImplementation, 6, true) != 6) return 264;
+    if (Math.ForwardInterfaceLocalCondition(
+        crossModuleInterfaceImplementation, 6, true) != -10) return 265;
+    if (Math.ForwardInterfaceLocalCondition(
+        crossModuleInterfaceImplementation, 6, false) != 6) return 266;
+    if (Math.ForwardInterfaceInferredLocalCondition(
+        crossModuleInterfaceImplementation, 6, true) != -10) return 269;
+    if (Math.ForwardInterfaceInferredLocalCondition(
+        crossModuleInterfaceImplementation, 6, false) != 6) return 270;
+    Math.GenericOwnerStateRouter<int> intOwnerRouter =
+        new Math.GenericOwnerStateRouter<int>();
+    Math.GenericOwnerStateRouter<long> longOwnerRouter =
+        new Math.GenericOwnerStateRouter<long>();
+    GenericOwnerStateImplementation ownerStateImplementation =
+        new GenericOwnerStateImplementation();
+    if (intOwnerRouter.Forward(ownerStateImplementation, 1, 6) != -20)
+        return 267;
+    if (longOwnerRouter.Forward(ownerStateImplementation, 1L, 11L) != 11L)
+        return 268;
+    GenericVirtualStateInterfaceImplementation<int> crossModuleConstructedInterface =
+        new GenericVirtualStateInterfaceImplementation<int>();
+    if (ForwardConstructedInterface<int, int>(
+        crossModuleConstructedInterface, 1, 6) != -20)
+        return 236;
+    if (ForwardConstructedInterface<int, long>(
+        crossModuleConstructedInterface, 1, 11L) != 11L)
+        return 237;
+    GenericVirtualActionImplementation crossModuleAction =
+        new GenericVirtualActionImplementation();
+    GenericVirtualActionMarker actionMarker = new GenericVirtualActionMarker();
+    ForwardInterfaceAction(crossModuleAction, actionMarker);
+    if (actionMarker.Value != 2) return 238;
+    GenericVirtualActionMarkerFallback actionFallback =
+        new GenericVirtualActionMarkerFallback();
+    ForwardInterfaceAction(crossModuleAction, actionFallback);
+    if (actionFallback.Value != 0) return 239;
+    GenericVirtualActionMarker aliasActionMarker = new GenericVirtualActionMarker();
+    ForwardInterfaceActionAlias(crossModuleAction, aliasActionMarker);
+    if (aliasActionMarker.Value != 2) return 283;
+    GenericVirtualActionMarkerFallback aliasActionFallback =
+        new GenericVirtualActionMarkerFallback();
+    ForwardInterfaceActionAlias(crossModuleAction, aliasActionFallback);
+    if (aliasActionFallback.Value != 0) return 284;
     Counter counter = new Counter();
     GenericRouter<string> router = new GenericRouter<string>();
     GenericRouter<string[]> arrayRouter = new GenericRouter<string[]>();
     MathTransform identity = Identity;
     MathTransform adjust = counter.Adjust;
+    GenericMethodTarget<int> genericMethodTarget = new GenericMethodTarget<int>();
+    MathTransform genericInstanceMethod = genericMethodTarget.Echo;
+    MathTransform[] identityHandlers = identity.GetInvocationList();
+    MathTransform[] adjustHandlers = adjust.GetInvocationList();
+    MathTransform multicastTarget = identity + adjust;
+    int captureOffset = 2;
+    MathTransform capturedTarget = item => item + captureOffset;
+    int CapturedLocal(int item) { return item + captureOffset; }
+    MathTransform capturedLocal = CapturedLocal;
     Reflectable reflectable = new Reflectable();
     ReflectionTarget reflectionTarget = new ReflectionTarget();
     TypeInfo reflectionType = reflectionTarget.Type;
@@ -3757,11 +5307,25 @@ public int Run() {
     if (!HasRepeatedValue(conceptReader, 5) ||
         !HasRepeatedValue(conceptReaderValue, 5)) return 49;
     ComparableAddress selected = First(address, point);
+    ComparablePoint targetPoint = new ComparablePoint(17);
+    MathTransform structTarget = targetPoint.GetValue;
+    FunctionInfo structMethodInfo = structTarget.Method;
+    ComparablePoint boxedTargetPoint = (ComparablePoint)structTarget.Target;
+    IReflectable interfaceTarget = reflectable;
+    delegate() => void interfaceMethodTarget = interfaceTarget.Mark;
     SetValue(address, 11);
     SetValue(point, 5);
     int value = 41;
     IntReader reader = value.AddOneExtension;
     Transform transform = item => item * 10;
+    FunctionInfo topLevelMethodInfo = identity.Method;
+    FunctionInfo classMethodInfo = adjust.Method;
+    FunctionInfo genericInstanceMethodInfo = genericInstanceMethod.Method;
+    FunctionInfo interfaceMethodInfo = interfaceMethodTarget.Method;
+    FunctionInfo lambdaMethodInfo = transform.Method;
+    FunctionInfo capturedLocalMethodInfo = capturedLocal.Method;
+    MathTransform emptyMethod = null;
+    FunctionInfo emptyMethodInfo = emptyMethod.Method;
     Transform transformTail = item => item * 10 - 2;
     transform += transformTail;
     Transform[] invocationList = transform.GetInvocationList();
@@ -3782,6 +5346,43 @@ public int Run() {
     if (secondHandler(10) != 98) return 53;
     if (invocationList[0](10) != 100) return 54;
     if (invocationList[1](10) != 98) return 55;
+    if (identity.Target != null || adjust.Target != (object)counter ||
+        multicastTarget.Target != (object)counter || capturedTarget.Target == null ||
+        capturedLocal.Target == null ||
+        interfaceMethodTarget.Target != (object)reflectable ||
+        boxedTargetPoint.Value != 17) return 86;
+    if (topLevelMethodInfo.Name != "Identity" ||
+        topLevelMethodInfo.Params.Length != 1u ||
+        topLevelMethodInfo.ReturnType.Name != "Int" ||
+        topLevelMethodInfo.Params[0].Type.Name != "Int" ||
+        classMethodInfo.Name != "Adjust" || classMethodInfo.Params.Length != 1u ||
+        classMethodInfo.ReturnType.Name != "Int" ||
+        classMethodInfo.Params[0].Type.Name != "Int" ||
+        genericInstanceMethodInfo.Name != "Echo" ||
+        genericInstanceMethodInfo.ReturnType.Name != "Int" ||
+        genericInstanceMethodInfo.Params[0].Type.Name != "Int" ||
+        interfaceMethodInfo.Name != "Mark" || interfaceMethodInfo.Params.Length != 0u ||
+        structMethodInfo.Name != "GetValue" || structMethodInfo.Params.Length != 1u ||
+        lambdaMethodInfo.Name == null || lambdaMethodInfo.Params.Length != 1u ||
+        capturedLocalMethodInfo.Name != "CapturedLocal" ||
+        capturedLocalMethodInfo.ReturnType.Name != "Int" ||
+        capturedLocalMethodInfo.Params[0].Type.Name != "Int" ||
+        emptyMethodInfo.Name != null || emptyMethodInfo.ReturnType.Name != null ||
+        emptyMethodInfo.Params != null ||
+        multicastTarget.Method.Name != "Adjust" ||
+        identityHandlers[0].Method.Name != "Identity" ||
+        adjustHandlers[0].Method.Name != "Adjust") return 87;
+    delegate(int) => int anonymousTransform = item => 11;
+    delegate(int) => int anonymousTransformTail = item => 12;
+    anonymousTransform += anonymousTransformTail;
+    var anonymousInvocationList = anonymousTransform.GetInvocationList();
+    delegate(int) => int emptyAnonymousTransform = null;
+    emptyAnonymousTransform = null;
+    if (anonymousInvocationList.Length != 2u ||
+        anonymousInvocationList[0](10) != 11 ||
+        anonymousInvocationList[1](10) != 12 ||
+        emptyAnonymousTransform.GetInvocationList().Length != 0u)
+        return 85;
     if (DefaultValue<int>() != 0 || DefaultLocal<long>() != 0L ||
         DefaultValue<Box<int> >() != null || defaultPoint.Value != 0 ||
         defaultArray != null || defaultArrayLocal != null)
@@ -3818,7 +5419,10 @@ public int Run() {
         shade.IsLight() && shade + Shade.Light == 42 &&
         mutationValue == 7 && oldMutationShade == Shade.Light &&
         mutationShade == Shade.Light && converted == 7 &&
-        Identity(41) == 42 && identity(41) == 42 && adjust(2) == 12 &&
+        Identity(41) == 141 && identity(41) == 141 &&
+        Identity(10L) == 210L && Identity("fallback") == "fallback" &&
+        identityHandlers.Length == 1u && identityHandlers[0](41) == 141 &&
+        adjustHandlers.Length == 1u && adjustHandlers[0](2) == 12 && adjust(2) == 12 &&
         40 + 2 == 398 && ~40 == -40 ? AddOne(41) : 0;
 }
 '@, [Text.UTF8Encoding]::new($false))
@@ -3869,8 +5473,12 @@ int main(void) { return CX_ID_3(app, App, Run)() == 42 ? 0 : 1; }
     }
 
     Write-Output 'PASS Main(string[] args): argument values, output, and exit codes'
+    Write-Output 'PASS generic virtual dispatch: overrides, constructed implementations, inherited and redeclared interface contracts, generic callers, specialization/fallback, and method values'
     Write-Output 'PASS property assignment order, compound assignment, and increment/decrement: indexed, class, interface, and mutating struct operator'
-    Write-Output 'PASS named delegates: multicast invocation, removal, invocation-list reflection, and closure capture'
+    Write-Output 'PASS delegates: named and anonymous invocation lists, multicast operations, and closure capture'
+    Write-Output 'PASS closed generic owners: constructed generic reference arrays in field initializers and constructors'
+    Write-Output 'PASS closed generic owners: constructed generic value arrays use closed element strides'
+    Write-Output 'PASS generic void forwarding: exact specialization and primary fallback'
     Write-Output 'PASS native cross-module generic specializations through a referenced CX library (static and DLL)'
     $completed = $true
 }

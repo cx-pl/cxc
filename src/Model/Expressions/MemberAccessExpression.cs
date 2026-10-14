@@ -4,6 +4,8 @@ using CxCompiler.Semantics;
 
 public sealed class MemberAccessExpression : ExpressionBase
 {
+    private readonly Dictionary<string, GenericVirtualDispatchTarget>
+        _genericVirtualDispatchTargets = new(StringComparer.Ordinal);
     public ExpressionBase Target { get; }
     public string MemberName { get; }
     public IReadOnlyList<CxCompiler.Model.Types.TypeBase>? StaticContainingTypeArguments { get; private set; }
@@ -17,10 +19,15 @@ public sealed class MemberAccessExpression : ExpressionBase
     public string? FunctionValueAdapterName { get; private set; }
     public string? FunctionValueEnvironmentName { get; private set; }
     public string? FunctionValueReceiverTemporaryName { get; private set; }
+    public bool IsFunctionValueTarget { get; private set; }
+    public bool IsFunctionValueMethod { get; private set; }
+    public string? FunctionValueMetadataTemporaryName { get; private set; }
     public int ReceiverBaseDepth { get; private set; }
     public int? InterfaceDispatchSlotIndex { get; private set; }
     public string? InterfaceReceiverTemporaryName { get; private set; }
     public CxCompiler.Model.Types.NamedType? InterfaceDispatchType { get; private set; }
+    public IReadOnlyCollection<GenericVirtualDispatchTarget> GenericVirtualDispatchTargets =>
+        _genericVirtualDispatchTargets.Values;
 
     public MemberAccessExpression(ExpressionBase target, string memberName)
     {
@@ -80,9 +87,39 @@ public sealed class MemberAccessExpression : ExpressionBase
         InterfaceDispatchSlotIndex = interfaceDispatchSlotIndex;
     }
 
+    public void BindGenericVirtualDispatchTarget(
+        CxCompiler.Model.Types.NamedType runtimeType,
+        FunctionSymbol implementation)
+    {
+        var runtimeIdentity = runtimeType.ConstructedIdentity?.CanonicalName ??
+            runtimeType.ResolvedTypeFullName.ToString();
+        var declaration = implementation.Declaration;
+        var methodArguments = declaration is null
+            ? []
+            : declaration.GenericTypeNames.Select(name =>
+                implementation.GenericTypeArguments.GetValueOrDefault(name)?.FullName.ToString() ??
+                throw new CxCompiler.Model.InternalCompilerException(
+                    $"Generic virtual implementation '{implementation.FullName}' has no closed type argument for '{name}'."));
+        var key = $"{runtimeIdentity}|{string.Join("|", methodArguments)}";
+        _genericVirtualDispatchTargets[key] =
+            new GenericVirtualDispatchTarget(runtimeType, implementation);
+    }
+
     public void BindStaticFunctionValue(FunctionSymbol symbol)
     {
         FunctionValueSymbol = symbol;
         FunctionValueIsStatic = true;
+    }
+
+    public void BindFunctionValueTarget(string temporaryName)
+    {
+        IsFunctionValueTarget = true;
+        FunctionValueMetadataTemporaryName = temporaryName;
+    }
+
+    public void BindFunctionValueMethod(string temporaryName)
+    {
+        IsFunctionValueMethod = true;
+        FunctionValueMetadataTemporaryName = temporaryName;
     }
 }

@@ -22,7 +22,11 @@ public sealed class EnumDeclarationParserVisitor : CxParserBaseVisitor<EnumDecla
         var declaration = new EnumDeclaration(
             context.name.Text,
             _namespace,
-            ParseVisibility(context.visibilityModifier()?.GetText())).WithSourceSpan(context);
+            ParseVisibility(context.visibilityModifier()?.GetText()))
+        {
+            Annotations = AnnotationParser.Parse(context.annotations()),
+            UnderlyingType = context.underlying is null ? null : new TypeNameContextVisitor().Visit(context.underlying),
+        }.WithSourceSpan(context);
 
         foreach (var memberContext in context.enumDeclarationBody().enumMemberDeclaration())
         {

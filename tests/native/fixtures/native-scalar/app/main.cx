@@ -1,0 +1,20 @@
+import NativeScalar;
+import System;
+import System.Interop;
+public unsafe int Main() {
+    if (ProcessId() <= 0) return 1;
+#if WINDOWS
+    NativeLibrary library = NativeLibrary.Load("kernel32.dll");
+    ProcessIdFunction processId = library.Resolve<ProcessIdFunction>("GetCurrentProcessId");
+#else
+    NativeLibrary library = NativeLibrary.Load("libc.so.6");
+    ProcessIdFunction processId = library.Resolve<ProcessIdFunction>("getpid");
+#endif
+    if (processId() != ProcessId()) return 2;
+    try { library.Resolve<ProcessIdFunction>("__cx_missing_symbol__"); return 3; }
+    catch (Exception error) { if (error.Message == null || error.Message.Length == 0u) return 4; }
+    try { NativeLibrary.Load("__cx_missing_library__"); return 5; }
+    catch (Exception error) { if (error.Message == null || error.Message.Length == 0u) return 6; }
+    Console.WriteLine("native scalar import passed");
+    return 0;
+}

@@ -12,7 +12,15 @@ public class CxProject
     public List<string> Targets { get; set; } = [];
     public CxPackageSection Package { get; set; } = new();
     public List<string> Dependencies { get; set; } = [];
+    public List<string> Feeds { get; set; } = [];
     public List<string> ProjectReferences { get; set; } = [];
+    public Dictionary<string, NativeLibraryDependency> NativeLibraries { get; set; } =
+        new(StringComparer.Ordinal);
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    [YamlDotNet.Serialization.YamlIgnore]
+    public Dictionary<string, Dictionary<string, NativeLibraryDependency>> ReferencedNativeLibraries { get; } =
+        new(StringComparer.Ordinal);
 
     [System.Text.Json.Serialization.JsonIgnore]
     [YamlDotNet.Serialization.YamlIgnore]
@@ -86,12 +94,13 @@ public class CxProject
         _compilationContexts.Add(context);
     }
 
-    internal void AddReferencedCompilationContext(CompilationContext context, string projectName)
+    internal void AddReferencedCompilationContext(CompilationContext context, string projectName, bool syntheticCore = false)
     {
         var referenceContext = new CompilationContext
         {
             ProjectName = projectName,
             IsProjectReference = true,
+            IsSyntheticCore = syntheticCore,
         };
         referenceContext.SetNamespace(context.Namespace);
         foreach (var import in context.Imports)
@@ -102,6 +111,8 @@ public class CxProject
             context.DeclarationScope.Declarations.ToArray());
         _compilationContexts.Add(referenceContext);
     }
+
+    internal void RemoveSyntheticCoreContexts() => _compilationContexts.RemoveAll(context => context.IsSyntheticCore);
 }
 
 public class CxPackageSection

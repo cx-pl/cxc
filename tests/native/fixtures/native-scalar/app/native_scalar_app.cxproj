@@ -1,0 +1,4 @@
+name: native_scalar_app
+version: 1.0.0
+type: Executable
+project_references: [../bindings/native_scalar.cxproj]

@@ -7,7 +7,7 @@ options {
 // Top-level statements
 
 compilationUnit
-    : importStatements? namespaceDeclaration? topLevelDeclarations?
+    : importStatements? namespaceDeclaration? topLevelDeclarations? EOF
     ;
 
 importStatements
@@ -37,7 +37,7 @@ topLevelDeclaration
     ;
 
 delegateDeclaration
-    : visibilityModifier? Delegate returnType = typeNameOrVoid name = Identifier
+    : annotations? visibilityModifier? Delegate returnType = typeNameOrVoid name = Identifier
         LeftParen parameters = functionParameters? RightParen Semicolon
     ;
 
@@ -78,7 +78,7 @@ classType
     ;
 
 classDeclaration
-    : classModifiers partial = Partial? classType name = Identifier genericTypeParameters?
+    : annotations? classModifiers partial = Partial? classType name = Identifier genericTypeParameters?
         conceptConstraintClause* genericConstraintClauses? base = classBase?
         body = classDeclarationBody
     ;
@@ -102,6 +102,7 @@ memberModifier
     | Final
     | Static
     | Extern
+    | Unsafe
     ;
 
 memberDeclaration
@@ -113,7 +114,7 @@ memberDeclaration
     ;
 
 fieldsDeclaration
-    : memberModifiers typeName fieldInitializers Semicolon
+    : annotations? memberModifiers typeName fieldInitializers Semicolon
     ;
 
 fieldInitializers
@@ -126,7 +127,7 @@ fieldInitializer
     ;
 
 propertyDeclaration
-    : memberModifiers typeName Identifier LeftBrace propertyAccessorDeclarations RightBrace
+    : annotations? memberModifiers typeName Identifier LeftBrace propertyAccessorDeclarations RightBrace
     ;
 
 propertyAccessorDeclarations
@@ -153,7 +154,7 @@ propertyAccessorBody
     ;
 
 constructorDeclaration
-    : modifiers = memberModifiers Constructor LeftParen functionParameters? RightParen constructorOrBaseInvocation? functionBody
+    : annotations? modifiers = memberModifiers Constructor LeftParen functionParameters? RightParen constructorOrBaseInvocation? functionBody
     ;
 
 constructorOrBaseInvocation
@@ -161,7 +162,7 @@ constructorOrBaseInvocation
     ;
 
 functionDeclaration
-    : modifiers = memberModifiers async = Async? returnType = typeNameOrVoid name = Identifier
+    : annotations? modifiers = memberModifiers async = Async? returnType = typeNameOrVoid name = Identifier
         functionGenericTypeList? LeftParen functionParameters? RightParen Const? conceptConstraintClause* genericConstraintClauses? functionBody
     ;
 
@@ -197,7 +198,8 @@ functionParameters
     ;
 
 functionParameter
-    : Params? typeName name = Identifier (defaultValue = Assign (literal | qualifiedIdentifier))?
+    : annotations? Params? typeName name = Identifier
+        (defaultValue = Assign (literal | sign = (Plus | Minus) (IntegerLiteral | FloatingLiteral) | qualifiedIdentifier))?
     ;
 
 functionBody
@@ -207,7 +209,7 @@ functionBody
     ;
 
 enumDeclaration
-    : visibilityModifier? Enum name = Identifier enumDeclarationBody
+    : annotations? visibilityModifier? Enum name = Identifier (Colon underlying = integerType)? enumDeclarationBody
     ;
 
 enumDeclarationBody
@@ -221,7 +223,7 @@ enumMemberDeclaration
     ;
 
 aliasDeclaration
-    : Alias Identifier genericTypeParameters? Assign target = qualifiedIdentifier genericTypeArguments? Semicolon
+    : Alias Identifier genericTypeParameters? Assign target = typeName Semicolon
     ;
 
 extensionDeclaration
@@ -301,12 +303,17 @@ embeddedStatement
     | throwStatement
     | tryStatement
     | usingStatement
+    | unsafeStatement
     | LeftBrace statements? RightBrace
     | Semicolon
     ;
 
 expressionStatement
     : expression Semicolon
+    ;
+
+unsafeStatement
+    : Unsafe LeftBrace statements? RightBrace
     ;
 
 ifStatement
@@ -516,6 +523,8 @@ unaryExpression
     | Tilde unaryExpression
     | PlusPlus unaryExpression
     | MinusMinus unaryExpression
+    | And unaryExpression
+    | Star unaryExpression
     | LeftParen typeName RightParen unaryExpression
     | Await unaryExpression
     ;
@@ -543,12 +552,23 @@ switchExpressionArm
     ;
 
 primaryExpressionStart
-    : literal
+    : nativeTypeQuery
+    | nativeStackAllocation
+    | literal
     | Identifier
     | This
     | LeftParen expression RightParen
     | arrayCreationExpression
     | New typeName functionInvocation
+    ;
+
+nativeTypeQuery
+    : (Sizeof | Alignof) LeftParen typeName RightParen
+    | Offsetof LeftParen typeName Comma Identifier RightParen
+    ;
+
+nativeStackAllocation
+    : Stackalloc Less typeName Greater LeftParen expression RightParen
     ;
 
 arrayCreationExpression
@@ -605,7 +625,12 @@ annotations
     ;
 
 annotation
-    : At qualifiedIdentifier functionInvocation?
+    : At (target = (Return | Identifier) Colon)? qualifiedIdentifier
+        (LeftParen (annotationArgument (Comma annotationArgument)*)? RightParen)?
+    ;
+
+annotationArgument
+    : (name = Identifier Assign)? expression
     ;
 
 // Types
@@ -632,7 +657,7 @@ functionTypeParameters
     ;
 
 arrayDimension
-    : LeftBracket RightBracket
+    : LeftBracket IntegerLiteral? RightBracket
     ;
 
 genericTypeParameters
@@ -658,7 +683,7 @@ builtInType
     | floatingType
     | textualType
     | objectType = Object
-    | ptrType = Ptr genericTypeArguments?
+    | ptrType = Ptr (genericTypeArguments | Less Const? Void Greater)?
     ;
 
 integerType
@@ -675,10 +700,10 @@ integerType
     | Int16
     | Int32
     | Int64
-    | UInt8
-    | UInt16
-    | UInt32
-    | UInt64
+    | Uint8
+    | Uint16
+    | Uint32
+    | Uint64
     ;
 
 floatingType
@@ -691,6 +716,7 @@ floatingType
 
 textualType
     : Char
+    | Wchar
     | String
     ;
 

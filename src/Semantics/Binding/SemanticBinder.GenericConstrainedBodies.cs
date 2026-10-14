@@ -477,7 +477,7 @@ public sealed partial class SemanticBinder
         return IsGenericArrayLengthExpression(target, function);
     }
 
-    private static bool IsGenericArrayLengthExpression(
+    private static TypeBase? GetGenericArrayLengthArrayType(
         ExpressionBase expression,
         FunctionDeclaration function)
     {
@@ -490,9 +490,37 @@ public sealed partial class SemanticBinder
             _ => null,
         };
 
-        return arrayType is ArrayType array &&
-            ContainsFunctionTypeParameter(array.ElementType, function.GenericTypeNames);
+        // Generic body validation runs before name resolution. Recognize the
+        // fully qualified public spelling here so it can match the parser's
+        // compiler-special ArrayType representation for T[].
+        if (arrayType is NamedType
+            {
+                TypeArguments.Count: 1,
+            } namedArray &&
+            namedArray.Name is "Array" or "System.Collections.Array")
+        {
+            arrayType = new ArrayType(namedArray.TypeArguments[0]);
+        }
+
+        return arrayType is not null &&
+            ArrayType.TryGetElementType(arrayType, out var genericElementType) &&
+            ContainsFunctionTypeParameter(genericElementType, function.GenericTypeNames)
+                ? arrayType
+                : null;
     }
+
+    private static bool IsGenericArrayLengthExpression(
+        ExpressionBase expression,
+        FunctionDeclaration function) =>
+        GetGenericArrayLengthArrayType(expression, function) is not null;
+
+    private static bool IsMatchingGenericArrayLengthPair(
+        ExpressionBase left,
+        ExpressionBase right,
+        FunctionDeclaration function) =>
+        GetGenericArrayLengthArrayType(left, function) is { } leftType &&
+        GetGenericArrayLengthArrayType(right, function) is { } rightType &&
+        ArrayType.AreEquivalent(leftType, rightType);
 
     private static bool IsGenericArrayLengthComparisonBody(FunctionDeclaration function)
     {
@@ -510,14 +538,22 @@ public sealed partial class SemanticBinder
                 MemberName: "Length",
             } && IsGenericArrayLengthExpression(target, function);
 
-        bool IsUnsignedComparisonOperand(ExpressionBase expression) =>
-            expression is LiteralExpression literal &&
-                (literal.SourceText.EndsWith('u') ||
-                 uint.TryParse(literal.SourceText, out _)) ||
-            expression is IdentifierExpression identifier &&
-                function.Parameters.Any(parameter =>
-                    parameter.Name == identifier.Identifier.ToString() &&
-                    parameter.ParameterType is UIntType);
+        bool IsUnsignedComparisonOperand(ExpressionBase expression) => expression switch
+        {
+            LiteralExpression literal =>
+                literal.SourceText.EndsWith('u') ||
+                uint.TryParse(literal.SourceText, out _),
+            IdentifierExpression identifier => function.Parameters.Any(parameter =>
+                parameter.Name == identifier.Identifier.ToString() &&
+                parameter.ParameterType is UIntType),
+            BinaryExpression
+            {
+                Operator: "+" or "-" or "*" or "/" or "%",
+                OperatorSymbol: null,
+            } arithmetic => IsUnsignedComparisonOperand(arithmetic.Left) &&
+                IsUnsignedComparisonOperand(arithmetic.Right),
+            _ => false,
+        };
 
         bool IsLengthComparison(ExpressionBase candidate) =>
             candidate is BinaryExpression
@@ -528,7 +564,13 @@ public sealed partial class SemanticBinder
             (IsLengthOfGenericArrayParameter(comparison.Left) &&
                 IsUnsignedComparisonOperand(comparison.Right) ||
              IsUnsignedComparisonOperand(comparison.Left) &&
-                IsLengthOfGenericArrayParameter(comparison.Right));
+                IsLengthOfGenericArrayParameter(comparison.Right) ||
+             IsLengthOfGenericArrayParameter(comparison.Left) &&
+                IsLengthOfGenericArrayParameter(comparison.Right) &&
+                IsMatchingGenericArrayLengthPair(
+                    ((MemberAccessExpression)comparison.Left).Target!,
+                    ((MemberAccessExpression)comparison.Right).Target!,
+                    function));
 
         bool IsSupportedBooleanExpression(ExpressionBase candidate) => candidate switch
         {

@@ -4,7 +4,7 @@ namespace CxCompiler.Model.Expressions;
 
 public sealed class ArrayCreationExpression : ExpressionBase
 {
-    public TypeBase ElementType { get; }
+    public TypeBase ElementType { get; set; }
     public ExpressionBase Length { get; }
 
     public ArrayCreationExpression(TypeBase elementType, ExpressionBase length)

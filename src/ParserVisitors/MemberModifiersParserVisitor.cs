@@ -30,6 +30,7 @@ public class MemberModifiersParserVisitor : CxParserBaseVisitor<MemberModifier[]
                 "final" => MemberModifier.Final,
                 "static" => MemberModifier.Static,
                 "extern" => MemberModifier.Extern,
+                "unsafe" => MemberModifier.Unsafe,
                 _ => throw new InternalCompilerException($"Unknown member modifier {child.GetText()}"),
             });
         }

@@ -12,6 +12,7 @@ public sealed class IdentifierExpression : ExpressionBase
     public PropertySymbol? TargetProperty { get; private set; }
     public PropertyAccessorSymbol? PropertyGetter { get; private set; }
     public FunctionSymbol? FunctionValueSymbol { get; private set; }
+    public string? FunctionValueEnvironmentTemporaryName { get; private set; }
     public MemberAccessExpression? TargetMethodValue { get; private set; }
     public LocalVariableSymbol? TargetLocal { get; private set; }
     public LambdaCapture? TargetCapture { get; private set; }
@@ -38,9 +39,10 @@ public sealed class IdentifierExpression : ExpressionBase
         ReceiverBaseDepth = receiverBaseDepth;
     }
 
-    public void BindFunctionValue(FunctionSymbol symbol)
+    public void BindFunctionValue(FunctionSymbol symbol, string? environmentTemporaryName = null)
     {
         FunctionValueSymbol = symbol;
+        FunctionValueEnvironmentTemporaryName = environmentTemporaryName;
     }
 
     public void BindMethodValue(MemberAccessExpression methodValue)

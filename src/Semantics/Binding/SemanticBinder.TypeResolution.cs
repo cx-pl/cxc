@@ -47,14 +47,28 @@ public sealed partial class SemanticBinder
     {
         switch (type)
         {
+            case FixedArrayType array:
+                ResolveTypeReference(array.ElementType, currentNamespace, imports);
+                if (!IsNativeScalar(array.ElementType))
+                    throw new CompilationErrorException("Fixed arrays require native elements.", type.SourceSpan);
+                return;
+            case PtrType { Pointee: { } pointee }:
+                ResolveTypeReference(pointee, currentNamespace, imports);
+                if (!IsNativeScalar(pointee) && UnwrapConst(pointee) is not VoidType and not NamedType { NativeType: not null })
+                    throw new CompilationErrorException("Typed pointers require a native scalar, pointer, or native SDK pointee.", type.SourceSpan);
+                return;
             case ConstType constType:
                 ResolveTypeReference(constType.UnderlyingType, currentNamespace, imports);
                 return;
             case ArrayType arrayType:
                 ResolveTypeReference(arrayType.ElementType, currentNamespace, imports);
+                if (UnwrapConst(arrayType.ElementType) is NamedType { NativeType.Opaque: true })
+                    throw new CompilationErrorException("Opaque native types are legal through pointers only, not managed arrays.", type.SourceSpan);
                 return;
             case NullableType nullableType:
                 ResolveTypeReference(nullableType.UnderlyingType, currentNamespace, imports);
+                if (UnwrapConst(nullableType.UnderlyingType) is NamedType { NativeType: not null })
+                    throw new CompilationErrorException("Native types do not use managed nullable storage; use a pointer or an explicit native representation.", type.SourceSpan);
                 return;
             case FunctionType functionType:
                 ResolveTypeReference(functionType.ReturnType, currentNamespace, imports);
@@ -123,6 +137,7 @@ public sealed partial class SemanticBinder
                 classCandidate.Declaration.FullName,
                 classCandidate.ModuleName,
                 classCandidate.Declaration.ClassType);
+            namedType.NativeType = classCandidate.Declaration.NativeType;
             ValidateGenericTypeConstraints(classCandidate.Declaration, namedType);
         }
         else if (enumCandidates.SingleOrDefault() is { } enumCandidate)
@@ -136,6 +151,7 @@ public sealed partial class SemanticBinder
                 enumCandidate.Declaration.FullName,
                 enumCandidate.ModuleName,
                 ClassType.Enum);
+            namedType.EnumUnderlyingType = enumCandidate.Declaration.UnderlyingType;
         }
         else if (delegateCandidates.SingleOrDefault() is { } delegateCandidate)
         {
@@ -192,8 +208,9 @@ public sealed partial class SemanticBinder
                 arguments);
             if (substitutedTarget is not NamedType namedTarget)
             {
-                throw new CompilationErrorException(
-                    $"Alias '{symbol.Declaration.FullName}' must resolve to a named type.");
+                ResolveTypeReference(substitutedTarget, symbol.Declaration.Namespace, symbol.Imports);
+                destination.SetPrimitiveAliasTarget(substitutedTarget);
+                return;
             }
             var target = NamedType.CreateWithTypeArguments(
                 namedTarget.Name,
@@ -202,7 +219,7 @@ public sealed partial class SemanticBinder
                 target,
                 symbol.Declaration.Namespace,
                 symbol.Imports);
-            if (target.ResolvedTypeFullName.ToString() == "void")
+            if (target.ResolvedTypeFullName.ToString() == "void" && target.AliasTargetType is null)
             {
                 throw new CompilationErrorException(
                     $"Cannot resolve alias target '{symbol.Declaration.TargetType.Name}' " +

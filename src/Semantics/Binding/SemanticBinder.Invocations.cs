@@ -17,20 +17,122 @@ public sealed partial class SemanticBinder
         LocalScope scope)
     {
         var currentNamespace = GetCurrentNamespace(function);
+        if (invocation.Target is MemberAccessExpression registrationCall &&
+            registrationCall.MemberName is "Register" or "Function" && invocation.ExplicitTypeArguments.Count == 1)
+        {
+            var isRegister = registrationCall.MemberName == "Register" &&
+                TryFlattenIdentifier(registrationCall.Target, out var staticName) &&
+                GetCandidateNames(staticName, currentNamespace, imports).Contains(new QualifiedIdentifier("System", "Interop", "NativeCallback")) &&
+                !(staticName.Parts.Length == 1 && scope.TryLookup(staticName.Parts[0], out _));
+            TypeBase? registrationReceiverType = null;
+            if (!isRegister && registrationCall.MemberName == "Function")
+                registrationReceiverType = BindExpression(registrationCall.Target, function, imports, scope);
+            if (isRegister || registrationReceiverType is NamedType { ResolvedTypeFullName: { } registrationName } &&
+                registrationName.ToString() == "cxcore.System.Interop.NativeCallbackRegistration")
+            {
+                RequireUnsafe(function, invocation.SourceSpan);
+                var requested = invocation.ExplicitTypeArguments[0];
+                ResolveTypeReference(requested, currentNamespace, imports);
+                if (GetFunctionSignature(requested) is not NativeFunctionType native || native.ContextParameter < 0)
+                    throw new CompilationErrorException("Retained callback registration requires a NativeFunction contextParameter naming a void* parameter.", invocation.SourceSpan);
+                var managed = new FunctionType(QualifiedIdentifier.Empty, native.ReturnType,
+                    native.ParameterTypes.Where((_, index) => index != native.ContextParameter).ToArray());
+                if (isRegister)
+                {
+                    if (invocation.Arguments.Count is < 1 or > 2)
+                        throw new CompilationErrorException("NativeCallback.Register requires a callback and an optional owner.", invocation.SourceSpan);
+                    var callbackType = BindExpression(invocation.Arguments[0], function, imports, scope, managed);
+                    if (BorrowsStackStorage(invocation.Arguments[0]))
+                        throw new CompilationErrorException("Retained callbacks cannot capture borrowed stack storage; use an owned native buffer.", invocation.SourceSpan);
+                    if (!CanAssign(managed, callbackType))
+                        throw new CompilationErrorException("Managed callback signature does not match the native parameters excluding contextParameter.", invocation.SourceSpan);
+                    if (invocation.Arguments.Count == 2 &&
+                        !CanAssign(BuiltInSystemTypes.Object, BindExpression(invocation.Arguments[1], function, imports, scope)))
+                        throw new CompilationErrorException("A callback owner must be a managed object.", invocation.SourceSpan);
+                }
+                else if (invocation.Arguments.Count != 0)
+                    throw new CompilationErrorException("Registration.Function takes no arguments.", invocation.SourceSpan);
+                invocation.BindNativeRegistration(native, managed, $"__cx_native_registration_{++_operatorTemporaryIndex}",
+                    isRegister ? null : registrationCall.Target);
+                if (!isRegister) return requested;
+                var result = new NamedType("System.Interop.NativeCallbackRegistration", []);
+                ResolveTypeReference(result, currentNamespace, imports);
+                return result;
+            }
+        }
+        if (invocation.Target is MemberAccessExpression { MemberName: "Resolve" } resolver &&
+            invocation.ExplicitTypeArguments.Count == 1)
+        {
+            var libraryReceiverType = BindExpression(resolver.Target, function, imports, scope);
+            if (UnwrapConst(libraryReceiverType) is NamedType { ResolvedTypeFullName: { } name } &&
+                name.ToString() == "cxcore.System.Interop.NativeLibrary")
+            {
+                RequireUnsafe(function, invocation.SourceSpan);
+                var requested = invocation.ExplicitTypeArguments[0];
+                ResolveTypeReference(requested, currentNamespace, imports);
+                if (GetFunctionSignature(requested) is not NativeFunctionType signature || invocation.Arguments.Count != 1 ||
+                    BindExpression(invocation.Arguments[0], function, imports, scope) is not StringType)
+                    throw new CompilationErrorException("NativeLibrary.Resolve requires a NativeFunction delegate type and one symbol-name string.", invocation.SourceSpan);
+                invocation.BindNativeResolve(signature, resolver.Target, $"__cx_native_symbol_{++_operatorTemporaryIndex}");
+                return requested;
+            }
+        }
         if (invocation.Target is MemberAccessExpression delegateMember &&
-            delegateMember.MemberName == "GetInvocationList")
+            delegateMember.MemberName is "GetInvocationList" or "DynamicInvoke")
         {
             var delegateReceiverType = BindExpression(
                 delegateMember.Target,
                 function,
                 imports,
                 scope);
-            if (UnwrapConst(delegateReceiverType) is NamedType
-                {
-                    IsDelegate: true,
-                    DelegateSignature: { } delegateSignature,
-                } delegateType)
+            var receiverValueType = UnwrapConst(delegateReceiverType);
+            var delegateSignature = GetFunctionSignature(receiverValueType);
+            if (delegateSignature is NativeFunctionType)
+                throw new CompilationErrorException("Native function pointers have no CX delegate invocation list or DynamicInvoke.", invocation.SourceSpan);
+            if (delegateSignature is not null &&
+                (receiverValueType is FunctionType ||
+                 receiverValueType is NamedType { IsDelegate: true }))
             {
+                if (delegateMember.MemberName == "DynamicInvoke")
+                {
+                    if (invocation.Arguments.Count != 1 ||
+                        invocation.ExplicitTypeArguments.Count != 0)
+                    {
+                        throw new CompilationErrorException(
+                            "Delegate.DynamicInvoke requires one object[] argument.",
+                            invocation.SourceSpan);
+                    }
+
+                    var objectArrayType = new ArrayType(BuiltInSystemTypes.Object);
+                    var argumentType = BindExpression(
+                        invocation.Arguments[0],
+                        function,
+                        imports,
+                        scope,
+                        objectArrayType);
+                    if (!CanAssign(objectArrayType, argumentType))
+                    {
+                        throw new CompilationErrorException(
+                            "Delegate.DynamicInvoke requires one object[] argument.",
+                            invocation.Arguments[0].SourceSpan);
+                    }
+                    if (!delegateSignature.ParameterTypes.All(type =>
+                            IsSupportedDynamicInvokeType(type)) ||
+                        !IsSupportedDynamicInvokeType(
+                            delegateSignature.ReturnType, allowVoid: true))
+                    {
+                        throw new CompilationErrorException(
+                            "Delegate.DynamicInvoke does not support this open or runtime-only signature.",
+                            invocation.SourceSpan);
+                    }
+
+                    invocation.BindDelegateDynamicInvoke(
+                        delegateSignature,
+                        delegateMember.Target,
+                        $"__cx_delegate_dynamic_{++_operatorTemporaryIndex}");
+                    return BuiltInSystemTypes.Object;
+                }
+
                 if (invocation.Arguments.Count != 0 ||
                     invocation.ExplicitTypeArguments.Count != 0)
                 {
@@ -39,13 +141,11 @@ public sealed partial class SemanticBinder
                         invocation.SourceSpan);
                 }
 
-                var location = invocation.SourceSpan ?? throw new InternalCompilerException(
-                    "Delegate invocation-list access has no source location.");
                 invocation.BindDelegateInvocationList(
                     delegateSignature,
                     delegateMember.Target,
-                    $"__cx_delegate_list_{location.StartLine}_{location.StartColumn}");
-                return new ArrayType(delegateType);
+                    $"__cx_delegate_list_{++_operatorTemporaryIndex}");
+                return new ArrayType(receiverValueType);
             }
         }
 
@@ -75,8 +175,16 @@ public sealed partial class SemanticBinder
             }
         }
 
+        if (functionValueType is null && invocation.Target is IdentifierExpression fieldValue &&
+            fieldValue.Identifier.Parts.Length == 1 && function.ParentClassDeclaration is { } fieldOwner &&
+            (FindField(fieldOwner, fieldValue.Identifier.Parts[0], staticOnly: null) is not null ||
+             FindProperty(fieldOwner, fieldValue.Identifier.Parts[0], staticOnly: null) is not null))
+            functionValueType = GetFunctionSignature(BindExpression(fieldValue, function, imports, scope));
         if (functionValueType is not null)
         {
+            if (functionValueType is NativeFunctionType { SymbolOnly: true })
+                throw new CompilationErrorException("Native procedure symbols must be validated and explicitly converted to a typed NativeFunction before calling.", invocation.SourceSpan);
+            if (functionValueType is NativeFunctionType) RequireUnsafe(function, invocation.SourceSpan);
             var functionValueArgumentTypes = new List<TypeBase>();
             for (var index = 0; index < invocation.Arguments.Count; index++)
             {
@@ -379,14 +487,25 @@ public sealed partial class SemanticBinder
                     .Index;
             }
         }
+        if (target.Symbol.NativeImport is { Blocking: true } && invocation.Arguments.Any(BorrowsStackStorage))
+            throw new CompilationErrorException("Blocking native calls require native buffers; borrowed stack storage cannot be mutated while the GC scans it.", invocation.SourceSpan);
+        if (target.Symbol.NativeImport is not null || target.Symbol.Declaration?.MemberModifiers.Contains(MemberModifier.Unsafe) == true)
+            RequireUnsafe(function, invocation.SourceSpan);
         invocation.BindTarget(
             target.Symbol,
             receiver,
             target.BaseDepth,
             dispatchSlotIndex,
-            dispatchSlotIndex is null
-                ? null
-                : $"__cx_iface_receiver_{_interfaceReceiverIndex++}",
+            dispatchSlotIndex is not null
+                ? $"__cx_iface_receiver_{_interfaceReceiverIndex++}"
+                : target.Symbol.Declaration is
+                {
+                    GenericTypeNames.Length: > 0,
+                    VirtualSlotIndex: not null,
+                    ParentClassDeclaration.ClassType: ClassType.Class,
+                }
+                    ? $"__cx_generic_virtual_receiver_{_interfaceReceiverIndex++}"
+                    : null,
             dispatchInterfaceType);
         if (target.Symbol.SpecializationName is not null)
         {
@@ -591,6 +710,46 @@ public sealed partial class SemanticBinder
         LocalScope scope,
         QualifiedIdentifier currentNamespace)
     {
+        if (invocation.Target is MemberAccessExpression member &&
+            TryResolveTypeExpression(member.Target, currentNamespace, imports, scope)
+                ?.Declaration is ClassDeclaration owner)
+        {
+            var parameterTypes = FindFunctions(owner, member.MemberName)
+                .Select(candidate => candidate.Symbol)
+                .Where(candidate => candidate.Declaration?.IsStatic == true &&
+                    candidate.ParameterTypes.Count == invocation.Arguments.Count &&
+                    GetFunctionSignature(candidate.ParameterTypes[parameterIndex]) is not null)
+                .Select(candidate => candidate.ParameterTypes[parameterIndex])
+                .DistinctBy(GetTypeName)
+                .ToArray();
+            return parameterTypes.Length == 1 ? parameterTypes[0] : null;
+        }
+        if (TryFlattenIdentifier(invocation.Target, out var namespaceCall) &&
+            !(namespaceCall.Parts.Length > 0 && scope.TryLookup(namespaceCall.Parts[0], out _)) &&
+            FindNamedFunctions(namespaceCall, currentNamespace, imports) is { Count: > 0 } namespaceFunctions)
+        {
+            var parameterTypes = namespaceFunctions.Select(candidate => candidate.Symbol)
+                .Where(candidate => candidate.ParameterTypes.Count == invocation.Arguments.Count &&
+                    GetFunctionSignature(candidate.ParameterTypes[parameterIndex]) is not null)
+                .Select(candidate => candidate.ParameterTypes[parameterIndex]).ToArray();
+            return parameterTypes.Length > 0 && parameterTypes.All(type => IsType(type, parameterTypes[0])) ? parameterTypes[0] : null;
+        }
+        if (invocation.Target is MemberAccessExpression instanceMember)
+        {
+            var instanceType = BindExpression(instanceMember.Target, function, imports, scope);
+            if (GetMemberClassDeclaration(UnwrapConst(instanceType)) is { } instanceOwner)
+            {
+                var parameterTypes = FindFunctions(instanceOwner, instanceMember.MemberName)
+                    .Select(candidate => candidate.Symbol)
+                    .Where(candidate => candidate.Declaration?.IsStatic == false &&
+                        candidate.ParameterTypes.Count == invocation.Arguments.Count &&
+                        GetFunctionSignature(candidate.ParameterTypes[parameterIndex]) is not null)
+                    .Select(candidate => candidate.ParameterTypes[parameterIndex])
+                    .ToArray();
+                if (parameterTypes.Length > 0 && parameterTypes.All(type => IsType(type, parameterTypes[0])))
+                    return parameterTypes[0];
+            }
+        }
         if (invocation.Target is not IdentifierExpression identifier ||
             identifier.Identifier.Parts.Length != 1)
         {
@@ -653,6 +812,8 @@ public sealed partial class SemanticBinder
                 .Distinct(StringComparer.Ordinal)
                 .ToArray());
         ResolveTypeReference(creation.RequestedType, currentNamespace, imports);
+        if (UnwrapConst(creation.RequestedType) is NamedType { NativeType: not null })
+            throw new CompilationErrorException("Native SDK types have no CX allocation or constructors; use native storage and the library allocator.", creation.SourceSpan);
 
         var argumentTypes = creation.Arguments
             .Select(argument => BindExpression(argument, function, imports, scope))
@@ -800,9 +961,35 @@ public sealed partial class SemanticBinder
             ApplyContextualType(pair.First, pair.Second);
         }
         creation.BindConstructor(
+            // Unsafe constructors expose native storage explicitly.
             constructor,
             matchingConstructors[0].ClassType,
             $"__cx_new_{_objectCreationIndex++}");
+        if (constructor.Declaration?.MemberModifiers.Contains(MemberModifier.Unsafe) == true)
+            RequireUnsafe(function, creation.SourceSpan);
         return creation.RequestedType;
+    }
+
+    private static bool IsSupportedDynamicInvokeType(TypeBase type, bool allowVoid = false)
+    {
+        if (type is ConstType constant)
+        {
+            return IsSupportedDynamicInvokeType(constant.UnderlyingType, allowVoid);
+        }
+
+        if (type is VoidType)
+        {
+            return allowVoid;
+        }
+
+        return type switch
+        {
+            GenericType or FunctionType or PtrType or AutoType or NullType => false,
+            NamedType { IsDelegate: true } => false,
+            ArrayType array => IsSupportedDynamicInvokeType(array.ElementType),
+            NamedType named => named.TypeArguments.All(argument =>
+                IsSupportedDynamicInvokeType(argument)),
+            _ => type is ValueTypeBase or ReferenceTypeBase,
+        };
     }
 }

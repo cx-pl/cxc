@@ -6,6 +6,7 @@ namespace CxCompiler.Model.Types;
 public class ClassDeclaration : DeclarationBase
 {
     public string? ProjectName { get; internal set; }
+    public NativeTypeMetadata? NativeType { get; internal set; }
     public Visibility Visibility { get; }
     public ClassType ClassType { get; }
     public string? CustomClassTypeName { get; }

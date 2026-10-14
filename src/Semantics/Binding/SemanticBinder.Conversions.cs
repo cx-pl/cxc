@@ -53,6 +53,7 @@ public sealed partial class SemanticBinder
         {
             return (ushort.MinValue, ushort.MaxValue);
         }
+        if (IsType(type, BuiltInSystemTypes.WChar)) return (0, 65535);
         if (IsType(type, BuiltInSystemTypes.Int))
         {
             return (int.MinValue, int.MaxValue);
@@ -280,6 +281,11 @@ public sealed partial class SemanticBinder
 
         var unwrappedTarget = UnwrapConst(targetType);
         var unwrappedValue = UnwrapConst(valueType);
+        if (unwrappedTarget is ObjectType && unwrappedValue is NamedType { NativeType: not null }) return false;
+        if (unwrappedTarget is PtrType { Pointee: { } targetPointee } &&
+            unwrappedValue is PtrType { Pointee: { } valuePointee } &&
+            targetPointee is ConstType && valuePointee is not ConstType &&
+            IsType(targetPointee, valuePointee)) return true;
         if (unwrappedTarget is NamedType { ClassType: ClassType.Interface } &&
             unwrappedValue is ArrayType arrayValue)
         {
@@ -420,6 +426,7 @@ public sealed partial class SemanticBinder
     {
         type = UnwrapConst(type);
         return type is NullType or ReferenceTypeBase or ArrayType or NullableType or PtrType or FunctionType ||
+            type is NamedType { NativeType.Kind: "handle" } ||
             type is NamedType { ClassType: ClassType.Class or ClassType.Interface } ||
             type is NamedType { IsDelegate: true };
     }
@@ -461,6 +468,11 @@ public sealed partial class SemanticBinder
     {
         left = UnwrapConst(left);
         right = UnwrapConst(right);
+        if (left is PtrType leftPointer && right is PtrType rightPointer)
+            return leftPointer.Pointee is null ? rightPointer.Pointee is null
+                : rightPointer.Pointee is not null &&
+                    (leftPointer.Pointee is ConstType) == (rightPointer.Pointee is ConstType) &&
+                    IsType(leftPointer.Pointee, rightPointer.Pointee);
 
         if (ArrayType.TryGetElementType(left, out var leftArrayElement) &&
             ArrayType.TryGetElementType(right, out var rightArrayElement))
@@ -470,6 +482,11 @@ public sealed partial class SemanticBinder
 
         if (left is FunctionType leftFunction && right is FunctionType rightFunction)
         {
+            if ((leftFunction is NativeFunctionType) != (rightFunction is NativeFunctionType)) return false;
+            if (leftFunction is NativeFunctionType leftNative && rightFunction is NativeFunctionType rightNative &&
+                (leftNative.CallingConvention != rightNative.CallingConvention ||
+                 leftNative.SymbolOnly != rightNative.SymbolOnly ||
+                 leftNative.ContextParameter != rightNative.ContextParameter)) return false;
             return IsType(leftFunction.ReturnType, rightFunction.ReturnType) &&
                 leftFunction.ParameterTypes.Count == rightFunction.ParameterTypes.Count &&
                 leftFunction.ParameterTypes.Zip(rightFunction.ParameterTypes)
@@ -508,7 +525,11 @@ public sealed partial class SemanticBinder
 
     private static TypeBase UnwrapConst(TypeBase type)
     {
-        return type is ConstType constType ? constType.UnderlyingType : type;
+        return type switch {
+            ConstType constant => UnwrapConst(constant.UnderlyingType),
+            NamedType { AliasTargetType: { } target } => UnwrapConst(target),
+            _ => type,
+        };
     }
 
     private static FunctionType? GetFunctionSignature(TypeBase type)

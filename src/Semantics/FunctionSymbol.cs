@@ -11,6 +11,7 @@ public sealed class FunctionSymbol
     public TypeBase ReturnType { get; }
     public int OverloadIndex { get; }
     public FunctionDeclaration? Declaration { get; }
+    public NativeImportMetadata? NativeImport => Declaration?.NativeImport;
     public FunctionDeclaration? ImplementationDeclaration { get; }
     public string? SpecializationName { get; }
     public NamedType? ClosedContainingType { get; }

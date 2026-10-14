@@ -27,9 +27,16 @@ public static class GenericTypeSubstitution
     {
         return type switch
         {
+            FixedArrayType array => new FixedArrayType(Replace(array.ElementType, replaceNamed, replaceGeneric), array.Length),
+            BuiltInTypes.PtrType { Pointee: { } pointee } pointer => new BuiltInTypes.PtrType(
+                pointer.Namespace, Replace(pointee, replaceNamed, replaceGeneric)),
             ConstType item => new ConstType(Replace(item.UnderlyingType, replaceNamed, replaceGeneric)),
             ArrayType item => new ArrayType(Replace(item.ElementType, replaceNamed, replaceGeneric)),
             NullableType item => new NullableType(Replace(item.UnderlyingType, replaceNamed, replaceGeneric)),
+            BuiltInTypes.NativeFunctionType item => new BuiltInTypes.NativeFunctionType(
+                Replace(item.ReturnType, replaceNamed, replaceGeneric),
+                item.ParameterTypes.Select(parameter => Replace(parameter, replaceNamed, replaceGeneric)).ToArray(),
+                item.CallingConvention, item.FailureResult) { ContextParameter = item.ContextParameter, SymbolOnly = item.SymbolOnly },
             BuiltInTypes.FunctionType item => new BuiltInTypes.FunctionType(
                 item.Namespace,
                 Replace(item.ReturnType, replaceNamed, replaceGeneric),

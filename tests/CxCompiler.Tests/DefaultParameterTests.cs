@@ -21,6 +21,42 @@ public sealed class DefaultParameterTests
         Assert.Equal("5", function.Parameters[1].DefaultValueText);
     }
 
+    [Theory]
+    [InlineData("int", "-1")]
+    [InlineData("int", "+1")]
+    [InlineData("double", "-1.5")]
+    [InlineData("float", "+1.5f")]
+    public void SignedNumericDefaultsArePreservedAndInsertedAtCallSites(string type, string value)
+    {
+        var source = $"{type} Read({type} value = {value}) {{ return value; }} {type} Run() {{ return Read(); }}";
+        var project = CreateProject(source);
+        var function = project.CompilationContexts.Single().DeclarationScope.Declarations
+            .OfType<FunctionDeclaration>().First();
+
+        Assert.Equal(value, function.Parameters[0].DefaultValueText);
+        Assert.Contains($"Read)({value})", GenerateSource(source));
+    }
+
+    [Fact]
+    public void NegativeDefaultsMayNarrowAtTheSignedBoundary()
+    {
+        var generated = GenerateSource("""
+            short Read(short value = -32768) { return value; }
+            short Run() { return Read(); }
+            """);
+
+        Assert.Contains("Read)(-32768)", generated);
+    }
+
+    [Fact]
+    public void NegativeDefaultsOutsideTheParameterRangeAreRejected()
+    {
+        var project = CreateProject("short Read(short value = -32769) { return value; }");
+        var error = Assert.Throws<CompilationErrorException>(() => new SemanticBinder().Bind(project));
+
+        Assert.Contains("Default value '-32769' cannot be assigned to parameter 'value'", error.Message);
+    }
+
     [Fact]
     public void OmittingDefaultArgumentsEmitsTheirValuesAtTheCallSite()
     {

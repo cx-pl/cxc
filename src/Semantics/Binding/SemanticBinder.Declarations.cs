@@ -386,6 +386,7 @@ public sealed partial class SemanticBinder
                 enumDeclaration.FullName,
                 moduleName,
                 ClassType.Enum);
+            type.EnumUnderlyingType = enumDeclaration.UnderlyingType;
             _enums.Add(new EnumTypeSymbol(moduleName, enumDeclaration, type));
         }
 
@@ -413,6 +414,7 @@ public sealed partial class SemanticBinder
             }
             foreach (var property in classDeclaration.MemberDeclarations.Declarations.OfType<PropertyDeclaration>()
                 .Where(property => !IsReferencedModule(moduleName) ||
+                    classDeclaration.ClassType == ClassType.Interface ||
                     property.MemberModifiers.Contains(MemberModifier.Public)))
             {
                 _properties.Add(new PropertySymbol(
@@ -677,10 +679,10 @@ public sealed partial class SemanticBinder
                 var initializer = field.Declaration.Initializer!;
                 var context = new FunctionDeclaration(
                     "__cx_field_initializer",
-                    field.Declaration.Namespace,
+                    field.Declaration.ParentClassDeclaration.Namespace,
                     field.Declaration.Type,
-                    [],
-                    null);
+                    field.Declaration.IsStatic ? [MemberModifier.Static] : [],
+                    field.Declaration.ParentClassDeclaration);
                 var initializerType = BindExpression(
                     initializer,
                     context,
@@ -730,6 +732,18 @@ public sealed partial class SemanticBinder
     {
         foreach (var enumType in _enums)
         {
+            if (enumType.Declaration.UnderlyingType is BoolType)
+                throw new CompilationErrorException("Enum underlying types must be integral scalar types, excluding bool.", enumType.Declaration.SourceSpan);
+            System.Numerics.BigInteger nextValue = 0;
+            foreach (var item in enumType.Declaration.Members)
+            {
+                if (item.Value is not null && TryGetIntegerConstant(item.Value.SourceText, out var explicitValue)) nextValue = explicitValue;
+                if (enumType.Declaration.UnderlyingType is not null) item.NativeConstantValue = nextValue;
+                if (enumType.Declaration.UnderlyingType is { } underlying && GetIntegralRange(underlying) is { } range &&
+                    (nextValue < range.Minimum || nextValue > range.Maximum))
+                    throw new CompilationErrorException($"Enum member '{item.FullName}' is outside its underlying type's range.", item.SourceSpan);
+                ++nextValue;
+            }
             foreach (var member in enumType.Declaration.Members
                 .Where(member => member.Value is not null))
             {

@@ -219,3 +219,7 @@ machine-learning/tutorials/**/MovieRecommenderModel.zip
 # Antlr
 .antlr
 *.tokens
+/.obj/
+/.bin/
+
+/src/Grammars/*.interp

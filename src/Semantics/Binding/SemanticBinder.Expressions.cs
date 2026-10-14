@@ -181,10 +181,31 @@ public sealed partial class SemanticBinder
         TypeBase type;
         switch (expression)
         {
+            case NativeStackAllocationExpression allocation:
+                RequireUnsafe(function, expression.SourceSpan);
+                ResolveTypeReference(allocation.ElementType, GetCurrentNamespace(function), imports);
+                if (!IsNativeScalar(allocation.ElementType) ||
+                    !IsInteger(BindExpression(allocation.Count, function, imports, scope)))
+                    throw new CompilationErrorException("stackalloc requires a complete native element type and integer count.", expression.SourceSpan);
+                type = new PtrType(BuiltInSystemTypes.Ptr.Namespace, allocation.ElementType);
+                break;
+            case NativeTypeQueryExpression query:
+                ResolveTypeReference(query.Type, GetCurrentNamespace(function), imports);
+                if (!IsNativeScalar(query.Type) || UnwrapConst(query.Type) is NamedType { NativeType.Opaque: true })
+                    throw new CompilationErrorException("Native layout queries require a complete native type.", query.SourceSpan);
+                if (query.Query == "offsetof" &&
+                    (UnwrapConst(query.Type) is not NamedType { NativeType: not null } ||
+                     GetClassDeclaration(query.Type)?.MemberDeclarations.Declarations.OfType<FieldDeclaration>()
+                        .Any(field => field.Name == query.Field) != true))
+                    throw new CompilationErrorException("offsetof requires a checked native record field.", query.SourceSpan);
+                type = new NativeScalarType("SizeT", "size_t", false);
+                break;
             case LiteralExpression { SourceText: "default" }:
                 type = expectedType ?? throw new CompilationErrorException(
                     "The default literal requires a target type.",
                     expression.SourceSpan);
+                if (UnwrapConst(type) is NamedType { NativeType.Opaque: true })
+                    throw new CompilationErrorException("Opaque native types are legal through pointers only.", expression.SourceSpan);
                 break;
 
             case LiteralExpression literal:
@@ -319,6 +340,17 @@ public sealed partial class SemanticBinder
             }
         }
         var rightFunctionType = GetFunctionSignature(rightType);
+        if (leftFunctionType is NativeFunctionType || rightFunctionType is NativeFunctionType)
+        {
+            if (binary.Operator is not ("==" or "!="))
+                throw new CompilationErrorException("Native function pointers cannot be composed as CX delegates.", binary.SourceSpan);
+            if (!(leftFunctionType is NativeFunctionType && rightType is NullType ||
+                rightFunctionType is NativeFunctionType && leftType is NullType ||
+                leftFunctionType is NativeFunctionType && rightFunctionType is NativeFunctionType &&
+                IsType(leftFunctionType, rightFunctionType)))
+                throw new CompilationErrorException("Native function pointer comparisons require the same native signature or null.", binary.SourceSpan);
+            return BuiltInSystemTypes.Bool;
+        }
         if (binary.Operator is "+" or "-" &&
             AreCompatibleDelegateValues(leftType, rightType))
         {
@@ -426,9 +458,54 @@ public sealed partial class SemanticBinder
     {
         var currentNamespace = GetCurrentNamespace(function);
         ResolveTypeReference(cast.TargetType, currentNamespace, imports);
+        if (GetFunctionSignature(cast.TargetType) is NativeFunctionType nativeSignature)
+        {
+            RequireUnsafe(function, cast.SourceSpan);
+            var expected = new FunctionType(QualifiedIdentifier.Empty, nativeSignature.ReturnType, nativeSignature.ParameterTypes);
+            var callbackSource = BindExpression(cast.Operand, function, imports, scope, expected);
+            if (GetFunctionSignature(callbackSource) is NativeFunctionType { SymbolOnly: true })
+                return cast.TargetType;
+            var symbol = cast.Operand switch {
+                IdentifierExpression identifier => identifier.FunctionValueSymbol,
+                MemberAccessExpression { FunctionValueIsStatic: true } method => method.FunctionValueSymbol,
+                _ => null,
+            };
+            if (symbol?.Declaration is not { IsStatic: true, GenericTypeNames.Length: 0, LambdaOwner: null } ||
+                symbol.NativeImport is not null)
+                throw new CompilationErrorException("Native callback conversion requires a non-capturing, non-generic static CX function.", cast.SourceSpan);
+            cast.NativeCallbackSymbol = symbol;
+            return cast.TargetType;
+        }
         var sourceType = BindExpression(cast.Operand, function, imports, scope);
         var unwrappedSource = UnwrapConst(sourceType);
         var unwrappedTarget = UnwrapConst(cast.TargetType);
+        if (unwrappedSource is PtrType && unwrappedTarget is NativeScalarType { CType: "intptr_t" or "uintptr_t" } ||
+            unwrappedTarget is PtrType && unwrappedSource is NativeScalarType { CType: "intptr_t" or "uintptr_t" })
+        {
+            RequireUnsafe(function, cast.SourceSpan);
+            return cast.TargetType;
+        }
+        if ((unwrappedSource is NamedType { NativeType.Kind: "scalar" or "handle" } &&
+                unwrappedTarget is IntTypeBase or PtrType or NamedType { NativeType.Kind: "scalar" or "handle" }) ||
+            (unwrappedTarget is NamedType { NativeType.Kind: "scalar" or "handle" } &&
+                unwrappedSource is IntTypeBase or PtrType))
+        {
+            RequireUnsafe(function, cast.SourceSpan);
+            return cast.TargetType;
+        }
+        if (unwrappedSource is IntTypeBase or FloatTypeBase or CharType &&
+            unwrappedTarget is IntTypeBase or FloatTypeBase or CharType)
+        {
+            if (unwrappedTarget is WCharType && TryGetNativeIntegerConstant(cast.Operand, out var number) &&
+                (number < 0 || number > 65535))
+                throw new CompilationErrorException("wchar constants must be between 0 and 0xFFFF.", cast.SourceSpan);
+            return cast.TargetType;
+        }
+        if (unwrappedSource is PtrType && unwrappedTarget is PtrType)
+        {
+            RequireUnsafe(function, cast.SourceSpan);
+            return cast.TargetType;
+        }
         var boxesToImplementedInterface =
             unwrappedSource is NamedType { ClassType: ClassType.Struct } &&
             GetClassDeclarationIncludingConstructed(unwrappedTarget)?.ClassType ==
@@ -631,6 +708,20 @@ public sealed partial class SemanticBinder
     {
         var operandType = BindExpression(unary.Operand, function, imports, scope);
         var valueType = UnwrapConst(operandType);
+        if (unary.Operator is "&" or "*")
+        {
+            RequireUnsafe(function, unary.SourceSpan);
+            if (unary.Operator == "*")
+                return valueType is PtrType { Pointee: { } pointee } && UnwrapConst(pointee) is not VoidType and not NamedType { NativeType.Opaque: true } ? pointee
+                    : throw new CompilationErrorException("Dereference requires a typed pointer.", unary.SourceSpan);
+            if (unary.Operand is not IdentifierExpression { TargetLocal: not null } &&
+                unary.Operand is not ArrayAccessExpression { Target.InferredType: PtrType } &&
+                unary.Operand is not UnaryExpression { Operator: "*" })
+                throw new CompilationErrorException("Address-of requires native storage or a local scalar; managed buffers require a lease.", unary.SourceSpan);
+            if (!IsNativeScalar(operandType))
+                throw new CompilationErrorException("Address-of cannot expose managed references.", unary.SourceSpan);
+            return new PtrType(BuiltInSystemTypes.Ptr.Namespace, operandType);
+        }
         if (unary.Operator is "++" or "--")
         {
             if (unary.Operand is not IdentifierExpression and
@@ -715,15 +806,20 @@ public sealed partial class SemanticBinder
 
         if (assignment.Target is not IdentifierExpression and
             not ArrayAccessExpression and
-            not MemberAccessExpression)
+            not MemberAccessExpression and
+            not UnaryExpression { Operator: "*" })
         {
             throw new CompilationErrorException(
                 $"Expression '{assignment.Target.GetType().Name}' cannot be assigned to.");
         }
 
         var targetType = BindExpression(assignment.Target, function, imports, scope);
+        if (targetType is ConstType && assignment.Target is ArrayAccessExpression or UnaryExpression)
+            throw new CompilationErrorException("Cannot write through a pointer to const storage.", assignment.SourceSpan);
         ValidateWritableField(assignment.Target);
         var functionType = GetFunctionSignature(targetType);
+        if (functionType is NativeFunctionType && assignment.Operator != "=")
+            throw new CompilationErrorException("Native function pointers cannot use delegate compound assignment.", assignment.SourceSpan);
         var isDelegateCompound = functionType is not null &&
             assignment.Operator is "+=" or "-=";
         var valueType = BindExpression(
@@ -741,6 +837,8 @@ public sealed partial class SemanticBinder
                     $"Cannot assign '{GetTypeName(valueType)}' to '{GetTypeName(targetType)}'.");
             }
             ApplyContextualType(assignment.Value, targetType);
+            if (assignment.Target is IdentifierExpression { TargetLocal: { } pointerLocal })
+                pointerLocal.BorrowsStackStorage |= BorrowsStackStorage(assignment.Value);
         }
         else
         {
@@ -810,6 +908,11 @@ public sealed partial class SemanticBinder
         IReadOnlyList<QualifiedIdentifier> imports,
         LocalScope scope)
     {
+        var genericParameters = function.GenericTypeNames
+            .Concat(function.ParentClassDeclaration?.GenericTypeNames ?? [])
+            .ToHashSet(StringComparer.Ordinal);
+        expression.ElementType = ResolveGenericTypeParameters(
+            expression.ElementType, genericParameters);
         ResolveTypeReference(
             expression.ElementType,
             GetCurrentNamespace(function),
@@ -836,6 +939,36 @@ public sealed partial class SemanticBinder
         }
 
         return new ArrayType(expression.ElementType);
+    }
+
+    private static TypeBase ResolveGenericTypeParameters(
+        TypeBase type,
+        IReadOnlySet<string> genericParameters) => type switch
+    {
+        ConstType constant => new ConstType(
+            ResolveGenericTypeParameters(constant.UnderlyingType, genericParameters)),
+        ArrayType array => new ArrayType(
+            ResolveGenericTypeParameters(array.ElementType, genericParameters)),
+        NullableType nullable => new NullableType(
+            ResolveGenericTypeParameters(nullable.UnderlyingType, genericParameters)),
+        NamedType named when named.ResolvedTypeFullName.ToString() == "void" &&
+            named.TypeArguments.Count == 0 && genericParameters.Contains(named.Name) =>
+                new GenericType(named.Name),
+        NamedType named => ResolveNamedTypeArguments(named, genericParameters),
+        _ => type,
+    };
+
+    private static NamedType ResolveNamedTypeArguments(
+        NamedType type,
+        IReadOnlySet<string> genericParameters)
+    {
+        if (type.TypeArguments.Count > 0)
+        {
+            type.SetTypeArguments(type.TypeArguments
+                .Select(argument => ResolveGenericTypeParameters(argument, genericParameters))
+                .ToArray());
+        }
+        return type;
     }
 
     private TypeBase BindArrayAccess(
@@ -878,6 +1011,24 @@ public sealed partial class SemanticBinder
 
         var targetType = UnwrapConst(
             BindExpression(expression.Target, function, imports, scope));
+        if (targetType is FixedArrayType fixedArray)
+        {
+            RequireUnsafe(function, expression.SourceSpan);
+            if (expression.Indices.Count != 1 || !IsInteger(BindExpression(expression.Indices[0], function, imports, scope)))
+                throw new CompilationErrorException("Native inline arrays require one integer index.", expression.SourceSpan);
+            return fixedArray.ElementType;
+        }
+        if (targetType is PtrType pointer)
+        {
+            RequireUnsafe(function, expression.SourceSpan);
+            if (pointer.Pointee is null || expression.Indices.Count != 1)
+                throw new CompilationErrorException("Pointer indexing requires one index and a typed pointee.", expression.SourceSpan);
+            if (UnwrapConst(pointer.Pointee) is VoidType or NamedType { NativeType.Opaque: true })
+                throw new CompilationErrorException("Opaque native types cannot be dereferenced or indexed.", expression.SourceSpan);
+            if (!IsInteger(BindExpression(expression.Indices[0], function, imports, scope)))
+                throw new CompilationErrorException("Pointer index must be an integer.", expression.SourceSpan);
+            return pointer.Pointee;
+        }
         if (!ArrayType.TryGetElementType(targetType, out var elementType))
         {
             throw new CompilationErrorException(

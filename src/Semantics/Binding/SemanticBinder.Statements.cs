@@ -68,11 +68,9 @@ public sealed partial class SemanticBinder
                     break;
 
                 case BlockStatement blockStatement:
-                    BindStatements(
-                        blockStatement.Statements,
-                        function,
-                        imports,
-                        new LocalScope(scope));
+                    if (blockStatement.IsUnsafe) ++_unsafeDepth;
+                    try { BindStatements(blockStatement.Statements, function, imports, new LocalScope(scope)); }
+                    finally { if (blockStatement.IsUnsafe) --_unsafeDepth; }
                     break;
 
                 case IfStatement ifStatement:
@@ -352,6 +350,31 @@ public sealed partial class SemanticBinder
             return;
         }
 
+        if (UnwrapConst(collectionType) is StringType ||
+            IsType(collectionType, BuiltInSystemTypes.String))
+        {
+            var variableType = statement.DeclaredType is AutoType
+                ? BuiltInSystemTypes.Char
+                : ArrayType.Canonicalize(statement.DeclaredType);
+            if (!IsType(variableType, BuiltInSystemTypes.Char))
+            {
+                throw new CompilationErrorException(
+                    $"Cannot iterate string characters of type 'System.Char' as " +
+                    $"'{GetTypeName(variableType)}'.", statement.SourceSpan);
+            }
+
+            var scope = new LocalScope(parentScope);
+            if (!scope.TryDeclare(statement.VariableName, variableType, out var variableSymbol))
+            {
+                throw new CompilationErrorException(
+                    $"Local '{statement.VariableName}' is already declared in this scope.");
+            }
+
+            statement.BindString(variableType, variableSymbol);
+            BindLoopBody(statement.Body, function, imports, scope);
+            return;
+        }
+
         var getEnumeratorInvocation = new InvocationExpression(
             new MemberAccessExpression(statement.Collection, "GetEnumerator"), []);
         TypeBase enumeratorType;
@@ -580,6 +603,10 @@ public sealed partial class SemanticBinder
             GetCurrentNamespace(function),
             imports);
         statement.DeclaredType = ArrayType.Canonicalize(statement.DeclaredType);
+        if (UnwrapConst(statement.DeclaredType) is FixedArrayType)
+            throw new CompilationErrorException("Fixed inline arrays are supported as native record fields only.", statement.SourceSpan);
+        if (UnwrapConst(statement.DeclaredType) is NamedType { NativeType.Opaque: true })
+            throw new CompilationErrorException("Opaque native types are legal through pointers only.", statement.SourceSpan);
         foreach (var declarator in statement.Declarators)
         {
             var initializerType = declarator.Initializer is null
@@ -618,6 +645,7 @@ public sealed partial class SemanticBinder
             }
 
             declarator.BindType(variableType, localSymbol);
+            if (declarator.Initializer is not null) localSymbol.BorrowsStackStorage |= BorrowsStackStorage(declarator.Initializer);
         }
     }
 
@@ -645,6 +673,8 @@ public sealed partial class SemanticBinder
 
         var expressionType = BindExpression(
             statement.Expression, function, imports, scope, function.ReturnType);
+        if (BorrowsStackStorage(statement.Expression))
+            throw new CompilationErrorException("Cannot return a pointer borrowing local stack storage.", statement.SourceSpan);
         if (!CanAssign(function.ReturnType, expressionType))
         {
             throw new CompilationErrorException(

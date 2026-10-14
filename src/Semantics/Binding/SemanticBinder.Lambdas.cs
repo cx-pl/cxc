@@ -87,7 +87,7 @@ public sealed partial class SemanticBinder
             generatedName,
             currentNamespace,
             placeholderReturnType,
-            [],
+            enclosingFunction.MemberModifiers.Contains(MemberModifier.Unsafe) || _unsafeDepth > 0 ? [MemberModifier.Unsafe] : [],
             null);
         helper.SourceSpan = lambda.SourceSpan;
         helper.SetLocalCName(generatedName);
@@ -126,7 +126,7 @@ public sealed partial class SemanticBinder
                 generatedName,
                 currentNamespace,
                 targetType?.ReturnType ?? returnType,
-                [],
+                enclosingFunction.MemberModifiers.Contains(MemberModifier.Unsafe) || _unsafeDepth > 0 ? [MemberModifier.Unsafe] : [],
                 null);
             helper.SourceSpan = lambda.SourceSpan;
             helper.SetLocalCName(generatedName);
@@ -167,7 +167,10 @@ public sealed partial class SemanticBinder
                 "Lambda signature does not match its target function type.",
                 lambda.SourceSpan);
         }
-        lambda.Bind(helper, functionType);
+        lambda.Bind(
+            helper,
+            functionType,
+            $"__cx_lambda_environment_{++_operatorTemporaryIndex}");
         return functionType;
     }
 

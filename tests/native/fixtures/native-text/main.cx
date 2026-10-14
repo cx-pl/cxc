@@ -1,0 +1,30 @@
+import System;
+import System.Interop;
+public unsafe int Main() {
+    wchar[] units = new wchar[2];
+    units[0] = (wchar)0xD83D; units[1] = (wchar)0xDE00;
+    if (units[0] != (wchar)0xD83D) return 10;
+    string text = "Aä😀\0B";
+    WideString value = text.ToWideString();
+    if (value.Length != 6u || value.ScalarCount != 5u) return 1;
+    if (value.ToString() != text) return 2;
+    object reference = value;
+    if (reference.ToString() != text) return 3;
+    NativeBuffer buffer = NativeBuffer.FromUtf16(value);
+    try {
+        ptr<wchar> data = (ptr<wchar>)buffer.Data;
+        if (buffer.ByteLength != 14ul || data[0] != (wchar)65 || data[6] != (wchar)0) return 4;
+        WideString copy = new WideString(data, 6u);
+        if (copy != value || copy.GetHashCode() != value.GetHashCode()) return 5;
+        data[0] = (wchar)90;
+        if (copy.Item[0u] != (wchar)65) return 6;
+    } finally { buffer.Dispose(); }
+    WideString empty = "".ToWideString();
+    if (empty.Length != 0u || empty.ToString() != "") return 7;
+    wchar bad = (wchar)0xD800;
+    WideString malformed = new WideString(&bad, 1u);
+    try { malformed.ToString(); return 8; }
+    catch (EncodingException error) { if (error.Position != 0u) return 9; }
+    Console.WriteLine("native text passed");
+    return 0;
+}

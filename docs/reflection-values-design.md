@@ -33,7 +33,7 @@ value type to `object` copies its bytes into a managed box, explicit casts from
 `Object.Type` reports the boxed value's type. Reflection invocation matches
 primitive, enum, and struct parameters by exact runtime type, unboxes them for
 generated calls, and boxes primitive, enum, and struct returns. The box payload is aligned and
-reachable through the existing private `Object._gc` field. These helpers require
+reachable through the existing private `Object._box` field. These helpers require
 runtime ABI 1. Invoking methods on boxed structs is supported.
 `TypeInfo.CreateInstance()` also returns a boxed, zero-initialized value for
 non-generic and supported closed generic structs. A boxed non-generic struct

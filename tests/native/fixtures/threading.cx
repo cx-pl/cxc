@@ -1,0 +1,161 @@
+import System;
+import System.Threading;
+
+public extern void Collect();
+public extern bool RunLoop();
+public extern void EndLoop();
+
+public class WorkerFailure : Exception {
+    public int Marker;
+    public constructor(int marker) { Marker = marker; }
+}
+public class WorkerBase {
+    public int Result;
+    public virtual void Run() { Result = 7; }
+}
+public class WorkerDerived : WorkerBase {
+    public override void Run() { Result = 42; }
+}
+
+public Thread StartRootedWorker(AtomicInt result) {
+    int[] values = new int[2];
+    values[0] = 51;
+    values[1] = 73;
+    return Thread.Start(() => {
+        Thread.Sleep(30);
+        result.Value = values[0] + values[1];
+    });
+}
+
+public int Main(string[] args) {
+    if (args.Length == 1 && args[0] == "unobserved") {
+        Thread failed = Thread.Start(() => { throw new WorkerFailure(99); });
+        return 0;
+    }
+    if (args.Length == 1 && args[0] == "unreleased-mutex") {
+        Mutex held = new Mutex();
+        Thread invalid = Thread.Start(() => { held.Lock(); });
+        return 0;
+    }
+    AtomicInt count = new AtomicInt();
+    Mutex mutex = new Mutex();
+    int shared = 0;
+    Thread first = Thread.Start(() => {
+        for (int index = 0; index < 1000; index++) {
+            mutex.Lock();
+            try { shared = shared + 1; }
+            finally { mutex.Unlock(); }
+            count.Increment();
+        }
+    });
+    Thread second = Thread.Start(() => {
+        for (int index = 0; index < 1000; index++) {
+            mutex.Lock();
+            try { shared = shared + 1; }
+            finally { mutex.Unlock(); }
+            count.Increment();
+        }
+    });
+    first.Join();
+    second.Join();
+    first.Join(); // Joining a completed worker is repeatable; copies share state.
+    Thread copy = first;
+    copy.Join();
+    if (shared != 2000 || count.Value != 2000) return 1;
+    if (first.IsAlive || first.Id == Thread.CurrentId || first.Id == second.Id) return 2;
+    if (count.CompareExchange(3000, 2000) != 2000 || count.Value != 3000) return 3;
+    if (count.CompareExchange(4000, 2000) != 3000 || count.Value != 3000) return 4;
+    if (count.Exchange(5) != 3000 || count.Increment() != 6 || count.Decrement() != 5) return 5;
+    count.Value = 2147483647;
+    if (count.Increment() != (-2147483647 - 1) || count.Decrement() != 2147483647) return 6;
+
+    mutex.Lock();
+    mutex.Lock();
+    mutex.Unlock();
+    mutex.Unlock();
+
+    AtomicInt entered = new AtomicInt();
+    Thread polling = Thread.Start(() => {
+        int marker = 42;
+        entered.Value = 1;
+        while (RunLoop()) { marker = marker + 0; continue; }
+        if (marker != 42) throw new WorkerFailure(7);
+    });
+    while (entered.Value == 0) Thread.Yield();
+    Collect(); // Worker loop has no allocating calls or runtime getter polls.
+    EndLoop();
+    polling.Join();
+
+    AtomicInt result = new AtomicInt();
+    Thread rooted = StartRootedWorker(result);
+    for (int index = 0; index < 32; index++) {
+        int[] garbage = new int[32768];
+        garbage[0] = index;
+    }
+    Collect();
+    rooted.Join();
+    if (result.Value != 124) return 8;
+
+    WorkerBase target = new WorkerDerived();
+    Thread method = Thread.Start(target.Run);
+    method.Join();
+    if (target.Result != 42) return 9;
+
+    AtomicInt multicastCount = new AtomicInt();
+    delegate() => void action = () => { multicastCount.Increment(); };
+    action += () => { multicastCount.Increment(); };
+    Thread multicast = Thread.Start(action);
+    multicast.Join();
+    if (multicastCount.Value != 2) return 10;
+
+    Thread failure = Thread.Start(() => { throw new WorkerFailure(91); });
+    bool caught = false;
+    try { failure.Join(); }
+    catch (WorkerFailure error) { caught = error.Marker == 91; }
+    if (!caught || failure.IsAlive) return 11;
+    Collect();
+    caught = false;
+    try { failure.Join(); }
+    catch (WorkerFailure error) { caught = error.Marker == 91; }
+    if (!caught) return 12;
+
+    caught = false;
+    try { Thread empty = new Thread(); empty.Join(); }
+    catch (Exception error) { caught = true; }
+    if (!caught) return 13;
+    caught = false;
+    try { Thread invalid = Thread.Start(null); }
+    catch (Exception error) { caught = true; }
+    if (!caught) return 14;
+    caught = false;
+    try { mutex.Unlock(); }
+    catch (Exception error) { caught = true; }
+    if (!caught) return 15;
+    caught = false;
+    try { Thread.Sleep(-1); }
+    catch (Exception error) { caught = true; }
+    if (!caught) return 16;
+    caught = false;
+    try { AtomicInt empty = default; empty.Increment(); }
+    catch (Exception error) { caught = true; }
+    if (!caught) return 17;
+    caught = false;
+    try { Mutex empty = default; empty.Lock(); }
+    catch (Exception error) { caught = true; }
+    if (!caught) return 18;
+    AtomicInt ready = new AtomicInt();
+    Thread self = new Thread();
+    self = Thread.Start(() => {
+        while (ready.Value == 0) Thread.Yield();
+        self.Join();
+    });
+    ready.Value = 1;
+    caught = false;
+    try { self.Join(); }
+    catch (Exception error) { caught = true; }
+    if (!caught) return 19;
+
+    // The native entry point must wait for this unjoined worker before exit.
+    Thread last = Thread.Start(() => { Thread.Sleep(10); Console.WriteLine("worker completed"); });
+    return 0;
+}

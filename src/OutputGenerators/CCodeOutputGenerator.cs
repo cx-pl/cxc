@@ -299,6 +299,7 @@ public static partial class CCodeOutputGenerator
             fileWriter.WriteLine("endif()");
         }
 
+        WriteNativeDependencies(fileWriter, project, projectDirectory, outputDirectory);
         fileWriter.Flush();
         fileWriter.Close();
     }
@@ -310,7 +311,7 @@ public static partial class CCodeOutputGenerator
         var generatedSourceFullPath = Path.GetFullPath(generatedSourcePath);
         var generatedOutputDirectory = Path.GetDirectoryName(generatedSourceFullPath)!;
         var excludedDirectoryNames = new HashSet<string>(
-            [".obj", ".bin", ".git", ".vs", "CMakeFiles"],
+            [".obj", ".bin", ".git", ".vs", ".packages", ".dist", "CMakeFiles"],
             StringComparer.OrdinalIgnoreCase);
 
         return Directory.EnumerateFiles(projectDirectory, "*.c", SearchOption.AllDirectories)
@@ -402,6 +403,7 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine($"#define CX_CURRENT_TYPE_API {GetModuleDataApiName(project.Name)}");
         writer.WriteLine();
 
+        WriteNativeHeaders(writer, project, publicApi);
         var allDeclarations = GetDeclarations(project);
         var publicTypeNames = publicApi
             ? GetPublicApiTypeNames(allDeclarations)
@@ -524,6 +526,19 @@ public static partial class CCodeOutputGenerator
             if (declaration is EnumDeclaration enumDeclaration)
             {
                 var enumName = enumDeclaration.ToCIdentifier(moduleName);
+                if (enumDeclaration.UnderlyingType is { } underlying)
+                {
+                    writer.WriteLine($"typedef {underlying.ToCIdentifier(false)} {enumName};");
+                    System.Numerics.BigInteger nextValue = 0;
+                    foreach (var member in enumDeclaration.Members)
+                    {
+                        if (member.NativeConstantValue is { } value) nextValue = value;
+                        writer.WriteLine($"#define {member.ToCIdentifier(moduleName)} (({enumName})({nextValue}))");
+                        ++nextValue;
+                    }
+                    writer.WriteLine($"CX_TYPEINFO_DECL({enumName});");
+                    continue;
+                }
                 writer.WriteLine($"typedef enum {enumName} {{");
                 writer.IncreaseIndent();
                 for (var index = 0; index < enumDeclaration.Members.Count; index++)
@@ -654,7 +669,8 @@ public static partial class CCodeOutputGenerator
                     (!publicApi || field.MemberModifiers.Contains(MemberModifier.Public))))
             {
                 writer.WriteLine(
-                    $"extern {staticField.Type.ToCIdentifier(false)} " +
+                    $"{GetModuleDataApiName(moduleName)} extern " +
+                    $"{staticField.Type.ToCIdentifier(false)} " +
                     $"{GetStaticFieldIdentifier(staticField, moduleName)};");
             }
         }
@@ -719,6 +735,12 @@ public static partial class CCodeOutputGenerator
                     break;
 
                 case FunctionDeclaration functionDeclaration:
+                    if (functionDeclaration.NativeImport is not null)
+                    {
+                        if (!publicApi || IsPublicApiFunction(functionDeclaration))
+                            WriteNativeImportDeclaration(writer, functionDeclaration, moduleName);
+                        break;
+                    }
                     if (publicApi && !IsPublicApiFunction(functionDeclaration))
                     {
                         break;
@@ -1049,9 +1071,6 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine("#define WIN32_LEAN_AND_MEAN");
         writer.WriteLine("#include <windows.h>");
         writer.WriteLine("#endif");
-        writer.WriteLine("#if !defined(CX_STATIC_LINK)");
-        writer.WriteLine("#include <stdatomic.h>");
-        writer.WriteLine("#endif");
         writer.WriteLine();
 
         writer.WriteLine("//");
@@ -1085,7 +1104,15 @@ public static partial class CCodeOutputGenerator
             genericTypeInstances,
             genericFunctionInstances,
             project.Name);
-        WriteModuleInitializationFunction(writer, project, genericTypeInstances);
+        var genericVirtualEntries = GetGenericVirtualDispatchEntries(project);
+        if (genericVirtualEntries.Count != 0)
+        {
+            writer.WriteLine("#define CX_MODULE_HAS_GENERIC_VIRTUAL_REGISTRATIONS 1");
+        }
+        WriteGenericVirtualDispatchRegistrations(
+            writer, genericVirtualEntries, project.Name);
+        WriteModuleInitializationFunction(
+            writer, project, genericTypeInstances, genericVirtualEntries);
         writer.WriteLine();
 
         writer.WriteLine("//");
@@ -1177,11 +1204,14 @@ public static partial class CCodeOutputGenerator
         if (main.ReturnType is VoidType)
         {
             writer.WriteLine($"{call};");
+            writer.WriteLine("cx_thread_wait_all();");
             writer.WriteLine("return 0;");
         }
         else
         {
-            writer.WriteLine($"return (int){call};");
+            writer.WriteLine($"int __cx_exit_code = (int){call};");
+            writer.WriteLine("cx_thread_wait_all();");
+            writer.WriteLine("return __cx_exit_code;");
         }
         writer.DecreaseIndent();
         writer.WriteLine("}");
@@ -1282,32 +1312,222 @@ public static partial class CCodeOutputGenerator
         }
     }
 
+    private sealed record GenericVirtualDispatchEntry(
+        NamedType RuntimeType,
+        FunctionDeclaration Contract,
+        IReadOnlyList<TypeBase> MethodTypeArguments,
+        FunctionSymbol Implementation,
+        string MethodIdentity,
+        string ImplementationIdentity,
+        string RegistrationIdentifier,
+        string ThunkIdentifier,
+        string TypeArgumentsIdentifier);
+
+    private static IReadOnlyCollection<GenericVirtualDispatchEntry>
+        GetGenericVirtualDispatchEntries(CxProject project)
+    {
+        var entries = new Dictionary<string, GenericVirtualDispatchEntry>(StringComparer.Ordinal);
+        void AddEntries(
+            FunctionDeclaration contract,
+            IReadOnlyCollection<GenericVirtualDispatchTarget> dispatchTargets)
+        {
+            contract = contract.VirtualContract ?? contract;
+            foreach (var dispatchTarget in dispatchTargets)
+            {
+                var implementation = dispatchTarget.Implementation;
+                var implementationMethodNames = implementation.Declaration?.GenericTypeNames ?? [];
+                var methodTypeArguments = implementationMethodNames
+                    .Select(name => implementation.GenericTypeArguments.TryGetValue(
+                        name, out var type) ? type : null)
+                    .ToArray();
+                if (methodTypeArguments.Any(type => type is null))
+                {
+                    throw new InternalCompilerException(
+                        $"Generic virtual target '{implementation.FullName}' has open method arguments.");
+                }
+                var closedMethodTypeArguments = methodTypeArguments
+                    .Cast<TypeBase>().ToArray();
+                var methodIdentity = GetGenericVirtualMethodIdentity(contract);
+                var implementationIdentity = GetGenericVirtualImplementationIdentity(
+                    implementation, closedMethodTypeArguments);
+                var runtimeTypeIdentity = dispatchTarget.RuntimeType.ConstructedIdentity?.CanonicalName ??
+                    dispatchTarget.RuntimeType.ResolvedTypeFullName.ToString();
+                var argumentsIdentity = GenericTypeIdentity.CreateFunction(
+                    "cx-virtual-arguments", "method", closedMethodTypeArguments, [],
+                    BuiltInSystemTypes.Void).CanonicalName;
+                var key = $"{runtimeTypeIdentity}|{methodIdentity}|{argumentsIdentity}";
+                var identifierHash = Convert.ToHexString(SHA256.HashData(
+                    Encoding.UTF8.GetBytes(key)).AsSpan(0, 8)).ToLowerInvariant();
+                var entry = new GenericVirtualDispatchEntry(
+                    dispatchTarget.RuntimeType,
+                    contract,
+                    closedMethodTypeArguments,
+                    implementation,
+                    methodIdentity,
+                    implementationIdentity,
+                    $"__cx_generic_virtual_registration_{identifierHash}",
+                    $"__cx_generic_virtual_thunk_{identifierHash}",
+                    $"__cx_generic_virtual_types_{identifierHash}");
+                if (entries.TryGetValue(key, out var existing))
+                {
+                    if (existing.ImplementationIdentity != implementationIdentity)
+                    {
+                        throw new InternalCompilerException(
+                            $"Conflicting generic virtual implementations for '{methodIdentity}'.");
+                    }
+                    continue;
+                }
+                entries.Add(key, entry);
+            }
+        }
+        foreach (var context in project.CompilationContexts)
+        {
+            foreach (var function in EnumerateFunctions(context.DeclarationScope.Declarations))
+            {
+                foreach (var expression in EnumerateBodyExpressions(function.Body ?? []))
+                {
+                    if (expression is InvocationExpression invocation &&
+                        invocation.TargetSymbol?.Declaration is
+                        {
+                            GenericTypeNames.Length: > 0,
+                            VirtualSlotIndex: not null,
+                            ParentClassDeclaration.ClassType: ClassType.Class or ClassType.Interface,
+                        } contract)
+                    {
+                        AddEntries(contract, invocation.GenericVirtualDispatchTargets);
+                    }
+                    else if (expression is MemberAccessExpression
+                        { FunctionValueSymbol: { Declaration: { } method } } methodValue &&
+                        method.GenericTypeNames.Length > 0 && method.VirtualSlotIndex is not null &&
+                        method.ParentClassDeclaration?.ClassType is
+                            ClassType.Class or ClassType.Interface)
+                    {
+                        AddEntries(method.VirtualContract ?? method,
+                            methodValue.GenericVirtualDispatchTargets);
+                    }
+                }
+            }
+        }
+        return entries.Values.OrderBy(entry => entry.RegistrationIdentifier, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static string GetGenericVirtualMethodIdentity(FunctionDeclaration contract)
+    {
+        var ownerName = contract.ParentClassDeclaration?.FullName.ToString() ??
+            contract.Namespace + "." + contract.Name;
+        var parameters = string.Join(",", contract.Parameters.Select(parameter =>
+            GetGenericVirtualSignatureType(parameter.ParameterType)));
+        return $"{ownerName}.{contract.Name}`{contract.GenericTypeNames.Length}" +
+            $"({parameters})->{GetGenericVirtualSignatureType(contract.ReturnType)}";
+    }
+
+    private static string GetGenericVirtualSignatureType(TypeBase type) => type switch
+    {
+        ConstType constant => $"const {GetGenericVirtualSignatureType(constant.UnderlyingType)}",
+        GenericType generic => $"!{generic.Name}",
+        ArrayType array => $"Array<{GetGenericVirtualSignatureType(array.ElementType)}>",
+        NullableType nullable =>
+            $"Nullable<{GetGenericVirtualSignatureType(nullable.UnderlyingType)}>",
+        FunctionType function =>
+            $"fn({string.Join(",", function.ParameterTypes.Select(GetGenericVirtualSignatureType))})" +
+            $"->{GetGenericVirtualSignatureType(function.ReturnType)}",
+        NamedType named when named.TypeArguments.Count > 0 =>
+            $"{named.ResolvedTypeFullName}<{string.Join(",", named.TypeArguments.Select(GetGenericVirtualSignatureType))}>",
+        NamedType named => named.ResolvedTypeFullName.ToString(),
+        _ => type.FullName.ToString(),
+    };
+
+    private static string GetGenericVirtualImplementationIdentity(
+        FunctionSymbol implementation,
+        IReadOnlyList<TypeBase> methodTypeArguments)
+    {
+        var declaration = implementation.ImplementationDeclaration ??
+            implementation.Declaration ?? throw new InternalCompilerException(
+                "A generic virtual implementation has no declaration.");
+        var isReplacement = implementation.ImplementationDeclaration is not null &&
+            !ReferenceEquals(implementation.ImplementationDeclaration, implementation.Declaration);
+        var moduleName = declaration.ParentClassDeclaration?.ProjectName ??
+            implementation.ModuleName;
+        var identityName = declaration.FullName.ToString() +
+            (isReplacement ? "#replacement" : "#primary");
+        return GenericTypeIdentity.CreateFunction(
+            moduleName,
+            identityName,
+            methodTypeArguments,
+            implementation.ParameterTypes,
+            implementation.ReturnType).CanonicalName;
+    }
+
+    private static void WriteGenericVirtualDispatchRegistrations(
+        IndentingWriter writer,
+        IReadOnlyCollection<GenericVirtualDispatchEntry> entries,
+        string moduleName)
+    {
+        foreach (var entry in entries)
+        {
+            writer.WriteLine(
+                $"static cx_ptr {entry.TypeArgumentsIdentifier}[{entry.MethodTypeArguments.Count}];");
+            var implementationDeclaration = entry.Implementation.ImplementationDeclaration ??
+                entry.Implementation.Declaration ?? throw new InternalCompilerException(
+                    "A generic virtual implementation has no declaration.");
+            var implementationOwner = implementationDeclaration.ParentClassDeclaration ??
+                throw new InternalCompilerException(
+                    "A generic virtual implementation has no declaring class.");
+            var implementationModule = implementationOwner.ProjectName ?? moduleName;
+            var implementationReceiverType =
+                $"{(implementationDeclaration.Const ? "const " : string.Empty)}" +
+                $"{implementationOwner.ToCIdentifier(implementationModule)}*";
+            var parameterNames = implementationDeclaration.Parameters
+                .Select(parameter => parameter.Name).ToArray();
+            var parameters = new[] { "cx_ptr __cx_receiver" }
+                .Concat(entry.Implementation.ParameterTypes.Zip(parameterNames)
+                    .Select(pair => $"{pair.First.ToCIdentifier(false)} {pair.Second}"))
+                .ToArray();
+            writer.WriteLine(
+                $"static {entry.Implementation.ReturnType.ToCReturnType(false)} " +
+                $"{entry.ThunkIdentifier}({string.Join(", ", parameters)}) {{");
+            writer.IncreaseIndent();
+            var receiver = $"({implementationReceiverType})__cx_receiver";
+            var callArguments = new[] { receiver }.Concat(parameterNames);
+            var call = $"{entry.Implementation.SpecializationName ?? throw new InternalCompilerException("A generic virtual implementation has no closed symbol.")}({string.Join(", ", callArguments)})";
+            writer.WriteLine(entry.Implementation.ReturnType is VoidType
+                ? $"{call};"
+                : $"return {call};");
+            writer.DecreaseIndent();
+            writer.WriteLine("}");
+            writer.WriteLine(
+                $"static struct cx_generic_virtual_registration {entry.RegistrationIdentifier};");
+        }
+        if (entries.Count > 0)
+        {
+            writer.WriteLine();
+        }
+    }
+
+    private static string EscapeCString(string value) =>
+        value.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal);
+
     private static void WriteModuleInitializationFunction(
         IndentingWriter writer,
         CxProject project,
-        IReadOnlyCollection<(NamedType Type, ClassDeclaration Declaration)> genericTypeInstances)
+        IReadOnlyCollection<(NamedType Type, ClassDeclaration Declaration)> genericTypeInstances,
+        IReadOnlyCollection<GenericVirtualDispatchEntry> genericVirtualEntries)
     {
         var token = GetModuleToken(project.Name);
-        writer.WriteLine($"static cx_bool __cx_module_initialized_{token};");
-        writer.WriteLine("#if !defined(CX_STATIC_LINK)");
-        writer.WriteLine($"static atomic_flag __cx_module_init_lock_{token} = ATOMIC_FLAG_INIT;");
-        writer.WriteLine($"static _Thread_local cx_bool __cx_module_initializing_{token};");
-        writer.WriteLine("#else");
-        writer.WriteLine($"static cx_bool __cx_module_initializing_{token};");
-        writer.WriteLine("#endif");
+        writer.WriteLine($"static struct cx_runtime_once __cx_module_once_{token};");
         writer.WriteLine($"void {GetModuleApiName(project.Name)} __cx_module_init_{token}(void)");
         writer.WriteLine("{");
         writer.IncreaseIndent();
         writer.WriteLine($"__cx_register_static_roots_{token}();");
         writer.WriteLine("cx_runtime_require_abi(CX_RUNTIME_ABI_VERSION);");
-        writer.WriteLine($"if (__cx_module_initializing_{token}) return;");
-        writer.WriteLine("#if !defined(CX_STATIC_LINK)");
-        writer.WriteLine($"while (atomic_flag_test_and_set_explicit(&__cx_module_init_lock_{token}, memory_order_acquire)) {{ }}");
-        writer.WriteLine("#endif");
-        writer.WriteLine($"if (!__cx_module_initialized_{token})");
+        writer.WriteLine($"if (!cx_runtime_once_begin(&__cx_module_once_{token})) return;");
+        writer.WriteLine("struct cx_exception_frame __cx_module_exception_frame;");
+        writer.WriteLine("cx_exception_push(&__cx_module_exception_frame);");
+        writer.WriteLine("if (setjmp(__cx_module_exception_frame.environment) == 0)");
         writer.WriteLine("{");
         writer.IncreaseIndent();
-        writer.WriteLine($"__cx_module_initializing_{token} = CX_TRUE;");
         foreach (var dependencyName in project.ResolvedProjectNames)
         {
             writer.WriteLine($"__cx_module_init_{GetModuleToken(dependencyName)}();");
@@ -1340,6 +1560,37 @@ public static partial class CCodeOutputGenerator
                 writer, instance.Type, instance.Declaration, project.Name);
         }
         writer.WriteLine("#endif");
+        foreach (var entry in genericVirtualEntries)
+        {
+            for (var index = 0; index < entry.MethodTypeArguments.Count; index++)
+            {
+                writer.WriteLine(
+                    $"{entry.TypeArgumentsIdentifier}[{index}] = " +
+                    $"{ToTypeInfoPointer(entry.MethodTypeArguments[index])};");
+            }
+            writer.WriteLine(
+                $"{entry.RegistrationIdentifier}.receiverTypeInfo = " +
+                $"{ToTypeInfoPointer(entry.RuntimeType)};");
+            writer.WriteLine(
+                $"{entry.RegistrationIdentifier}.methodIdentity = " +
+                $"\"{EscapeCString(entry.MethodIdentity)}\";");
+            writer.WriteLine(
+                $"{entry.RegistrationIdentifier}.methodTypeArguments = " +
+                $"{entry.TypeArgumentsIdentifier};");
+            writer.WriteLine(
+                $"{entry.RegistrationIdentifier}.methodTypeArgumentCount = " +
+                $"{entry.MethodTypeArguments.Count}u;");
+            writer.WriteLine(
+                $"{entry.RegistrationIdentifier}.implementationIdentity = " +
+                $"\"{EscapeCString(GetGenericVirtualImplementationIdentity(entry.Implementation, entry.MethodTypeArguments))}\";");
+            writer.WriteLine(
+                $"{entry.RegistrationIdentifier}.implementation = " +
+                $"(cx_vtable_function){entry.ThunkIdentifier};");
+            writer.WriteLine(
+                $"{entry.RegistrationIdentifier}.next = CX_NULL;");
+            writer.WriteLine(
+                $"cx_register_generic_virtual_method(&{entry.RegistrationIdentifier});");
+        }
         WriteDynamicStaticFieldInitializers(writer, declarations, project.Name);
         foreach (var constructor in EnumerateClasses(declarations)
             .SelectMany(type => type.MemberDeclarations.Declarations
@@ -1348,13 +1599,18 @@ public static partial class CCodeOutputGenerator
         {
             writer.WriteLine($"{ToCFunctionName(constructor, project.Name)}();");
         }
-        writer.WriteLine($"__cx_module_initialized_{token} = CX_TRUE;");
-        writer.WriteLine($"__cx_module_initializing_{token} = CX_FALSE;");
+        writer.WriteLine("cx_exception_pop(&__cx_module_exception_frame);");
+        writer.WriteLine($"cx_runtime_once_complete(&__cx_module_once_{token});");
         writer.DecreaseIndent();
         writer.WriteLine("}");
-        writer.WriteLine("#if !defined(CX_STATIC_LINK)");
-        writer.WriteLine($"atomic_flag_clear_explicit(&__cx_module_init_lock_{token}, memory_order_release);");
-        writer.WriteLine("#endif");
+        writer.WriteLine("else");
+        writer.WriteLine("{");
+        writer.IncreaseIndent();
+        writer.WriteLine("cx_exception_pop(&__cx_module_exception_frame);");
+        writer.WriteLine($"cx_runtime_once_fail(&__cx_module_once_{token}, cx_exception_current());");
+        writer.WriteLine("CX_RETHROW();");
+        writer.DecreaseIndent();
+        writer.WriteLine("}");
         writer.DecreaseIndent();
         writer.WriteLine("}");
     }
@@ -1575,8 +1831,13 @@ public static partial class CCodeOutputGenerator
             var initializer = field.Initializer is not LiteralExpression literal
                 ? string.Empty
                 : $" = {ToCFieldInitializer(literal, moduleName)}";
+            var export = field.MemberModifiers.Contains(MemberModifier.Public) &&
+                field.ParentClassDeclaration?.Visibility == Visibility.Public
+                ? $"{GetModuleDataApiName(moduleName)} "
+                : "static ";
             writer.WriteLine(
-                $"{field.Type.ToCIdentifier(false)} {GetStaticFieldIdentifier(field, moduleName)}{initializer};");
+                $"{export}{field.Type.ToCIdentifier(false)} " +
+                $"{GetStaticFieldIdentifier(field, moduleName)}{initializer};");
         }
     }
 
@@ -1611,7 +1872,6 @@ public static partial class CCodeOutputGenerator
         writer.WriteLine($"static void {helperName}(void)");
         writer.WriteLine("{");
         writer.IncreaseIndent();
-        writer.WriteLine("static cx_bool registered;");
         writer.WriteLine("cx_gc_check_thread();");
         if (staticFields.Length != 0)
         {
@@ -1625,15 +1885,9 @@ public static partial class CCodeOutputGenerator
             writer.DecreaseIndent();
             writer.WriteLine("};");
         }
-        writer.WriteLine("if (!registered)");
-        writer.WriteLine("{");
-        writer.IncreaseIndent();
         writer.WriteLine(staticFields.Length == 0
             ? "cx_gc_register_static_roots(NULL, 0);"
             : $"cx_gc_register_static_roots(roots, (cx_uint){staticFields.Length});");
-        writer.WriteLine("registered = CX_TRUE;");
-        writer.DecreaseIndent();
-        writer.WriteLine("}");
         writer.DecreaseIndent();
         writer.WriteLine("}");
         writer.WriteLine();
@@ -1771,7 +2025,8 @@ public static partial class CCodeOutputGenerator
                 return index >= 0 && index < type.TypeArguments.Count &&
                     IsReferenceTypeArgument(type.TypeArguments[index]);
             }
-            if (field.Type is NamedType { ClassType: ClassType.Class } namedField &&
+            if (field.Type is NamedType
+                { ClassType: ClassType.Class or ClassType.Interface } namedField &&
                 IsGenericTypePattern(namedField, declaration.GenericTypeNames))
             {
                 return true;
@@ -1781,7 +2036,6 @@ public static partial class CCodeOutputGenerator
         });
         var supportedMethods = methods.All(method =>
             !method.IsStatic &&
-            method.VirtualSlotIndex is null &&
             (IsClosedGenericOwnerMethod(method, declaration) ||
                 method.IsGenericSpecialization || method.GenericTypeNames.Length > 0 ||
                 IsClosedClassConceptMethodReturnBody(method) ||
@@ -1810,7 +2064,7 @@ public static partial class CCodeOutputGenerator
             !supportedConstructor || !supportedFields || !supportedMethods ||
             !supportedProperties ||
             !IsSupportedClosedGenericReferenceBase(declaration) ||
-            !HasOnlyInheritedObjectSlots(declaration) ||
+            !HasSupportedClosedGenericReferenceSlots(declaration) ||
             !HasSupportedClosedGenericInterfaceTables(declaration))
         {
             throw new CxCompiler.Model.Errors.CompilationErrorException(
@@ -1874,6 +2128,13 @@ public static partial class CCodeOutputGenerator
         declaration.VirtualMethodSlots.All(slot =>
             slot.Contract.ParentClassDeclaration?.FullName.ToString() == "System.Object" &&
             ReferenceEquals(slot.Contract, slot.Implementation));
+
+    private static bool HasSupportedClosedGenericReferenceSlots(
+        ClassDeclaration declaration) =>
+        declaration.VirtualMethodSlots.All(slot =>
+            slot.Implementation is null ||
+            slot.Implementation.GenericTypeNames.Length > 0 ||
+            !ReferenceEquals(slot.Implementation.ParentClassDeclaration, declaration));
 
     private static bool IsValueTypeArgument(TypeBase type) => type switch
     {
@@ -2901,11 +3162,152 @@ public static partial class CCodeOutputGenerator
         FieldDeclaration field,
         ClassDeclaration declaration) =>
         IsSupportedGenericNullFieldInitializer(field, declaration) ||
+        IsSupportedClosedGenericObjectCreationFieldInitializer(field, declaration) ||
+        IsSupportedClosedGenericArrayFieldInitializer(field, declaration) ||
         field.Initializer is LiteralExpression { SourceText: "default" } &&
             ContainsGenericParameter(field.Type, declaration.GenericTypeNames) ||
         field.Initializer is { } initializer &&
-            IsClosedGenericConstantExpression(initializer) &&
+            IsClosedGenericFieldInitializerExpression(initializer, field, declaration) &&
             !ContainsGenericParameter(field.Type, declaration.GenericTypeNames);
+
+    private static bool IsSupportedClosedGenericArrayFieldInitializer(
+        FieldDeclaration field,
+        ClassDeclaration declaration) =>
+        declaration.ClassType is ClassType.Class or ClassType.Struct &&
+        field.Type is ArrayType fieldArray &&
+        (!ContainsGenericParameter(fieldArray.ElementType, declaration.GenericTypeNames) ||
+            IsGenericTypePattern(fieldArray.ElementType, declaration.GenericTypeNames)) &&
+        field.Initializer is ArrayCreationExpression
+        {
+            ElementType: var elementType,
+            Length: { } length,
+        } &&
+        IsSameGenericTypePattern(fieldArray.ElementType, elementType) &&
+        length.InferredType is UIntType &&
+        (length is LiteralExpression { SourceText: var literal } &&
+            literal.EndsWith('u') ||
+            IsClosedGenericFieldInitializerExpression(length, field, declaration));
+
+    private static bool IsClosedGenericFieldInitializerExpression(
+        ExpressionBase expression,
+        FieldDeclaration field,
+        ClassDeclaration declaration)
+    {
+        var fields = declaration.MemberDeclarations.Declarations
+            .OfType<FieldDeclaration>().ToArray();
+        var currentIndex = Array.IndexOf(fields, field);
+        if (currentIndex < 0)
+        {
+            return false;
+        }
+
+        bool IsSupported(ExpressionBase candidate) => candidate switch
+        {
+            IdentifierExpression { TargetField: { } target } =>
+                !target.Declaration.IsStatic &&
+                ReferenceEquals(target.Declaration.ParentClassDeclaration, declaration) &&
+                Array.IndexOf(fields, target.Declaration) is var targetIndex &&
+                targetIndex >= 0 && targetIndex < currentIndex &&
+                !ContainsGenericParameter(
+                    target.Declaration.Type, declaration.GenericTypeNames),
+            LiteralExpression => true,
+            UnaryExpression
+            {
+                OperatorSymbol: null,
+                Postfix: false,
+                Operator: "+" or "-" or "~" or "!",
+            } unary => IsSupported(unary.Operand),
+            BinaryExpression
+            {
+                OperatorSymbol: null,
+                Operator: "+" or "-" or "*" or "/" or "%" or
+                    "<<" or ">>" or ">>>" or "&" or "|" or "^" or
+                    "==" or "!=" or "<" or "<=" or ">" or ">=" or "&&" or "||",
+            } binary => IsSupported(binary.Left) && IsSupported(binary.Right),
+            InvocationExpression invocation =>
+                IsSupportedClosedGenericFieldInitializerInvocation(
+                    invocation, declaration, fields, currentIndex) &&
+                invocation.Arguments.All(IsSupported),
+            _ => false,
+        };
+
+        return IsSupported(expression);
+    }
+
+    private static bool IsSupportedClosedGenericFieldInitializerInvocation(
+        InvocationExpression invocation,
+        ClassDeclaration declaration,
+        IReadOnlyList<FieldDeclaration> fields,
+        int currentIndex)
+    {
+        if (declaration.ClassType != ClassType.Class ||
+            invocation.TargetSymbol is not { Declaration: { } method } targetSymbol ||
+            method.GenericTypeNames.Length != 0 ||
+            method.IsStatic || method.IsExtension ||
+            method.ParentClassDeclaration is not { ClassType: ClassType.Class or ClassType.Struct } ||
+            ContainsGenericParameter(targetSymbol.ReturnType, declaration.GenericTypeNames) ||
+            targetSymbol.ParameterTypes.Any(parameter =>
+                ContainsGenericParameter(parameter, declaration.GenericTypeNames)) ||
+            invocation.Receiver is not IdentifierExpression
+            {
+                TargetField: { } receiverField,
+            } ||
+            invocation.Arguments.Any(argument =>
+                argument.InferredType is not { } argumentType ||
+                ContainsGenericParameter(argumentType, declaration.GenericTypeNames)) ||
+            receiverField.Declaration.IsStatic ||
+            !ReferenceEquals(receiverField.Declaration.ParentClassDeclaration, declaration) ||
+            !fields.Take(currentIndex).Any(candidate =>
+                ReferenceEquals(candidate, receiverField.Declaration)) ||
+            ContainsGenericParameter(receiverField.Declaration.Type, declaration.GenericTypeNames))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsSupportedClosedGenericObjectCreationFieldInitializer(
+        FieldDeclaration field,
+        ClassDeclaration declaration)
+    {
+        if (declaration.ClassType != ClassType.Class ||
+            field.Type is not NamedType
+                { ClassType: ClassType.Class or ClassType.Struct } ||
+            field.Initializer is not ObjectCreationExpression
+            {
+                RequestedType: NamedType
+                {
+                    ClassType: ClassType.Class or ClassType.Struct,
+                } requestedType,
+                Constructor: { } constructor,
+            } objectCreation ||
+            !IsSupportedClosedGenericFieldTypePattern(field.Type, declaration) ||
+            !IsSupportedClosedGenericFieldTypePattern(requestedType, declaration) ||
+            objectCreation.Arguments.Any(argument =>
+                argument.InferredType is not { } argumentType ||
+                !IsSupportedClosedGenericFieldTypePattern(argumentType, declaration) ||
+                !IsClosedGenericFieldInitializerExpression(argument, field, declaration)) ||
+            constructor.ParameterTypes.Count != objectCreation.Arguments.Count ||
+            constructor.Declaration is not { } constructorDeclaration ||
+            constructorDeclaration.ParentClassDeclaration is not { } targetDeclaration ||
+            targetDeclaration.GenericTypeNames.Length > 0 &&
+                requestedType.ConstructedIdentity is null &&
+                    !IsGenericTypePattern(requestedType, declaration.GenericTypeNames) ||
+            constructor.ParameterTypes.Any(parameter =>
+                !IsSupportedClosedGenericFieldTypePattern(parameter, declaration)))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsSupportedClosedGenericFieldTypePattern(
+        TypeBase type,
+        ClassDeclaration declaration) =>
+        !ContainsGenericParameter(type, declaration.GenericTypeNames) ||
+        IsGenericTypePattern(type, declaration.GenericTypeNames);
 
     private static bool IsSupportedGenericNullFieldInitializer(
         FieldDeclaration field,
@@ -3258,8 +3660,10 @@ public static partial class CCodeOutputGenerator
         var fields = declaration.MemberDeclarations.Declarations
             .OfType<FieldDeclaration>()
             .ToArray();
-        return declaration.InterfaceDispatchTables.All(table => table.Slots.All(slot =>
-            slot.ImplementationFunction is { } implementation
+        return declaration.InterfaceDispatchTables.All(table => table.Slots
+            .Where(slot => slot.ContractFunction is not
+                { GenericTypeNames.Length: > 0 })
+            .All(slot => slot.ImplementationFunction is { } implementation
                 ? table.Interface.GenericTypeNames.Length != 0
                     ? IsReferenceFieldGetter(implementation, fields) ||
                         IsGenericFieldSetter(implementation, fields) ||
@@ -3452,20 +3856,17 @@ public static partial class CCodeOutputGenerator
                 !IsGenericTypePattern(fieldArray.ElementType, declaration.GenericTypeNames) ||
             value is not ArrayCreationExpression allocation ||
             !IsSameGenericTypePattern(fieldArray.ElementType, allocation.ElementType) ||
-            allocation.Length is not IdentifierExpression and not LiteralExpression)
+            allocation.Length.InferredType is not UIntType ||
+            !IsClosedGenericConcreteMethodExpression(
+                allocation.Length,
+                constructor,
+                declaration.GenericTypeNames,
+                Array.Empty<FieldDeclaration>()))
         {
             return false;
         }
 
-        if (allocation.Length is IdentifierExpression length)
-        {
-            return constructor.Parameters.Any(parameter =>
-                parameter.Name == length.Identifier.ToString() &&
-                parameter.ParameterType is UIntType);
-        }
-
-        return allocation.Length is LiteralExpression { SourceText: var literal } &&
-            literal.EndsWith('u');
+        return true;
     }
 
     private static bool IsClosedGenericArrayConstructor(
@@ -3529,7 +3930,11 @@ public static partial class CCodeOutputGenerator
                 value is ObjectCreationExpression &&
                     IsClosedGenericObjectCreation(
                         field, value, constructor, declaration, fields) ||
+                value is ArrayCreationExpression &&
+                    IsClosedGenericArrayAllocation(
+                        field, value, constructor, declaration) ||
                 value is not ObjectCreationExpression &&
+                    value is not ArrayCreationExpression &&
                     IsClosedGenericConcreteMethodExpression(
                         value, constructor, declaration.GenericTypeNames, fields))
             {
@@ -3690,7 +4095,7 @@ public static partial class CCodeOutputGenerator
         ArrayType array => IsGenericTypePattern(array.ElementType, genericTypeNames),
         NamedType
         {
-            ClassType: ClassType.Class or ClassType.Struct,
+            ClassType: ClassType.Class or ClassType.Struct or ClassType.Interface,
             TypeArguments.Count: > 0,
         } named =>
             named.TypeArguments.All(argument =>
@@ -4780,7 +5185,10 @@ public static partial class CCodeOutputGenerator
                 foreach (var table in closedInterfaces)
                 {
                     var closedInterfaceType = closedInterfaceTypes[table.Interface];
-                    foreach (var slot in table.Slots.Where(slot => slot.Implementation is not null))
+                    foreach (var slot in table.Slots.Where(slot =>
+                        slot.Implementation is not null &&
+                        slot.ContractFunction is not
+                            { GenericTypeNames.Length: > 0 }))
                     {
                         var closedThunk = GetClosedGenericInterfaceThunkIdentifier(
                             identity.CIdentifier,
@@ -4861,6 +5269,7 @@ public static partial class CCodeOutputGenerator
             foreach (var slot in declaration.VirtualMethodSlots.OrderBy(slot => slot.Index))
             {
                 writer.WriteLine(slot.Implementation is null
+                    || slot.Implementation.GenericTypeNames.Length > 0
                     ? "{ .function = (cx_vtable_function)0 },"
                     : $"CX_VTABLE_ENTRY({ToCFunctionName(slot.Implementation, moduleName)})");
             }
@@ -4879,7 +5288,8 @@ public static partial class CCodeOutputGenerator
                         $"{{ .data = &CX_TYPEINFO_NAME({identity.CIdentifier}) }},");
                     foreach (var slot in table.Slots)
                     {
-                        writer.WriteLine(slot.Implementation is null
+                        writer.WriteLine(slot.Implementation is null ||
+                            slot.ContractFunction is { GenericTypeNames.Length: > 0 }
                             ? "{ .function = (cx_vtable_function)0 },"
                             : $"CX_VTABLE_ENTRY({closedInterfaceThunks[(table.Interface, slot.Index)]})");
                     }
@@ -5137,7 +5547,8 @@ public static partial class CCodeOutputGenerator
 
         foreach (var slot in classDeclaration.VirtualMethodSlots.OrderBy(slot => slot.Index))
         {
-            if (slot.Implementation is null)
+            if (slot.Implementation is null ||
+                slot.Implementation.GenericTypeNames.Length > 0)
             {
                 writer.WriteLine("{ .function = (cx_vtable_function)0 },");
             }
@@ -5165,7 +5576,8 @@ public static partial class CCodeOutputGenerator
             $"{classDeclaration.ToCIdentifier(moduleName, false)})");
         foreach (var slot in table.Slots.OrderBy(slot => slot.Index))
         {
-            writer.WriteLine(slot.Implementation is null
+            writer.WriteLine(slot.Implementation is null ||
+                slot.ContractFunction is { GenericTypeNames.Length: > 0 }
                 ? "{ .function = (cx_vtable_function)0 },"
                 : $"CX_VTABLE_ENTRY({GetInterfaceThunkIdentifier(classDeclaration, table.Interface, slot.Index, moduleName).ToCIdentifier()})");
         }
@@ -5670,6 +6082,7 @@ public static partial class CCodeOutputGenerator
     private static string ToTypeInfoPointer(TypeBase type)
     {
         type = type is ConstType constType ? constType.UnderlyingType : type;
+        if (UnwrapConst(type) is NamedType { NativeType: not null } or NativeScalarType) return "CX_NULL";
         if (type is PtrType or FunctionType or AutoType or GenericType or NullType ||
             type is NamedType { IsDelegate: true })
         {
@@ -5758,7 +6171,10 @@ public static partial class CCodeOutputGenerator
             foreach (var table in classDeclaration.InterfaceDispatchTables.Where(table =>
                 !HasOpenGenericInterfaceSignature(classDeclaration, table.Interface)))
             {
-                foreach (var slot in table.Slots.Where(slot => slot.Implementation is not null))
+                foreach (var slot in table.Slots.Where(slot =>
+                    slot.Implementation is not null &&
+                    slot.ContractFunction is not
+                        { GenericTypeNames.Length: > 0 }))
                 {
                     if (table.ConstructedInterfaceType is { } constructedInterface)
                     {
@@ -5809,9 +6225,7 @@ public static partial class CCodeOutputGenerator
             $"static {slot.ReturnType.ToCReturnType(false)} {thunkName}(" +
             $"{string.Join(", ", parameters)}) {{");
         writer.IncreaseIndent();
-        writer.WriteLine("#if !defined(CX_STATIC_LINK)");
         writer.WriteLine($"__cx_module_init_{GetModuleToken(moduleName)}();");
-        writer.WriteLine("#endif");
 
         var argumentNames = slot.Parameters.Select(parameter => parameter.Name).ToArray();
         string call;
@@ -5883,9 +6297,7 @@ public static partial class CCodeOutputGenerator
             $"static {returnType.ToCReturnType(false)} {thunkName}(" +
             $"{string.Join(", ", parameterDeclarations)}) {{");
         writer.IncreaseIndent();
-        writer.WriteLine("#if !defined(CX_STATIC_LINK)");
         writer.WriteLine($"__cx_module_init_{GetModuleToken(moduleName)}();");
-        writer.WriteLine("#endif");
 
         string call;
         if (slot.ImplementationFunction is { } implementation)
@@ -6120,7 +6532,7 @@ public static partial class CCodeOutputGenerator
                         closedTypeIdentifier,
                         moduleName,
                         instance) + ";"));
-                call = $"while ({condition}) {{ {assignments} }}";
+                call = $"while ({condition}) {{ cx_gc_safepoint(); {assignments} }}";
             }
             else if (GetClosedGenericDoWhileConcreteFieldAssignments(
                     implementation, classDeclaration, implementationFields) is
@@ -6150,7 +6562,7 @@ public static partial class CCodeOutputGenerator
                     closedTypeIdentifier,
                     moduleName,
                     instance);
-                call = $"do {{ {assignments} }} while ({condition})";
+                call = $"do {{ cx_gc_safepoint(); {assignments} }} while ({condition})";
             }
             else if (GetClosedGenericForConcreteFieldAssignments(
                     implementation, classDeclaration, implementationFields) is
@@ -6186,7 +6598,7 @@ public static partial class CCodeOutputGenerator
                 var assignments = string.Join(" ", forAssignments.Assignments.Select(assignment =>
                     RenderAssignment(assignment.Assignment) + ";"));
                 call = $"for ({RenderAssignment(forAssignments.Initializer)}; {condition}; " +
-                    $"{RenderAssignment(forAssignments.Iterator)}) {{ {assignments} }}";
+                    $"{RenderAssignment(forAssignments.Iterator)}) {{ cx_gc_safepoint(); {assignments} }}";
             }
             else if (IsClosedGenericConcreteFieldAssignmentMethod(
                 implementation, classDeclaration, implementationFields))
@@ -6711,6 +7123,7 @@ public static partial class CCodeOutputGenerator
             {
                 if (declaration is ClassDeclaration classDeclaration)
                 {
+                    if (classDeclaration.NativeType is not null) continue;
                     declarations.Add(classDeclaration);
                 }
                 else if (declaration is FunctionDeclaration functionDeclaration)
@@ -7300,6 +7713,11 @@ public static partial class CCodeOutputGenerator
         var constString = @const ? "const " : "";
         return typeBase switch
         {
+            NamedType { DelegateSignature: NativeFunctionType nativeFunction } => GetFunctionTypeCIdentifier(nativeFunction),
+            NamedType { NativeType: { } native } => $"{constString}{native.CType}",
+            NamedType { AliasTargetType: { } target } => target.ToCIdentifier(@const),
+            NativeScalarType scalar => $"{constString}{scalar.CType}",
+            WCharType => $"{constString}cx_wchar",
             ConstType constType => constType.UnderlyingType.ToCIdentifier(true),
             BoolType => "cx_bool",
             CharType => "cx_char",
@@ -7319,6 +7737,7 @@ public static partial class CCodeOutputGenerator
 
             ObjectType => $"{constString}struct CX_ID_3(cxcore, System, Object)*",
             StringType => $"{constString}struct CX_ID_3(cxcore, System, String)*",
+            PtrType { Pointee: { } pointee } => $"{NativePointeeType(pointee)}*{(@const ? " const" : "")}",
             PtrType => $"{constString}cx_ptr",
 
             FunctionType functionType => GetFunctionTypeCIdentifier(functionType),
@@ -7377,6 +7796,8 @@ public static partial class CCodeOutputGenerator
     {
         var signature = $"{functionType.ReturnType.ToCReturnType(false)}(" +
             string.Join(",", functionType.ParameterTypes.Select(ToCParameterType)) + ")";
+        if (functionType is NativeFunctionType native)
+            signature = $"native:{native.CallingConvention}:{native.ContextParameter}:" + signature;
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(signature)));
         return $"CX_FN_{hash[..16]}";
     }

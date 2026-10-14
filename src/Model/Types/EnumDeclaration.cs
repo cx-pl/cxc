@@ -9,6 +9,7 @@ public sealed class EnumDeclaration : DeclarationBase
     private readonly List<EnumMemberDeclaration> _members = [];
 
     public Visibility Visibility { get; }
+    public TypeBase? UnderlyingType { get; internal set; }
     public IReadOnlyList<EnumMemberDeclaration> Members => _members;
 
     public EnumDeclaration(
@@ -35,6 +36,7 @@ public sealed class EnumMemberDeclaration : DeclarationBase
 {
     public EnumDeclaration ParentEnum { get; }
     public LiteralExpression? Value { get; }
+    public System.Numerics.BigInteger? NativeConstantValue { get; internal set; }
 
     public EnumMemberDeclaration(
         string name,

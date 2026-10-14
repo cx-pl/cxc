@@ -19,6 +19,8 @@ public sealed partial class SemanticBinder
         {
             try
             {
+                var declaredInterfaces = new HashSet<string>(StringComparer.Ordinal);
+                var declaredClassBase = false;
                 if (classDeclaration.IsStatic && classDeclaration.BaseTypes.Count > 0)
                 {
                     throw new CompilationErrorException(
@@ -30,7 +32,16 @@ public sealed partial class SemanticBinder
                     ResolveTypeReference(baseType, classDeclaration.Namespace, imports);
                     if (baseType is ObjectType)
                     {
-                        SetBaseClass(classDeclaration, baseType, null);
+                        if (declaredClassBase)
+                        {
+                            throw new CompilationErrorException(
+                                $"Type '{classDeclaration.FullName}' cannot have more than one base class.");
+                        }
+                        declaredClassBase = true;
+                        if (classDeclaration.BaseClassType is null)
+                        {
+                            SetBaseClass(classDeclaration, baseType, null);
+                        }
                         continue;
                     }
                     if (UnwrapConst(baseType) is not NamedType namedType ||
@@ -42,7 +53,16 @@ public sealed partial class SemanticBinder
                     }
                     if (namedType.ResolvedTypeFullName.ToString() == "cxcore.System.Exception")
                     {
-                        SetBaseClass(classDeclaration, baseType, null);
+                        if (declaredClassBase)
+                        {
+                            throw new CompilationErrorException(
+                                $"Type '{classDeclaration.FullName}' cannot have more than one base class.");
+                        }
+                        declaredClassBase = true;
+                        if (classDeclaration.BaseClassType is null)
+                        {
+                            SetBaseClass(classDeclaration, baseType, null);
+                        }
                         continue;
                     }
 
@@ -53,17 +73,30 @@ public sealed partial class SemanticBinder
                     switch (baseSymbol.Declaration.ClassType)
                     {
                         case ClassType.Interface:
-                            if (classDeclaration.BaseInterfaces.Contains(baseSymbol.Declaration))
+                            var interfaceKey = GetTypeName(namedType).ToString();
+                            if (!declaredInterfaces.Add(interfaceKey))
                             {
                                 throw new CompilationErrorException(
                                     $"Type '{classDeclaration.FullName}' lists interface " +
                                     $"'{baseSymbol.Declaration.FullName}' more than once.");
                             }
-                            classDeclaration.AddBaseInterface(baseSymbol.Declaration);
+                            if (!classDeclaration.BaseInterfaces.Contains(baseSymbol.Declaration))
+                            {
+                                classDeclaration.AddBaseInterface(baseSymbol.Declaration);
+                            }
                             break;
 
                         case ClassType.Class:
-                            SetBaseClass(classDeclaration, baseType, baseSymbol.Declaration);
+                            if (declaredClassBase)
+                            {
+                                throw new CompilationErrorException(
+                                    $"Type '{classDeclaration.FullName}' cannot have more than one base class.");
+                            }
+                            declaredClassBase = true;
+                            if (classDeclaration.BaseClassType is null)
+                            {
+                                SetBaseClass(classDeclaration, baseType, baseSymbol.Declaration);
+                            }
                             break;
 
                         default:
@@ -214,11 +247,31 @@ public sealed partial class SemanticBinder
                         InterfaceDispatchSlotKind.Method,
                         function,
                         null);
-                    if (dispatchSlots.Any(slot => InterfaceSlotSignaturesMatch(slot, candidate)))
+                    var inheritedContract = dispatchSlots.SingleOrDefault(slot =>
+                        slot.Kind == InterfaceDispatchSlotKind.Method &&
+                        InterfaceSlotSignaturesMatch(slot, candidate));
+                    if (inheritedContract is not null)
                     {
-                        throw new CompilationErrorException(
-                            $"Interface '{interfaceDeclaration.FullName}' contains duplicate function " +
-                            $"'{function.Name}'.");
+                        if (!IsType(inheritedContract.ReturnType, function.ReturnType))
+                        {
+                            throw new CompilationErrorException(
+                                $"Interface function '{function.FullName}' must preserve the return " +
+                                $"type of redeclared contract '{inheritedContract.Contract.FullName}'.",
+                                function.SourceSpan);
+                        }
+                        if (!GenericMethodConstraintsMatch(
+                            inheritedContract.ContractFunction!, function))
+                        {
+                            throw new CompilationErrorException(
+                                $"Interface function '{function.FullName}' must preserve the generic " +
+                                $"constraints of redeclared contract " +
+                                $"'{inheritedContract.Contract.FullName}'.",
+                                function.SourceSpan);
+                        }
+                        function.BindVirtualSlot(
+                            inheritedContract.Index,
+                            inheritedContract.ContractFunction!);
+                        continue;
                     }
                     dispatchSlots.Add(candidate);
                     continue;
@@ -293,7 +346,8 @@ public sealed partial class SemanticBinder
 
             foreach (var function in type.MemberDeclarations.Declarations
                 .OfType<FunctionDeclaration>()
-                .Where(function => function is not ConstructorDeclaration))
+                .Where(function => function is not ConstructorDeclaration &&
+                    !function.IsGenericSpecialization))
             {
                 var isAbstract = function.MemberModifiers.Contains(MemberModifier.Abstract);
                 var isVirtual = function.MemberModifiers.Contains(MemberModifier.Virtual);
@@ -414,6 +468,14 @@ public sealed partial class SemanticBinder
             VirtualMethodSlot slot,
             FunctionDeclaration implementation)
         {
+            if (slot.Contract.GenericTypeNames.Length !=
+                implementation.GenericTypeNames.Length)
+            {
+                throw new CompilationErrorException(
+                    $"Function '{implementation.FullName}' must preserve the generic arity of " +
+                    $"'{slot.Contract.FullName}'.",
+                    implementation.SourceSpan);
+            }
             if (slot.Implementation?.MemberModifiers.Contains(MemberModifier.Final) == true)
             {
                 throw new CompilationErrorException(
@@ -421,11 +483,27 @@ public sealed partial class SemanticBinder
                     $"'{slot.Implementation.FullName}'.",
                     implementation.SourceSpan);
             }
-            if (!IsType(slot.Contract.ReturnType, implementation.ReturnType))
+            var genericArguments = slot.Contract.GenericTypeNames
+                .Zip(implementation.GenericTypeNames)
+                .ToDictionary(
+                    pair => pair.First,
+                    pair => (TypeBase)new GenericType(pair.Second),
+                    StringComparer.Ordinal);
+            if (!IsType(
+                    GenericTypeSubstitution.Substitute(
+                        slot.Contract.ReturnType, genericArguments),
+                    implementation.ReturnType))
             {
                 throw new CompilationErrorException(
                     $"Function '{implementation.FullName}' must return " +
                     $"'{GetTypeName(slot.Contract.ReturnType)}' to override " +
+                    $"'{slot.Contract.FullName}'.",
+                    implementation.SourceSpan);
+            }
+            if (!GenericMethodConstraintsMatch(slot.Contract, implementation))
+            {
+                throw new CompilationErrorException(
+                    $"Function '{implementation.FullName}' must preserve the generic constraints of " +
                     $"'{slot.Contract.FullName}'.",
                     implementation.SourceSpan);
             }
@@ -706,11 +784,113 @@ public sealed partial class SemanticBinder
         FunctionDeclaration contract,
         FunctionDeclaration implementation)
     {
-        return contract.Name == implementation.Name &&
-            contract.Const == implementation.Const &&
-            contract.Parameters.Count == implementation.Parameters.Count &&
+        if (contract.Name != implementation.Name ||
+            contract.Const != implementation.Const ||
+            contract.GenericTypeNames.Length != implementation.GenericTypeNames.Length ||
+            contract.Parameters.Count != implementation.Parameters.Count)
+        {
+            return false;
+        }
+
+        var genericArguments = contract.GenericTypeNames
+            .Zip(implementation.GenericTypeNames)
+            .ToDictionary(
+                pair => pair.First,
+                pair => (TypeBase)new GenericType(pair.Second),
+                StringComparer.Ordinal);
+        return
             contract.Parameters.Zip(implementation.Parameters).All(pair =>
-                IsType(pair.First.ParameterType, pair.Second.ParameterType));
+                IsType(
+                    GenericTypeSubstitution.Substitute(pair.First.ParameterType, genericArguments),
+                    pair.Second.ParameterType));
+    }
+
+    private static bool GenericMethodConstraintsMatch(
+        FunctionDeclaration contract,
+        FunctionDeclaration implementation)
+    {
+        var contractParameters = contract.GenericTypeNames
+            .Select((name, index) => (name, index))
+            .ToDictionary(item => item.name, item => item.index, StringComparer.Ordinal);
+        var implementationParameters = implementation.GenericTypeNames
+            .Select((name, index) => (name, index))
+            .ToDictionary(item => item.name, item => item.index, StringComparer.Ordinal);
+        if (!ConstraintsMatch(contract.GenericConstraints, implementation.GenericConstraints) ||
+            !ConceptConstraintsMatch(contract.ConceptConstraints, implementation.ConceptConstraints))
+        {
+            return false;
+        }
+
+        return true;
+
+        bool ConstraintsMatch(
+            IReadOnlyList<GenericTypeConstraint> expected,
+            IReadOnlyList<GenericTypeConstraint> actual)
+        {
+            if (expected.Count != actual.Count)
+            {
+                return false;
+            }
+            foreach (var constraint in expected)
+            {
+                if (!contractParameters.TryGetValue(constraint.ParameterName, out var index))
+                {
+                    return false;
+                }
+                var matching = actual.SingleOrDefault(candidate =>
+                    implementationParameters.TryGetValue(candidate.ParameterName, out var candidateIndex) &&
+                    candidateIndex == index);
+                if (matching is null || constraint.Kind != matching.Kind ||
+                    constraint.Types.Count != matching.Types.Count)
+                {
+                    return false;
+                }
+                var substitutions = contract.GenericTypeNames
+                    .Zip(implementation.GenericTypeNames)
+                    .ToDictionary(
+                        pair => pair.First,
+                        pair => (TypeBase)new GenericType(pair.Second),
+                        StringComparer.Ordinal);
+                var unmatched = matching.Types.ToList();
+                foreach (var requiredType in constraint.Types)
+                {
+                    var substituted = GenericTypeSubstitution.Substitute(
+                        requiredType, substitutions);
+                    var matchIndex = unmatched.FindIndex(candidate => IsType(candidate, substituted));
+                    if (matchIndex < 0)
+                    {
+                        return false;
+                    }
+                    unmatched.RemoveAt(matchIndex);
+                }
+            }
+            return true;
+        }
+
+        bool ConceptConstraintsMatch(
+            IReadOnlyList<GenericConceptConstraint> expected,
+            IReadOnlyList<GenericConceptConstraint> actual)
+        {
+            if (expected.Count != actual.Count)
+            {
+                return false;
+            }
+            foreach (var constraint in expected)
+            {
+                if (!contractParameters.TryGetValue(constraint.ParameterName, out var index))
+                {
+                    return false;
+                }
+                var matching = actual.SingleOrDefault(candidate =>
+                    implementationParameters.TryGetValue(candidate.ParameterName, out var candidateIndex) &&
+                    candidateIndex == index);
+                if (matching is null || !constraint.Concepts.ToHashSet().SetEquals(matching.Concepts))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
     }
 
     private IEnumerable<(ClassDeclaration Declaration, int BaseDepth)> EnumerateTypeHierarchy(
@@ -735,7 +915,7 @@ public sealed partial class SemanticBinder
             }
             foreach (var baseInterface in current.Declaration.BaseInterfaces)
             {
-                pending.Enqueue((baseInterface, current.BaseDepth));
+                pending.Enqueue((baseInterface, current.BaseDepth + 1));
             }
         }
     }

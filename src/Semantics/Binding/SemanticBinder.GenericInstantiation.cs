@@ -2,6 +2,7 @@ using CxCompiler.Model;
 using CxCompiler.Model.Common;
 using CxCompiler.Model.Errors;
 using CxCompiler.Model.Expressions;
+using CxCompiler.Model.Project;
 using CxCompiler.Model.Statements;
 using CxCompiler.Model.Types;
 using CxCompiler.Model.Types.BuiltInTypes;
@@ -11,6 +12,380 @@ namespace CxCompiler.Semantics;
 
 public sealed partial class SemanticBinder
 {
+
+    private void BindGenericVirtualDispatchTargets(CxProject project)
+    {
+        foreach (var context in project.CompilationContexts)
+        {
+            foreach (var function in EnumerateFunctions(context.DeclarationScope.Declarations))
+            {
+                foreach (var invocation in CCodeOutputGenerator.EnumerateBodyExpressions(
+                    function.Body ?? []).OfType<InvocationExpression>())
+                {
+                    if (invocation.TargetSymbol?.Declaration is not
+                        {
+                            GenericTypeNames.Length: > 0,
+                            VirtualSlotIndex: { } slotIndex,
+                            ParentClassDeclaration.ClassType: ClassType.Class or ClassType.Interface,
+                        } contract)
+                    {
+                        continue;
+                    }
+
+                    if (invocation.TargetSymbol.SpecializationName is null &&
+                        function.GenericTypeNames.Length > 0 &&
+                        (IsGenericForwardCallReturnBody(function) ||
+                            IsGenericVoidForwardCallBody(function)))
+                    {
+                        continue;
+                    }
+                    if (invocation.TargetSymbol.SpecializationName is null)
+                    {
+                        throw new CompilationErrorException(
+                            "Generic virtual calls from open generic bodies require a " +
+                            "closed caller specialization.",
+                            invocation.SourceSpan);
+                    }
+
+                    var receiverType = invocation.Receiver?.InferredType;
+                    var methodTypeArguments = contract.GenericTypeNames
+                        .Select(name => invocation.TargetSymbol.GenericTypeArguments
+                            .GetValueOrDefault(name))
+                        .ToArray();
+                    if (receiverType is null || methodTypeArguments.Any(type =>
+                        type is null || ContainsOpenTypeParameter(type)))
+                    {
+                        throw new CompilationErrorException(
+                            "Generic virtual calls from open generic bodies require a " +
+                            "closed caller specialization.",
+                            invocation.SourceSpan);
+                    }
+
+                    var closedMethodTypeArguments = methodTypeArguments
+                        .Cast<TypeBase>().ToArray();
+                    var closedReceiverRuntimeType = receiverType is NamedType namedReceiverType &&
+                        namedReceiverType.TypeArguments.Count > 0 &&
+                        GetClassDeclarationIncludingConstructed(namedReceiverType) is
+                            { ClassType: ClassType.Class, IsAbstract: false } receiverDeclaration
+                        ? (RuntimeType: namedReceiverType, Declaration: receiverDeclaration)
+                        : ((NamedType RuntimeType, ClassDeclaration Declaration)?)null;
+                    var candidateRuntimeTypes = _types
+                        .Where(type => type.Declaration.ClassType == ClassType.Class &&
+                            !type.Declaration.IsAbstract &&
+                            type.Declaration.GenericTypeNames.Length == 0 &&
+                            type.Type is NamedType)
+                        .Select(type => (
+                            RuntimeType: (NamedType)type.Type,
+                            type.Declaration))
+                        .Concat(project.GenericTypeInstances
+                            .Where(instance =>
+                                instance.Declaration.ClassType == ClassType.Class &&
+                                !instance.Declaration.IsAbstract)
+                            .Select(instance => (
+                                RuntimeType: instance.Type,
+                                instance.Declaration)))
+                        .Concat(closedReceiverRuntimeType is { } closedReceiver
+                            ? [closedReceiver]
+                            : [])
+                        .DistinctBy(candidate =>
+                            candidate.RuntimeType.ConstructedIdentity?.CanonicalName ??
+                            candidate.RuntimeType.ResolvedTypeFullName.ToString());
+                    foreach (var candidate in candidateRuntimeTypes.Where(candidate =>
+                        CanAssign(receiverType, candidate.RuntimeType)))
+                    {
+                        var implementation = FindGenericVirtualRuntimeImplementation(
+                            candidate.Declaration, contract.ParentClassDeclaration!, slotIndex);
+                        if (implementation is null)
+                        {
+                            continue;
+                        }
+
+                        var implementationSymbol = _symbols.SingleOrDefault(symbol =>
+                            ReferenceEquals(symbol.Declaration, implementation));
+                        if (implementationSymbol is null)
+                        {
+                            throw new CompilationErrorException(
+                                $"Generic virtual implementation '{implementation.FullName}' " +
+                                "cannot be specialized from this project.",
+                                invocation.SourceSpan);
+                        }
+
+                        var closedOwnerImplementation = CloseContainingClassFunction(
+                            implementationSymbol,
+                            candidate.RuntimeType);
+                        var closedImplementation = CloseGenericFunction(
+                            closedOwnerImplementation,
+                            invocation.Arguments.Select(argument =>
+                                argument.InferredType ?? BuiltInSystemTypes.Void).ToArray(),
+                            closedMethodTypeArguments);
+                        if (closedImplementation?.SpecializationName is null)
+                        {
+                            throw new CompilationErrorException(
+                                $"Generic virtual implementation '{implementation.FullName}' " +
+                                "could not be closed for the call's method type arguments.",
+                                invocation.SourceSpan);
+                        }
+
+                        var selectedImplementation = SelectGenericFunctionSpecialization(
+                            closedImplementation);
+                        project.AddGenericFunctionInstance(selectedImplementation);
+                        invocation.BindGenericVirtualDispatchTarget(
+                            candidate.RuntimeType,
+                            selectedImplementation);
+                    }
+                }
+            }
+        }
+
+        BindGenericVirtualDispatchTargetsFromGenericCallers(project);
+        BindGenericVirtualMethodValueTargets(project);
+    }
+
+    private void BindGenericVirtualMethodValueTargets(CxProject project)
+    {
+        foreach (var context in project.CompilationContexts)
+        {
+            foreach (var function in EnumerateFunctions(context.DeclarationScope.Declarations))
+            {
+                foreach (var methodValue in CCodeOutputGenerator.EnumerateBodyExpressions(
+                    function.Body ?? []).OfType<MemberAccessExpression>())
+                {
+                    if (methodValue.FunctionValueSymbol is not
+                        { Declaration: { GenericTypeNames.Length: > 0 } method } symbol ||
+                        method.VirtualSlotIndex is null ||
+                        method.ParentClassDeclaration?.ClassType is not
+                            (ClassType.Class or ClassType.Interface))
+                    {
+                        continue;
+                    }
+
+                    var contract = method.VirtualContract ?? method;
+                    var slotIndex = contract.VirtualSlotIndex ?? method.VirtualSlotIndex.Value;
+                    var methodTypeArguments = method.GenericTypeNames.Select(name =>
+                        symbol.GenericTypeArguments.GetValueOrDefault(name)).ToArray();
+                    var receiverType = methodValue.Target.InferredType;
+                    if (receiverType is null || methodTypeArguments.Any(type =>
+                        type is null || ContainsOpenTypeParameter(type)))
+                    {
+                        throw new CompilationErrorException(
+                            "Generic virtual method values require a known receiver type and " +
+                            "closed method type arguments.", methodValue.SourceSpan);
+                    }
+
+                    var closedMethodTypeArguments = methodTypeArguments
+                        .Cast<TypeBase>().ToArray();
+                    var candidateRuntimeTypes = _types
+                        .Where(type => type.Declaration.ClassType == ClassType.Class &&
+                            !type.Declaration.IsAbstract &&
+                            type.Declaration.GenericTypeNames.Length == 0 &&
+                            type.Type is NamedType)
+                        .Select(type => ((NamedType)type.Type, type.Declaration))
+                        .Concat(project.GenericTypeInstances
+                            .Where(instance =>
+                                instance.Declaration.ClassType == ClassType.Class &&
+                                !instance.Declaration.IsAbstract)
+                            .Select(instance => (instance.Type, instance.Declaration)));
+                    foreach (var (runtimeType, runtimeDeclaration) in candidateRuntimeTypes
+                        .Where(candidate => CanAssign(receiverType, candidate.Item1)))
+                    {
+                        var implementation = FindGenericVirtualRuntimeImplementation(
+                            runtimeDeclaration, contract.ParentClassDeclaration!, slotIndex);
+                        if (implementation is null)
+                        {
+                            continue;
+                        }
+                        var implementationSymbol = _symbols.SingleOrDefault(candidate =>
+                            ReferenceEquals(candidate.Declaration, implementation));
+                        if (implementationSymbol is null)
+                        {
+                            throw new CompilationErrorException(
+                                $"Generic virtual implementation '{implementation.FullName}' " +
+                                "cannot be specialized from this project.", methodValue.SourceSpan);
+                        }
+                        var closedOwnerImplementation = CloseContainingClassFunction(
+                            implementationSymbol, runtimeType);
+                        var closedImplementation = CloseGenericFunction(
+                            closedOwnerImplementation, symbol.ParameterTypes,
+                            closedMethodTypeArguments);
+                        if (closedImplementation?.SpecializationName is null)
+                        {
+                            throw new CompilationErrorException(
+                                $"Generic virtual implementation '{implementation.FullName}' " +
+                                "could not be closed for this method value.", methodValue.SourceSpan);
+                        }
+                        var selectedImplementation = SelectGenericFunctionSpecialization(
+                            closedImplementation);
+                        project.AddGenericFunctionInstance(selectedImplementation);
+                        methodValue.BindGenericVirtualDispatchTarget(
+                            runtimeType, selectedImplementation);
+                    }
+                }
+            }
+        }
+    }
+
+    private void BindGenericVirtualDispatchTargetsFromGenericCallers(CxProject project)
+    {
+        foreach (var context in project.CompilationContexts)
+        {
+            foreach (var function in EnumerateFunctions(context.DeclarationScope.Declarations)
+                .Where(function => function.GenericTypeNames.Length > 0 &&
+                    (IsGenericForwardCallReturnBody(function) ||
+                        IsGenericVoidForwardCallBody(function))))
+            {
+                foreach (var caller in project.GenericFunctionInstances.Where(instance =>
+                    ReferenceEquals(instance.Declaration, function) &&
+                    instance.SpecializationName is not null).ToArray())
+                {
+                    var callerSpecialization = caller.SpecializationName!;
+                    var substitutions = new Dictionary<string, TypeBase>(
+                        caller.GenericTypeArguments, StringComparer.Ordinal);
+                    if (function.ParentClassDeclaration is
+                        { GenericTypeNames.Length: > 0 } owner &&
+                        caller.ClosedContainingType is { } closedOwner)
+                    {
+                        foreach (var pair in owner.GenericTypeNames.Zip(
+                            closedOwner.TypeArguments))
+                        {
+                            substitutions[pair.First] = pair.Second;
+                        }
+                    }
+
+                    var invocation = GetGenericForwardCallInvocation(function) ??
+                        throw new InternalCompilerException(
+                            "Generic virtual forwarding body has no invocation.");
+                    if (invocation.TargetSymbol is not
+                        { Declaration: { GenericTypeNames.Length: > 0,
+                            VirtualSlotIndex: { } slotIndex,
+                            ParentClassDeclaration.ClassType: ClassType.Class or ClassType.Interface } contract,
+                            } contractSymbol)
+                    {
+                        continue;
+                    }
+
+                    var methodTypeArguments = contract.GenericTypeNames.Select(name =>
+                        contractSymbol.GenericTypeArguments.TryGetValue(name, out var type)
+                            ? CloseConstructedTypes(
+                                GenericTypeSubstitution.Substitute(type, substitutions))
+                            : null).ToArray();
+                    if (methodTypeArguments.Any(type => type is null ||
+                        ContainsOpenTypeParameter(type)))
+                    {
+                        throw new CompilationErrorException(
+                            "Generic virtual forwarding requires closed method type arguments " +
+                            "at each generic caller specialization.", invocation.SourceSpan);
+                    }
+                    var closedMethodTypeArguments = methodTypeArguments
+                        .Cast<TypeBase>().ToArray();
+                    var receiverType = invocation.Receiver?.InferredType;
+                    if (receiverType is null)
+                    {
+                        throw new CompilationErrorException(
+                            "Generic virtual forwarding requires a receiver with a known " +
+                            "closed class type.", invocation.SourceSpan);
+                    }
+                    receiverType = CloseConstructedTypes(
+                        GenericTypeSubstitution.Substitute(receiverType, substitutions));
+                    if (ContainsOpenTypeParameter(receiverType))
+                    {
+                        throw new CompilationErrorException(
+                            "Generic virtual forwarding through an open receiver type is not " +
+                            "supported.", invocation.SourceSpan);
+                    }
+                    var argumentTypes = invocation.Arguments.Select(argument =>
+                    {
+                        var inferredType = argument.InferredType ?? BuiltInSystemTypes.Void;
+                        return CloseConstructedTypes(
+                            GenericTypeSubstitution.Substitute(inferredType, substitutions));
+                    }).ToArray();
+                    if (argumentTypes.Any(ContainsOpenTypeParameter))
+                    {
+                        throw new CompilationErrorException(
+                            "Generic virtual forwarding requires closed argument types at " +
+                            "each generic caller specialization.", invocation.SourceSpan);
+                    }
+                    var closedContractSymbol = SubstituteFunctionSymbol(
+                        CloseContainingClassFunction(contractSymbol, receiverType),
+                        substitutions);
+                    var closedContract = CloseGenericFunction(
+                        closedContractSymbol, argumentTypes, closedMethodTypeArguments);
+                    if (closedContract?.SpecializationName is null)
+                    {
+                        throw new CompilationErrorException(
+                            $"Generic virtual contract '{contract.FullName}' could not be " +
+                            "closed for this generic caller specialization.", invocation.SourceSpan);
+                    }
+                    invocation.BindClosedGenericTarget(callerSpecialization, closedContract);
+
+                    var candidateRuntimeTypes = _types
+                        .Where(type => type.Declaration.ClassType == ClassType.Class &&
+                            !type.Declaration.IsAbstract &&
+                            type.Declaration.GenericTypeNames.Length == 0 &&
+                            type.Type is NamedType)
+                        .Select(type => ((NamedType)type.Type, type.Declaration))
+                        .Concat(project.GenericTypeInstances
+                            .Where(instance =>
+                                instance.Declaration.ClassType == ClassType.Class &&
+                                !instance.Declaration.IsAbstract)
+                            .Select(instance => (instance.Type, instance.Declaration)));
+                    foreach (var (runtimeType, runtimeDeclaration) in candidateRuntimeTypes
+                        .Where(candidate => CanAssign(receiverType, candidate.Item1)))
+                    {
+                        var implementation = FindGenericVirtualRuntimeImplementation(
+                            runtimeDeclaration, contract.ParentClassDeclaration!, slotIndex);
+                        if (implementation is null)
+                        {
+                            continue;
+                        }
+                        var implementationSymbol = _symbols.SingleOrDefault(symbol =>
+                            ReferenceEquals(symbol.Declaration, implementation));
+                        if (implementationSymbol is null)
+                        {
+                            throw new CompilationErrorException(
+                                $"Generic virtual implementation '{implementation.FullName}' " +
+                                "cannot be specialized from this project.", invocation.SourceSpan);
+                        }
+                        var closedOwnerImplementation = CloseContainingClassFunction(
+                            implementationSymbol, runtimeType);
+                        var closedImplementation = CloseGenericFunction(
+                            closedOwnerImplementation, argumentTypes,
+                            closedMethodTypeArguments);
+                        if (closedImplementation?.SpecializationName is null)
+                        {
+                            throw new CompilationErrorException(
+                                $"Generic virtual implementation '{implementation.FullName}' " +
+                                "could not be closed for this caller specialization.",
+                                invocation.SourceSpan);
+                        }
+                        var selectedImplementation = SelectGenericFunctionSpecialization(
+                            closedImplementation);
+                        project.AddGenericFunctionInstance(selectedImplementation);
+                        invocation.BindGenericVirtualDispatchTarget(
+                            runtimeType, selectedImplementation);
+                    }
+                }
+            }
+        }
+    }
+
+    private static FunctionDeclaration? FindGenericVirtualRuntimeImplementation(
+        ClassDeclaration runtimeDeclaration,
+        ClassDeclaration contractOwner,
+        int slotIndex)
+    {
+        if (contractOwner.ClassType == ClassType.Interface)
+        {
+            return runtimeDeclaration.InterfaceDispatchTables
+                .Where(table => ReferenceEquals(table.Interface, contractOwner))
+                .SelectMany(table => table.Slots)
+                .SingleOrDefault(slot => slot.Index == slotIndex)
+                ?.ImplementationFunction;
+        }
+
+        return runtimeDeclaration.VirtualMethodSlots
+            .SingleOrDefault(slot => slot.Index == slotIndex)
+            ?.Implementation;
+    }
 
     private void RegisterClosedGenericClassFunctionInstances()
     {
@@ -172,8 +547,19 @@ public sealed partial class SemanticBinder
 
                 var ownerArguments = owner.GenericTypeNames.Zip(closedOwner.TypeArguments)
                     .ToDictionary(pair => pair.First, pair => pair.Second, StringComparer.Ordinal);
-                foreach (var creation in CCodeOutputGenerator.EnumerateBodyExpressions(body)
-                    .OfType<ObjectCreationExpression>())
+                var objectCreations = CCodeOutputGenerator.EnumerateBodyExpressions(body)
+                    .OfType<ObjectCreationExpression>();
+                if (caller.Declaration is ConstructorDeclaration)
+                {
+                    objectCreations = objectCreations.Concat(
+                        owner.MemberDeclarations.Declarations.OfType<FieldDeclaration>()
+                            .Where(field => !field.IsStatic && field.Initializer is not null)
+                            .SelectMany(field => CCodeOutputGenerator.EnumerateBodyExpressions(
+                                [new ExpressionStatement(field.Initializer!)]))
+                            .OfType<ObjectCreationExpression>());
+                }
+
+                foreach (var creation in objectCreations)
                 {
                     if (creation.Constructor is not { Declaration: { } targetConstructor } openConstructor ||
                         targetConstructor.ParentClassDeclaration is not
@@ -265,25 +651,38 @@ public sealed partial class SemanticBinder
         var declaration = caller.Declaration;
         if (callerName is null || declaration is null ||
             caller.ImplementationDeclaration is not null ||
-            !IsGenericForwardCallReturnBody(declaration) ||
+            !IsGenericForwardCallReturnBody(declaration) &&
+                !IsGenericVoidForwardCallBody(declaration) ||
             !_expandedGenericForwardCalls.Add(callerName))
         {
             return;
         }
 
-        var invocation = (InvocationExpression)((ReturnStatement)declaration.Body![0]).Expression!;
-        var hasMatchingReturnParameter = invocation.Arguments
+        var isVoidForward = IsGenericVoidForwardCallBody(declaration);
+        var invocation = GetGenericForwardCallInvocation(declaration) ??
+            throw new InternalCompilerException(
+                "Generic forwarding body has no supported invocation.");
+        var hasMatchingTypeParameter = invocation.Arguments
             .OfType<IdentifierExpression>()
-            .Select(argument => declaration.Parameters.SingleOrDefault(parameter =>
-                parameter.Name == argument.Identifier.ToString()))
-            .Any(parameter => parameter?.ParameterType is GenericType parameterType &&
-                declaration.ReturnType is GenericType returnType &&
-                parameterType.Name == returnType.Name);
-        if (!hasMatchingReturnParameter || invocation.Arguments.Any(argument =>
+            .Any(argument =>
+            {
+                var parameterType = declaration.Parameters.SingleOrDefault(parameter =>
+                    parameter.Name == argument.Identifier.ToString())?.ParameterType
+                    as GenericType;
+                var forwardedTypeParameter = parameterType?.Name ??
+                    GetGenericForwardAliasTypeParameter(
+                        declaration, argument.Identifier.ToString());
+                return forwardedTypeParameter is not null &&
+                    declaration.GenericTypeNames.Contains(
+                        forwardedTypeParameter, StringComparer.Ordinal) &&
+                    (isVoidForward || declaration.ReturnType is GenericType returnType &&
+                        forwardedTypeParameter == returnType.Name);
+            });
+        if (!hasMatchingTypeParameter || invocation.Arguments.Any(argument =>
                 !IsSupportedGenericForwardArgument(argument, declaration)))
         {
             throw new CompilationErrorException(
-                "Generic forwarding arguments must be matching type-parameter parameters " +
+                "Generic forwarding arguments must include a matching type-parameter parameter " +
                 "or pure built-in expressions over concrete parameters and literals.",
                 invocation.SourceSpan);
         }
@@ -293,6 +692,15 @@ public sealed partial class SemanticBinder
             throw new CompilationErrorException(
                 $"Generic forwarding body '{declaration.FullName}' must call a generic function.",
                 invocation.SourceSpan);
+        }
+
+        if (openTarget.Declaration.VirtualSlotIndex is not null &&
+            openTarget.Declaration.ParentClassDeclaration?.ClassType is
+                ClassType.Class or ClassType.Interface)
+        {
+            // Generic virtual forwarding is closed with the caller and runtime
+            // receiver together in BindGenericVirtualDispatchTargetsFromGenericCallers.
+            return;
         }
 
         var argumentTypes = invocation.Arguments
@@ -344,6 +752,10 @@ public sealed partial class SemanticBinder
         FunctionDeclaration target)
     {
         var targetClass = target.ParentClassDeclaration;
+        if (targetClass?.ClassType == ClassType.Interface)
+        {
+            return invocation.Receiver is not null;
+        }
         if (targetClass is not { ClassType: ClassType.Class or ClassType.Struct } ||
             targetClass.GenericTypeNames.Length != 0)
         {
@@ -483,9 +895,19 @@ public sealed partial class SemanticBinder
             typeArguments,
             parameterTypes,
             returnType);
+        var projectIdentity = GenericTypeIdentity.CreateFunction(
+            _project!.Name,
+            functionIdentityName,
+            typeArguments,
+            parameterTypes,
+            returnType);
+        var hasProjectReplacement = projectIdentity.CanonicalName !=
+                definingIdentity.CanonicalName &&
+            _genericFunctionSpecializations.ContainsKey(projectIdentity.CanonicalName);
         var specializationModule = IsReferencedModule(symbol.ModuleName) &&
-            !_genericFunctionSpecializations.ContainsKey(definingIdentity.CanonicalName)
-                ? _project!.Name
+            (hasProjectReplacement ||
+             !_genericFunctionSpecializations.ContainsKey(definingIdentity.CanonicalName))
+                ? _project.Name
                 : symbol.ModuleName;
         var identity = specializationModule == symbol.ModuleName
             ? definingIdentity
@@ -584,6 +1006,33 @@ public sealed partial class SemanticBinder
             symbol.ClosedContainingType,
             conceptOperatorBindings,
             inferred);
+    }
+
+    private static FunctionSymbol SubstituteFunctionSymbol(
+        FunctionSymbol symbol,
+        IReadOnlyDictionary<string, TypeBase> substitutions)
+    {
+        var closedContainingType = symbol.ClosedContainingType is { } owner &&
+            GenericTypeSubstitution.Substitute(owner, substitutions) is NamedType closedOwner
+                ? closedOwner
+                : symbol.ClosedContainingType;
+        var genericArguments = symbol.GenericTypeArguments.ToDictionary(
+            pair => pair.Key,
+            pair => GenericTypeSubstitution.Substitute(pair.Value, substitutions),
+            StringComparer.Ordinal);
+        return new FunctionSymbol(
+            symbol.ModuleName,
+            symbol.FullName,
+            symbol.ParameterTypes.Select(type =>
+                GenericTypeSubstitution.Substitute(type, substitutions)).ToArray(),
+            GenericTypeSubstitution.Substitute(symbol.ReturnType, substitutions),
+            symbol.OverloadIndex,
+            symbol.Declaration,
+            symbol.SpecializationName,
+            closedContainingType,
+            symbol.ConceptOperatorBindings,
+            genericArguments,
+            symbol.ImplementationDeclaration);
     }
 
     private FunctionSymbol CloseContainingClassFunction(

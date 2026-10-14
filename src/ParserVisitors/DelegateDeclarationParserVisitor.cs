@@ -31,6 +31,7 @@ public sealed class DelegateDeclarationParserVisitor : CxParserBaseVisitor<Deleg
                 parameterTypes.Add(typeVisitor.Visit(parameter.typeName()));
             }
         }
+        parameterTypes.Reverse();
         var signature = new FunctionType(
             QualifiedIdentifier.Empty,
             returnType,
@@ -48,6 +49,9 @@ public sealed class DelegateDeclarationParserVisitor : CxParserBaseVisitor<Deleg
             context.name.Text,
             _namespace,
             signature,
-            visibility).WithSourceSpan(context);
+            visibility)
+        {
+            Annotations = AnnotationParser.Parse(context.annotations()),
+        }.WithSourceSpan(context);
     }
 }

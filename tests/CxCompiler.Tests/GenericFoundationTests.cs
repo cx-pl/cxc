@@ -128,6 +128,116 @@ public sealed class GenericFoundationTests
     }
 
     [Fact]
+    public void ClosedGenericOwnerCanAllocateArraysOfConstructedGenericFields()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("generic_constructed_array_field");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Box<T> { public T value; }
+            public class Holder<T> {
+                public Box<T>[] boxes = new Box<T>[3u];
+                public Box<T>[] created;
+                public constructor(uint length) {
+                    created = new Box<T>[length];
+                }
+            }
+            public Holder<int> CreateInt() { return new Holder<int>(5u); }
+            public Holder<long> CreateLong() { return new Holder<long>(7u); }
+            """));
+        new SemanticBinder().Bind(project);
+
+        Assert.Contains(project.GenericTypeInstances, instance =>
+            instance.Declaration.Name == "Box" &&
+                instance.Type.TypeArguments.Single() is IntType);
+        Assert.Contains(project.GenericTypeInstances, instance =>
+            instance.Declaration.Name == "Box" &&
+                instance.Type.TypeArguments.Single() is LongType);
+
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-constructed-array-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(directory,
+                "generic_constructed_array_field.c"));
+
+            Assert.Equal(2, source.Split("cx_array_new((cx_uint)(3u)",
+                StringSplitOptions.None).Length - 1);
+            Assert.Equal(3, source.Split("cx_array_new((cx_uint)(length)",
+                StringSplitOptions.None).Length - 1);
+            foreach (var instance in project.GenericTypeInstances.Where(item =>
+                item.Declaration.Name == "Box"))
+            {
+                var closedElement =
+                    $"sizeof(struct {instance.Type.ConstructedIdentity!.CIdentifier}*)";
+                Assert.Contains($"cx_array_new((cx_uint)(3u), (cx_uint){closedElement})", source);
+                Assert.Contains($"cx_array_new((cx_uint)(length), (cx_uint){closedElement})", source);
+            }
+            Assert.DoesNotContain("sizeof(_unknowntype_)", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ClosedGenericOwnerCanAllocateArraysOfConstructedGenericValues()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("generic_constructed_value_array_field");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public struct Pair<T> {
+                public T value;
+                public constructor(T initial) { value = initial; }
+            }
+            public class Holder<T> {
+                public Pair<T>[] pairs = new Pair<T>[2u];
+                public Pair<T>[] created;
+                public constructor(uint length) {
+                    created = new Pair<T>[length];
+                }
+            }
+            public Holder<int> CreateInt() { return new Holder<int>(3u); }
+            public Holder<long> CreateLong() { return new Holder<long>(5u); }
+            """));
+        new SemanticBinder().Bind(project);
+
+        var pairInstances = project.GenericTypeInstances
+            .Where(instance => instance.Declaration.Name == "Pair")
+            .ToArray();
+        Assert.Contains(pairInstances, instance =>
+            instance.Type.TypeArguments.Single() is IntType);
+        Assert.Contains(pairInstances, instance =>
+            instance.Type.TypeArguments.Single() is LongType);
+
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-constructed-value-array-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var header = File.ReadAllText(Path.Combine(directory,
+                "generic_constructed_value_array_field.h"));
+            var source = File.ReadAllText(Path.Combine(directory,
+                "generic_constructed_value_array_field.c"));
+
+            Assert.Contains("cx_array_new((cx_uint)(2u)", source);
+            Assert.Contains("cx_array_new((cx_uint)(length)", source);
+            foreach (var instance in pairInstances)
+            {
+                var closedElement = $"sizeof(struct {instance.Type.ConstructedIdentity!.CIdentifier})";
+                Assert.Contains($"cx_array_new((cx_uint)(2u), (cx_uint){closedElement})", source);
+                Assert.Contains($"cx_array_new((cx_uint)(length), (cx_uint){closedElement})", source);
+            }
+            Assert.DoesNotContain("_unknowntype_", header + source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ClosesNestedConstructedReferenceFieldsAndProperties()
     {
         var project = CxProject.CreateDefaultApplicationProject("generic_nested_reference_field");

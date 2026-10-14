@@ -6,4 +6,5 @@ public sealed class CastExpression(TypeBase targetType, ExpressionBase operand) 
 {
     public TypeBase TargetType { get; } = targetType;
     public ExpressionBase Operand { get; } = operand;
+    public CxCompiler.Semantics.FunctionSymbol? NativeCallbackSymbol { get; internal set; }
 }

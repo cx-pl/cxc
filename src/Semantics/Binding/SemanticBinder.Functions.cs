@@ -21,7 +21,11 @@ public sealed partial class SemanticBinder
     {
         var previousImports = _activeImports;
         var previousFunction = _activeFunction;
+        var previousUnsafeDepth = _unsafeDepth;
+        _unsafeDepth = 0;
         var previousObjectCreationIndex = _objectCreationIndex;
+        var previousFunctionState = (_loopDepth, _breakableDepth, _catchDepth,
+            _propertyAssignmentIndex, _interfaceReceiverIndex, _foreachEnumeratorIndex);
         _activeImports = imports;
         _activeFunction = function;
         try
@@ -42,8 +46,11 @@ public sealed partial class SemanticBinder
         finally
         {
             _objectCreationIndex = previousObjectCreationIndex;
+            (_loopDepth, _breakableDepth, _catchDepth, _propertyAssignmentIndex,
+                _interfaceReceiverIndex, _foreachEnumeratorIndex) = previousFunctionState;
             _activeImports = previousImports;
             _activeFunction = previousFunction;
+            _unsafeDepth = previousUnsafeDepth;
         }
     }
 
@@ -98,6 +105,7 @@ public sealed partial class SemanticBinder
 
         _loopDepth = 0;
         _breakableDepth = 0;
+        _catchDepth = 0;
         _propertyAssignmentIndex = 0;
         _interfaceReceiverIndex = 0;
         _foreachEnumeratorIndex = 0;
@@ -229,6 +237,11 @@ public sealed partial class SemanticBinder
         }
 
         var target = candidates[0].Constructor;
+        if (target.SpecializationName is not null &&
+            target.Declaration is ConstructorDeclaration)
+        {
+            _project!.AddGenericFunctionInstance(target);
+        }
         var initializerDefaults = BindDefaultArguments(
             target,
             initializer.Arguments.Count,
@@ -569,7 +582,10 @@ public sealed partial class SemanticBinder
             QualifiedIdentifier.Empty,
             declaration.ReturnType,
             declaration.Parameters.Select(parameter => parameter.ParameterType).ToArray());
-        owner.Bind(declaration, functionType);
+        owner.Bind(
+            declaration,
+            functionType,
+            $"__cx_local_function_environment_{++_operatorTemporaryIndex}");
     }
 
     private void BindLocalFunction(

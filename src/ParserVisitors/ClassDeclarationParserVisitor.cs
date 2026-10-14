@@ -62,6 +62,7 @@ public class ClassDeclarationParserVisitor : CxParserBaseVisitor<DeclarationBase
                 genericConstraints,
                 conceptConstraints);
 
+            _classDeclaration.Annotations = AnnotationParser.Parse(context.annotations());
             AddBaseTypes(context.@base?.classBaseList());
 
             base.VisitClassDeclaration(context);

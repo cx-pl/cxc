@@ -69,7 +69,13 @@ public sealed partial class SemanticBinder
                 {
                     _project!.AddGenericFunctionInstance(localSymbol);
                 }
-                identifier.BindFunctionValue(localSymbol);
+                var localLambdaOwner = (localSymbol.ImplementationDeclaration ??
+                    localSymbol.Declaration)?.LambdaOwner;
+                identifier.BindFunctionValue(
+                    localSymbol,
+                    localLambdaOwner is null
+                        ? null
+                        : $"__cx_local_function_environment_{++_operatorTemporaryIndex}");
                 return new FunctionType(
                     QualifiedIdentifier.Empty,
                     localSymbol.ReturnType,
@@ -223,7 +229,13 @@ public sealed partial class SemanticBinder
             {
                 _project!.AddGenericFunctionInstance(symbol);
             }
-            identifier.BindFunctionValue(symbol);
+            var lambdaOwner = (symbol.ImplementationDeclaration ??
+                symbol.Declaration)?.LambdaOwner;
+            identifier.BindFunctionValue(
+                symbol,
+                lambdaOwner is null
+                    ? null
+                    : $"__cx_function_value_environment_{++_operatorTemporaryIndex}");
             return new FunctionType(
                 QualifiedIdentifier.Empty,
                 symbol.ReturnType,
@@ -402,6 +414,25 @@ public sealed partial class SemanticBinder
         }
 
         var targetType = BindExpression(memberAccess.Target, function, imports, scope);
+        if (GetFunctionSignature(targetType) is not null &&
+            memberAccess.MemberName == "Target")
+        {
+            memberAccess.BindFunctionValueTarget(
+                $"__cx_function_target_{++_operatorTemporaryIndex}");
+            return BuiltInSystemTypes.Object;
+        }
+        if (GetFunctionSignature(targetType) is not null &&
+            memberAccess.MemberName == "Method")
+        {
+            memberAccess.BindFunctionValueMethod(
+                $"__cx_function_method_{++_operatorTemporaryIndex}");
+            var functionInfoType = new NamedType("FunctionInfo", []);
+            functionInfoType.SetResolvedType(
+                new QualifiedIdentifier("System", "Reflection", "FunctionInfo"),
+                "cxcore",
+                ClassType.Struct);
+            return functionInfoType;
+        }
         if (ArrayType.TryGetElementType(targetType, out _) &&
             memberAccess.MemberName == "Length")
         {
@@ -849,6 +880,16 @@ public sealed partial class SemanticBinder
                         IsExtensionInScope(owner)))
                 .Select(symbol => (symbol, type.BaseDepth)))
             .ToArray();
+        if (declaration.ClassType == ClassType.Interface)
+        {
+            functions = functions
+                .Where(candidate => !functions.Any(inherited =>
+                    inherited.BaseDepth > candidate.BaseDepth &&
+                    inherited.symbol.Declaration is { } inheritedDeclaration &&
+                    candidate.symbol.Declaration is { } candidateDeclaration &&
+                    FunctionSignaturesMatch(candidateDeclaration, inheritedDeclaration)))
+                .ToArray();
+        }
         if (functions.Length == 0 && declaration.ClassType == ClassType.Class &&
             !declaration.IsStatic && _symbols.Where(symbol =>
                 symbol.FullName == new QualifiedIdentifier("System", "Object", name))
