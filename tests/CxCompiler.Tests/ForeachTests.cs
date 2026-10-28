@@ -106,8 +106,8 @@ public sealed class ForeachTests
         Assert.Null(foreachStatement.EnumeratorSymbol);
 
         var (_, source) = GenerateOutput(project);
-        Assert.Contains("CX_ID_5(cxcore, System, String, Length, __const_get)", source);
-        Assert.Contains("CX_ID_5(cxcore, System, String, Item, __const_get)", source);
+        Assert.Contains("cxcore_System_String_Length___const_get", source);
+        Assert.Contains("cxcore_System_String_Item___const_get", source);
 
         var invalidProject = CreateProject("""
             void Visit(string text) {
@@ -260,7 +260,7 @@ public sealed class ForeachTests
                 Path.Combine(outputDirectory, "unnamed.c"));
 
             Assert.Contains(
-                "struct CX_ID_4(cxcore, System, Collections, Array)* __cx_foreach_collection_value = values;",
+                "struct cxcore_System_Collections_Array* __cx_foreach_collection_value = values;",
                 generatedSource);
             Assert.Contains(
                 "__cx_foreach_index_value < __cx_foreach_collection_value->_length",

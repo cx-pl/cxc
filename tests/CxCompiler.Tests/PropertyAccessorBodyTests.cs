@@ -32,11 +32,11 @@ public sealed class PropertyAccessorBodyTests
 
         var source = GenerateSource(project);
         Assert.Contains(
-            "CX_ID_4(unnamed, Counter, Value, __const_get)(const struct CX_ID_2(unnamed, Counter)* __this)",
+            "unnamed_Counter_Value___const_get(const struct unnamed_Counter* __this)",
             source);
         Assert.Contains("return __this->_value;", source);
         Assert.Contains(
-            "CX_ID_4(unnamed, Counter, Value, __set)(struct CX_ID_2(unnamed, Counter)* __this, cx_int value)",
+            "unnamed_Counter_Value___set(struct unnamed_Counter* __this, cx_int value)",
             source);
         Assert.Contains("__this->_value = value;", source);
     }
@@ -65,7 +65,7 @@ public sealed class PropertyAccessorBodyTests
 
         var source = GenerateSource(project);
         Assert.Contains(
-            "CX_ID_4(unnamed, Values, Item, __set)(struct CX_ID_2(unnamed, Values)* __this, cx_uint index, cx_uint value)",
+            "unnamed_Values_Item___set(struct unnamed_Values* __this, cx_uint index, cx_uint value)",
             source);
         Assert.Contains("__this->_last = (index + value);", source);
     }
@@ -87,9 +87,9 @@ public sealed class PropertyAccessorBodyTests
         new SemanticBinder().Bind(project);
         var source = GenerateSource(project);
 
-        Assert.Contains("CX_ID_4(unnamed, Settings, Current, __get)()", source);
-        Assert.Contains("return CX_ID_3(unnamed, Settings, _current);", source);
-        Assert.Contains("CX_ID_4(unnamed, Settings, Current, __set)(cx_int value)", source);
+        Assert.Contains("unnamed_Settings_Current___get()", source);
+        Assert.Contains("return unnamed_Settings__current;", source);
+        Assert.Contains("unnamed_Settings_Current___set(cx_int value)", source);
     }
 
     [Fact]

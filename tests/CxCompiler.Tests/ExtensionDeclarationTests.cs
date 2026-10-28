@@ -1124,7 +1124,7 @@ public sealed class ExtensionDeclarationTests
             Assert.Contains("CX_EXTENSIONS_API", extensionHeader);
             Assert.Contains("FooExtensions", extensionHeader);
             Assert.Contains("Invert", extensionHeader);
-            Assert.Contains("Types, Foo", extensionHeader);
+            Assert.Contains("Types_Foo", extensionHeader);
             Assert.Contains("IFooExtensions", extensionHeader);
             Assert.Contains("DoubleGet", extensionHeader);
             Assert.Contains("BoxExtensions", extensionHeader);

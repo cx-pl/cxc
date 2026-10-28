@@ -56,7 +56,27 @@ public sealed partial class SemanticBinder
                     break;
 
                 case ReturnStatement returnStatement:
+                    if (function.IsIterator && !function.IsIteratorFactory &&
+                        returnStatement.Expression is not null)
+                    {
+                        throw new CompilationErrorException(
+                            "An iterator method cannot return a value; use yield return.",
+                            returnStatement.SourceSpan);
+                    }
                     BindReturnStatement(returnStatement, function, imports, scope);
+                    break;
+
+                case YieldReturnStatement yieldReturn:
+                    BindYieldReturnStatement(yieldReturn, function, imports, scope);
+                    break;
+
+                case YieldBreakStatement yieldBreak:
+                    if (!function.IsIterator)
+                    {
+                        throw new CompilationErrorException(
+                            "yield break is only valid in an iterator method.",
+                            yieldBreak.SourceSpan);
+                    }
                     break;
 
                 case LocalVariableDeclarationStatement declarationStatement:
@@ -149,6 +169,30 @@ public sealed partial class SemanticBinder
         {
             throw exception.WithSourceSpan(statement.SourceSpan);
         }
+    }
+
+    private void BindYieldReturnStatement(
+        YieldReturnStatement statement,
+        FunctionDeclaration function,
+        IReadOnlyList<QualifiedIdentifier> imports,
+        LocalScope scope)
+    {
+        var elementType = function.IteratorElementType;
+        if (!function.IsIterator || elementType is null)
+        {
+            throw new CompilationErrorException(
+                "yield return is only valid in an iterator method.", statement.SourceSpan);
+        }
+
+        var expressionType = BindExpression(
+            statement.Expression, function, imports, scope, elementType);
+        if (!CanAssign(elementType, expressionType))
+        {
+            throw new CompilationErrorException(
+                $"Cannot yield value of type '{GetTypeName(expressionType)}' as " +
+                $"'{GetTypeName(elementType)}'.", statement.SourceSpan);
+        }
+        ApplyContextualType(statement.Expression, elementType);
     }
 
     private void BindLoopBody(
@@ -319,6 +363,26 @@ public sealed partial class SemanticBinder
         IReadOnlyList<QualifiedIdentifier> imports,
         LocalScope parentScope)
     {
+        if (statement.IsAwait)
+        {
+            if (!function.IsAsync)
+            {
+                throw new CompilationErrorException(
+                    "The 'await foreach' statement is only valid inside an async function.",
+                    statement.SourceSpan);
+            }
+
+            if (!AsyncFunctionLowerer.IsAsyncEnumerableType(function.ReturnType))
+            {
+                throw new CompilationErrorException(
+                    "Async sequence advancement and disposal are not supported yet in async Task methods; await foreach currently requires an async iterator returning IAsyncEnumerable<T>.",
+                    statement.SourceSpan);
+            }
+
+            BindAsyncForeachStatement(statement, function, imports, parentScope);
+            return;
+        }
+
         if (statement.DeclaredType is not AutoType)
         {
             ResolveTypeReference(
@@ -414,6 +478,31 @@ public sealed partial class SemanticBinder
                 $"'{GetTypeName(moveNextType)}'.", statement.SourceSpan);
         }
 
+        InvocationExpression? disposeInvocation = null;
+        var candidateDispose = new InvocationExpression(
+            new MemberAccessExpression(enumeratorIdentifier, "Dispose"), []);
+        TypeBase? disposeType = null;
+        try
+        {
+            disposeType = BindExpression(
+                candidateDispose, function, imports, scopeWithEnumerator);
+        }
+        catch (CompilationErrorException)
+        {
+            // Structural enumerators may opt into disposal without requiring
+            // every existing GetEnumerator pattern to expose it.
+        }
+        if (disposeType is not null)
+        {
+            if (!IsType(disposeType, BuiltInSystemTypes.Void))
+            {
+                throw new CompilationErrorException(
+                    $"Enumerator method 'Dispose' must return 'System.Void', but found " +
+                    $"'{GetTypeName(disposeType)}'.", statement.SourceSpan);
+            }
+            disposeInvocation = candidateDispose;
+        }
+
         var currentProperty = new MemberAccessExpression(
             enumeratorIdentifier, "Current")
         {
@@ -474,8 +563,107 @@ public sealed partial class SemanticBinder
             enumeratorSymbol,
             getEnumeratorInvocation,
             moveNextInvocation,
-            currentExpression);
+            currentExpression,
+            disposeInvocation);
         BindLoopBody(statement.Body, function, imports, scopeWithEnumerator);
+    }
+
+    private void BindAsyncForeachStatement(
+        ForeachStatement statement,
+        FunctionDeclaration function,
+        IReadOnlyList<QualifiedIdentifier> imports,
+        LocalScope parentScope)
+    {
+        if (statement.DeclaredType is not AutoType)
+        {
+            ResolveTypeReference(
+                statement.DeclaredType, GetCurrentNamespace(function), imports);
+        }
+
+        var collectionType = BindExpression(statement.Collection, function, imports, parentScope);
+        if (collectionType is not NamedType sequenceType ||
+            !AsyncFunctionLowerer.IsAsyncEnumerableType(sequenceType) ||
+            sequenceType.TypeArguments.Count != 1)
+        {
+            throw new CompilationErrorException(
+                "The await foreach collection must implement System.Collections.IAsyncEnumerable<T>.",
+                statement.SourceSpan);
+        }
+
+        var token = new MemberAccessExpression(
+            new IdentifierExpression(new QualifiedIdentifier(
+                "System", "Threading", "Tasks", "CancellationToken")), "None");
+        var getEnumerator = new InvocationExpression(
+            new MemberAccessExpression(statement.Collection, "GetAsyncEnumerator"), [token]);
+        var enumeratorType = BindExpression(getEnumerator, function, imports, parentScope);
+        var enumeratorName = $"__cx_await_foreach_enumerator_{_foreachEnumeratorIndex++}";
+        var scope = new LocalScope(parentScope);
+        if (!scope.TryDeclare(enumeratorName, enumeratorType, out var enumeratorSymbol))
+        {
+            throw new CompilationErrorException(
+                "Could not reserve a local for the await foreach enumerator.", statement.SourceSpan);
+        }
+
+        var enumerator = new IdentifierExpression(new QualifiedIdentifier(enumeratorName));
+        enumerator.BindLocal(enumeratorSymbol);
+        enumerator.SetInferredType(enumeratorType);
+        var moveNext = new InvocationExpression(
+            new MemberAccessExpression(enumerator, "MoveNextAsync"), []);
+        var moveNextType = BindExpression(moveNext, function, imports, scope);
+        if (moveNextType is not NamedType moveTask ||
+            !(AsyncFunctionLowerer.IsTaskType(moveTask) ||
+              AsyncFunctionLowerer.IsValueTaskType(moveTask)) ||
+            moveTask.TypeArguments.Count != 1 ||
+            !IsType(moveTask.TypeArguments[0], BuiltInSystemTypes.Bool))
+        {
+            throw new CompilationErrorException(
+                "IAsyncEnumerator<T>.MoveNextAsync() must return Task<bool> or ValueTask<bool>.",
+                statement.SourceSpan);
+        }
+
+        var current = new MemberAccessExpression(enumerator, "Current");
+        var currentType = BindExpression(current, function, imports, scope);
+        if (!IsType(currentType, sequenceType.TypeArguments[0]))
+        {
+            throw new CompilationErrorException(
+                "IAsyncEnumerator<T>.Current must have the sequence element type.",
+                statement.SourceSpan);
+        }
+
+        var disposeAsync = new InvocationExpression(
+            new MemberAccessExpression(enumerator, "DisposeAsync"), []);
+        var disposeType = BindExpression(disposeAsync, function, imports, scope);
+        if (disposeType is not NamedType disposeTask ||
+            (!AsyncFunctionLowerer.IsNonGenericTaskType(disposeTask) &&
+             !string.Equals(
+                 disposeTask.ResolvedTypeFullName.Parts.LastOrDefault(),
+                 "TaskHandle", StringComparison.Ordinal) &&
+             !string.Equals(
+                 disposeTask.ResolvedTypeFullName.Parts.LastOrDefault(),
+                 "Task", StringComparison.Ordinal) &&
+             !string.Equals(
+                 disposeTask.ResolvedTypeFullName.Parts.LastOrDefault(),
+                 "ValueTaskHandle", StringComparison.Ordinal)))
+        {
+            throw new CompilationErrorException(
+                "IAsyncDisposable.DisposeAsync() must return TaskHandle or ValueTask.", statement.SourceSpan);
+        }
+
+        var variableType = statement.DeclaredType is AutoType
+            ? sequenceType.TypeArguments[0]
+            : ArrayType.Canonicalize(statement.DeclaredType);
+        if (!IsType(variableType, currentType) ||
+            !scope.TryDeclare(statement.VariableName, variableType, out var variableSymbol))
+        {
+            throw new CompilationErrorException(
+                $"Cannot declare await foreach variable '{statement.VariableName}' as '{GetTypeName(variableType)}'.",
+                statement.SourceSpan);
+        }
+
+        statement.BindEnumerator(
+            variableType, variableSymbol, enumeratorSymbol, getEnumerator,
+            moveNext, current, disposeAsyncInvocation: disposeAsync);
+        BindLoopBody(statement.Body, function, imports, scope);
     }
 
     private void BindThrowStatement(
@@ -638,7 +826,12 @@ public sealed partial class SemanticBinder
             {
                 ApplyContextualType(declarator.Initializer, variableType);
             }
-            if (!scope.TryDeclare(declarator.Name, variableType, out var localSymbol))
+            var existingLocalSymbol = declarator.Symbol is { } boundSymbol &&
+                function.IteratorCaptureCells.ContainsKey(boundSymbol)
+                    ? boundSymbol
+                    : null;
+            if (!scope.TryDeclare(
+                    declarator.Name, variableType, existingLocalSymbol, out var localSymbol))
             {
                 throw new CompilationErrorException(
                     $"Local '{declarator.Name}' is already declared in this scope.");
@@ -657,6 +850,10 @@ public sealed partial class SemanticBinder
     {
         if (statement.Expression is null)
         {
+            if (function.IsIterator)
+            {
+                return;
+            }
             if (!IsType(function.ReturnType, BuiltInSystemTypes.Void))
             {
                 throw new CompilationErrorException(

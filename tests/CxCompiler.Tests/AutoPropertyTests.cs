@@ -32,8 +32,8 @@ public sealed class AutoPropertyTests
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var source = File.ReadAllText(Path.Combine(directory, "auto_property_test.c"));
             Assert.Contains("__cx_auto_property_Value", source);
-            Assert.Contains("CX_ID_4(auto_property_test, Probe, Value, __const_get)", source);
-            Assert.Contains("CX_ID_4(auto_property_test, Probe, Value, __set)", source);
+            Assert.Contains("auto_property_test_Probe_Value___const_get", source);
+            Assert.Contains("auto_property_test_Probe_Value___set", source);
             Assert.DoesNotContain("\"__cx_auto_property_Value\"", source);
         }
         finally

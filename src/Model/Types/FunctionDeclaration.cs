@@ -24,6 +24,12 @@ public class FunctionDeclaration : DeclarationBase
     public MemberModifier[] MemberModifiers { get; }
 
     public bool Const { get; }
+    public bool IsAsync { get; }
+    public bool IsPendingAwaitRelay { get; private set; }
+    public bool IsIterator { get; private set; }
+    public bool IsIteratorFactory { get; private set; }
+    public TypeBase? IteratorElementType { get; private set; }
+    public ClassDeclaration? GeneratedIteratorType { get; private set; }
 
     public string? OperatorToken { get; }
     public string? LocalCName { get; private set; }
@@ -36,6 +42,8 @@ public class FunctionDeclaration : DeclarationBase
     public ClassDeclaration? ParentClassDeclaration { get; }
 
     public IReadOnlyList<StatementBase>? Body { get; private set; }
+    public IReadOnlyDictionary<LocalVariableSymbol, string> IteratorCaptureCells { get; private set; } =
+        new Dictionary<LocalVariableSymbol, string>();
 
     public int? VirtualSlotIndex { get; private set; }
     public FunctionDeclaration? VirtualContract { get; private set; }
@@ -49,13 +57,15 @@ public class FunctionDeclaration : DeclarationBase
         IReadOnlyList<GenericTypeConstraint>? genericConstraints = null,
         IReadOnlyList<GenericConceptConstraint>? conceptConstraints = null,
         IReadOnlyList<TypeBase>? specializationTypeArguments = null,
-        IReadOnlyList<FunctionGenericTypeArgument>? unclassifiedGenericTypeArguments = null)
+        IReadOnlyList<FunctionGenericTypeArgument>? unclassifiedGenericTypeArguments = null,
+        bool isAsync = false)
         : base("function", @namespace, name)
     {
         ReturnType = returnType;
         MemberModifiers = memberModifiers;
         ParentClassDeclaration = parentClassDeclaration;
         Const = @const;
+        IsAsync = isAsync;
         GenericTypeNames = genericTypeNames ?? [];
         OperatorToken = operatorToken;
         GenericConstraints = genericConstraints ?? [];
@@ -93,12 +103,32 @@ public class FunctionDeclaration : DeclarationBase
         Body = body;
     }
 
+    public void SetIteratorElementType(TypeBase elementType)
+    {
+        IsIterator = true;
+        IteratorElementType = elementType;
+    }
+
+    public void MarkIteratorFactory(TypeBase elementType, ClassDeclaration iteratorType)
+    {
+        SetIteratorElementType(elementType);
+        IsIteratorFactory = true;
+        GeneratedIteratorType = iteratorType;
+    }
+
+    public void MarkPendingAwaitRelay() => IsPendingAwaitRelay = true;
+
+
     public void SetLocalCName(string cName)
     {
         LocalCName = cName;
     }
 
     public void SetLambdaOwner(LambdaExpression lambda) => LambdaOwner = lambda;
+
+    public void SetIteratorCaptureCells(
+        IReadOnlyDictionary<LocalVariableSymbol, string> captureCells) =>
+        IteratorCaptureCells = captureCells;
 
     public void BindVirtualSlot(int slotIndex, FunctionDeclaration contract)
     {

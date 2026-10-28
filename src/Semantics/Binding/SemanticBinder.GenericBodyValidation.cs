@@ -11,7 +11,27 @@ public sealed partial class SemanticBinder
 
     private static void ValidateGenericFunctionShape(FunctionDeclaration function)
     {
+        // Async lowering runs after binding, so recognize supported pending-await
+        // source forms before generic body validation examines them.
+        if (function.IsAsync && function.Body is
+            [ReturnStatement { Expression: AwaitExpression }])
+        {
+            return;
+        }
+        if (function.IsAsync && IsGenericAsyncAwaitLocalReturnBody(function))
+        {
+            return;
+        }
+        if (function.IsAsync && IsGenericAsyncExplicitAwaitSourceReturnBody(function))
+        {
+            return;
+        }
         if (function.GenericTypeNames.Length == 0)
+        {
+            return;
+        }
+        if (function.Body is [ReturnStatement { Expression: TypeOfExpression or NameOfExpression }] ||
+            function.Body is [ReturnStatement { Expression: CastExpression { IsSafe: true, Operand: IdentifierExpression } }])
         {
             return;
         }
@@ -222,6 +242,62 @@ public sealed partial class SemanticBinder
             "conditional expression, a constrained class member result, " +
             "constraint, or return-only boolean conditional control flow that returns " +
             "matching type-parameter values or arrays.");
+    }
+
+    private static bool IsGenericAsyncAwaitLocalReturnBody(FunctionDeclaration function)
+    {
+        if (function.Body is not { Count: >= 2 } body ||
+            body[^1] is not ReturnStatement
+            {
+                Expression: { } resultExpression,
+            } || resultExpression is AwaitExpression ||
+            body.Take(body.Count - 1).Any(statement => statement is ReturnStatement))
+        {
+            return false;
+        }
+
+        return body.Take(body.Count - 1).Any(statement => statement is
+            LocalVariableDeclarationStatement
+            {
+                DeclaredType: AutoType { Const: false },
+                Declarators:
+                [
+                    {
+                        Initializer: AwaitExpression,
+                    },
+                ],
+            });
+    }
+
+    private static bool IsGenericAsyncExplicitAwaitSourceReturnBody(
+        FunctionDeclaration function)
+    {
+        if (function.Body is not { Count: >= 2 } body ||
+            body[^1] is not ReturnStatement
+            {
+                Expression: AwaitExpression
+                {
+                    Operand: IdentifierExpression awaitedSource,
+                },
+            })
+        {
+            return false;
+        }
+
+        var prefix = body.Take(body.Count - 1).ToArray();
+        if (prefix.Any(statement =>
+                statement is not LocalVariableDeclarationStatement
+                {
+                    Declarators: [{ Initializer: not null }],
+                } || CoroutineSyntaxAnalysis.StatementContainsAwait(statement)))
+        {
+            return false;
+        }
+
+        return prefix[^1] is LocalVariableDeclarationStatement
+            {
+                Declarators: [{ } sourceDeclarator],
+            } && sourceDeclarator.Name == awaitedSource.Identifier.ToString();
     }
 
     private static bool IsGenericDefaultReturnBody(FunctionDeclaration function) =>

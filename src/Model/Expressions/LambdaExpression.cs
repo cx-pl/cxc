@@ -13,6 +13,7 @@ public sealed class LambdaExpression(
     public ExpressionBase? ExpressionBody { get; } = expressionBody;
     public IReadOnlyList<StatementBase>? StatementBody { get; } = statementBody;
     public FunctionDeclaration? GeneratedFunction { get; private set; }
+    public string? GeneratedCName { get; set; }
     public string? EnvironmentTemporaryName { get; private set; }
     public IReadOnlyList<LambdaCapture> Captures => _captures;
     public ClassDeclaration? EnclosingClassDeclaration { get; private set; }

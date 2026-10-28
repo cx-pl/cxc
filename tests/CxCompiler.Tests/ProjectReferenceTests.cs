@@ -7,6 +7,68 @@ namespace CxCompiler.Tests;
 
 public sealed class ProjectReferenceTests
 {
+    [Theory]
+    [InlineData("int")]
+    [InlineData("string")]
+    [InlineData("Payload")]
+    public void ImportedValueTaskApiDoesNotDuplicateClosedGenericDefinitions(string resultType)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cxc-project-valuetask-ownership-{Guid.NewGuid():N}");
+        var library = Path.Combine(root, "library");
+        var app = Path.Combine(root, "app");
+        Directory.CreateDirectory(library);
+        Directory.CreateDirectory(app);
+        try
+        {
+            File.WriteAllText(Path.Combine(library, "library.cxproj"), "name: library\ntype: Library\n");
+            File.WriteAllText(Path.Combine(library, "api.cx"), $$"""
+                import System.Threading.Tasks;
+                namespace Lib;
+                public struct Payload { public int Number; public string Label; }
+                public ValueTask<{{resultType}}> Forward(ValueTask<{{resultType}}> source) { return source; }
+                """);
+            File.WriteAllText(Path.Combine(app, "app.cxproj"), """
+                name: app
+                type: Executable
+                project_references:
+                - ../library/library.cxproj
+                """);
+            File.WriteAllText(Path.Combine(app, "main.cx"), $$"""
+                import System.Threading.Tasks;
+                import Lib;
+                namespace App;
+                public async Task<{{resultType}}> AwaitForward(ValueTask<{{resultType}}> source) {
+                    var result = await Forward(source);
+                    return result;
+                }
+                """);
+
+            new Compiler().Compile([Path.Combine(app, "app.cxproj")]);
+
+            var librarySource = File.ReadAllText(Path.Combine(library, ".obj", "library.c"));
+            var appSource = File.ReadAllText(Path.Combine(app, ".obj", "app.c"));
+            var functionPattern = @"^\S[^\r\n]*\b(cx_generic_[a-f0-9]+)\([^;\r\n]*\)\r?\n\{";
+            var libraryFunctions = Regex.Matches(librarySource, functionPattern, RegexOptions.Multiline)
+                .Select(match => match.Groups[1].Value).ToHashSet();
+            var appFunctions = Regex.Matches(appSource, functionPattern, RegexOptions.Multiline)
+                .Select(match => match.Groups[1].Value).ToHashSet();
+            Assert.NotEmpty(libraryFunctions);
+            Assert.Empty(libraryFunctions.Intersect(appFunctions));
+
+            var metadataPattern = @"CX_TYPEINFO_NAME\((cx_generic_[a-f0-9]+)\) = \{";
+            var libraryTypes = Regex.Matches(librarySource, metadataPattern)
+                .Select(match => match.Groups[1].Value).ToHashSet();
+            var appTypes = Regex.Matches(appSource, metadataPattern)
+                .Select(match => match.Groups[1].Value).ToHashSet();
+            Assert.NotEmpty(libraryTypes);
+            Assert.Empty(libraryTypes.Intersect(appTypes));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     [Trait("Area", "CrossModule")]
     public void ProjectReferenceBindsPublicSymbolsToTheirOwningModuleAndGeneratesSeparateUnits()
@@ -30,14 +92,14 @@ public sealed class ProjectReferenceTests
             var libraryHeader = File.ReadAllText(Path.Combine(library, ".obj", "math.h"));
             var cmake = File.ReadAllText(Path.Combine(app, ".obj", "CMakeLists.txt"));
             var librarySource = File.ReadAllText(Path.Combine(library, ".obj", "math.c"));
-            Assert.Contains("CX_ID_3(math, Math, AddOne)(", appSource);
-            Assert.Contains("CX_ID_3(math, Math, Value)", appSource);
+            Assert.Contains("math_Math_AddOne(", appSource);
+            Assert.Contains("math_Math_Value", appSource);
             Assert.Contains("cx_iface_ref", appSource);
-            Assert.Contains("#include \"math.h\"", appHeader);
+            Assert.Contains("#include \"../../math/.obj/math.internal.h\"", appHeader);
             Assert.Contains("target_link_libraries(app PRIVATE math)", cmake);
             Assert.Contains("copy_if_different \"$<TARGET_FILE:math>\"", cmake);
-            Assert.Contains("CX_ID_3(math, Math, AddOne)", librarySource);
-            Assert.DoesNotContain("CX_ID_3(math, Math, AddOne)", appSource.Split("Run", 2)[0]);
+            Assert.Contains("math_Math_AddOne", librarySource);
+            Assert.DoesNotContain("math_Math_AddOne", appSource.Split("Run", 2)[0]);
             Assert.Contains("option(CX_STATIC_LINK", cmake);
             Assert.Contains("__cx_module_init_APP();", appSource);
             Assert.Contains("__cx_module_init_MATH();", appSource);
@@ -97,6 +159,68 @@ public sealed class ProjectReferenceTests
     }
 
     [Fact]
+    [Trait("Area", "CrossModule")]
+    public void ImportedGenericMethodAllocatesCellsForCapturedParameters()
+    {
+        var root = Path.Combine(Path.GetTempPath(),
+            $"cxc-project-generic-capture-{Guid.NewGuid():N}");
+        var library = Path.Combine(root, "library");
+        var app = Path.Combine(root, "app");
+        Directory.CreateDirectory(library);
+        Directory.CreateDirectory(app);
+        try
+        {
+            File.WriteAllText(Path.Combine(library, "library.cxproj"),
+                "name: library\ntype: Library\n");
+            File.WriteAllText(Path.Combine(library, "api.cx"), """
+                namespace Lib;
+                public class Source<T> {
+                    public void Register(delegate() => void callback) {
+                        delegate() => void wrapped = () => callback();
+                        wrapped();
+                    }
+                }
+                """);
+            File.WriteAllText(Path.Combine(app, "app.cxproj"), """
+                name: app
+                type: Executable
+                project_references:
+                - ../library/library.cxproj
+                """);
+            File.WriteAllText(Path.Combine(app, "main.cx"), """
+                import Lib;
+                namespace App;
+                public void Run(delegate() => void callback) {
+                    Source<int> source = new Source<int>();
+                    source.Register(callback);
+                    Source<string> textSource = new Source<string>();
+                    textSource.Register(callback);
+                }
+                """);
+
+            new Compiler().Compile([Path.Combine(app, "app.cxproj")]);
+
+            var appSource = File.ReadAllText(Path.Combine(app, ".obj", "app.c"));
+            Assert.Contains("__cx_generated_cell_1", appSource);
+            Assert.Contains("*__cx_generated_cell_1 = callback;", appSource);
+            Assert.Matches(
+                @"struct __cx_lambda_[A-F0-9]+_\d+_\d+_[A-F0-9]{8}_environment\s*\{",
+                appSource);
+            Assert.Matches(
+                @"static void app___cx_lambda_[A-F0-9]+_\d+_\d+_[A-F0-9]{8}\(void \*__cx_environment\) \{",
+                appSource);
+            Assert.Equal(2, Regex.Matches(
+                appSource,
+                @"static void app___cx_lambda_[A-F0-9]+_\d+_\d+_[A-F0-9]{8}\(void \*__cx_environment\) \{").Cast<Match>().Count());
+            Assert.Contains("__cx_function_reflection_", appSource);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ReferencedGenericOwnerFieldInitializerCanConstructConcreteClass()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cxc-project-generic-field-init-{Guid.NewGuid():N}");
@@ -135,7 +259,7 @@ public sealed class ProjectReferenceTests
 
             var appSource = File.ReadAllText(Path.Combine(app, ".obj", "app.c"));
             Assert.Contains("__this->SeedValue", appSource);
-            Assert.Contains("CX_ID_3(library, Lib, Seed)", appSource);
+            Assert.Contains("library_Lib_Seed", appSource);
         }
         finally
         {
@@ -859,7 +983,7 @@ public sealed class ProjectReferenceTests
             Assert.DoesNotContain($"CX_BEGIN_VTABLE_DEF({dependencyBoxIdentity})", appSource);
             Assert.Contains("CX_BEGIN_VTABLE_DEF(cx_generic_", appSource);
             Assert.Contains("CX_BEGIN_VTABLE_DEF(cx_generic_", genericSource);
-            Assert.Contains("CX_STRING_DEF(CX_ID_2(cx_generic_", appSource);
+            Assert.Contains("CX_STRING_DEF(cx_generic_", appSource);
             Assert.Contains("cx_generic_", appSource);
         }
         finally
@@ -953,10 +1077,10 @@ public sealed class ProjectReferenceTests
             new Compiler().Compile([Path.Combine(app, "app.cxproj")]);
 
             var appSource = File.ReadAllText(Path.Combine(app, ".obj", "app.c"));
-            Assert.Contains("CX_ID_3(generic, Lib, Router)", appSource);
+            Assert.Contains("generic_Lib_Router", appSource);
             Assert.Contains("return (value + 1);", appSource);
             Assert.Contains("return value;", appSource);
-            Assert.DoesNotContain("CX_ID_3(app, Lib, Router)", appSource);
+            Assert.DoesNotContain("app_Lib_Router", appSource);
         }
         finally
         {
@@ -1063,7 +1187,7 @@ public sealed class ProjectReferenceTests
             Assert.Contains("cx_register_generic_virtual_method", appSource);
             Assert.Contains("Lib.GenericVirtualOwner.Transform`1(!U)->!U", appSource);
             Assert.Contains("App.Derived.Transform#replacement", appSource);
-            Assert.Contains("CX_ID_2(cx_generic_", appSource);
+            Assert.Contains("cx_generic_", appSource);
             Assert.Equal(4, Regex.Matches(appSource,
                 "methodIdentity = \\\"Lib\\.GenericVirtualOwner\\.Transform").Count);
         }

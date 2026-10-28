@@ -46,7 +46,7 @@ public sealed class GenericArrayComparisonTests
             Directory.CreateDirectory(directory);
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var source = File.ReadAllText(Path.Combine(directory, "generic_array_comparison.c"));
-            Assert.Contains("CX_ID_6(cxcore, System, Collections, Array, Length, __const_get", source);
+            Assert.Contains("cxcore_System_Collections_Array_Length___const_get", source);
             Assert.Contains("> 0u", source);
             Assert.Contains("2u >=", source);
             Assert.Contains(">= minimum", source);

@@ -42,7 +42,7 @@ foreach ($negative in @('signature','layout','field')) {
     $destination = Join-Path $BuildRoot "bad-$negative"
     New-Item -ItemType Directory -Path $destination -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures/native-abi/native_fixture.h') -Destination $destination
-    [IO.File]::WriteAllText((Join-Path $destination 'bad.cxproj'), "name: bad_native`ntype: Executable`nnative_libraries:`n  fixture:`n    windows:`n      headers: [native_fixture.h]`n    linux:`n      headers: [native_fixture.h]`n")
+    [IO.File]::WriteAllText((Join-Path $destination 'bad.cxproj'), "name: badNative`ntype: Executable`nnative_libraries:`n  fixture:`n    windows:`n      headers: [native_fixture.h]`n    linux:`n      headers: [native_fixture.h]`n")
     $declaration = switch ($negative) {
         'signature' { '@NativeImport("fixture", entryPoint = "fixture_sum") public extern float Wrong(float value);' }
         'layout' { '@NativeType("fixture_point", header = "native_fixture.h", size = 12) public struct Point { public int x; public int y; }' }
@@ -54,9 +54,9 @@ foreach ($negative in @('signature','layout','field')) {
     if ($GenerateOnly) { continue }
     $checks = Join-Path $destination 'sdk-checks'
     New-Item -ItemType Directory -Path $checks -Force | Out-Null
-    $source = (Join-Path $destination '.obj/bad_native.c').Replace('\','/')
+    $source = (Join-Path $destination '.obj/badNative.c').Replace('\','/')
     $includes = ($destination.Replace('\','/') + '" "' + $CxCoreDir + '/src" "' + $CxCoreDir + '/inc" "' + $CxCoreDir + '/platform')
-    [IO.File]::WriteAllText((Join-Path $checks 'CMakeLists.txt'), "cmake_minimum_required(VERSION 3.31)`nproject(sdk_check C)`nadd_library(bad_native OBJECT `"$source`")`ntarget_include_directories(bad_native PRIVATE `"$includes`")`ntarget_compile_features(bad_native PRIVATE c_std_11)`ntarget_compile_definitions(bad_native PRIVATE CX_STATIC_LINK CX_BAD_NATIVE_BUILD)`n")
+    [IO.File]::WriteAllText((Join-Path $checks 'CMakeLists.txt'), "cmake_minimum_required(VERSION 3.31)`nproject(sdk_check C)`nadd_library(badNative OBJECT `"$source`")`ntarget_include_directories(badNative PRIVATE `"$includes`")`ntarget_compile_features(badNative PRIVATE c_std_11)`ntarget_compile_definitions(badNative PRIVATE CX_STATIC_LINK CX_BADNATIVE_BUILD)`n")
     $build = Join-Path $destination "build-$Architecture-$StaticLink"
     & cmake -S $checks -B $build -A $Architecture
     if ($LASTEXITCODE -ne 0) { throw 'Negative SDK configuration failed unexpectedly' }

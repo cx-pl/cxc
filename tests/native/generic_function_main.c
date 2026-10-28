@@ -11,8 +11,8 @@ cx_int cx_generic_5d67cbd1703a5f9084351a81b25b73979e724f95431aa1d8773baaab3c8f6c
 }
 
 int main(void) {
-    assert(CX_ID_2(generic_function, RunInt)() == 42);
-    assert(CX_ID_2(generic_function, RunIntAgain)() == 41);
-    assert(CX_ID_2(generic_function, RunLong)() == 43);
+    assert(generic_function_RunInt() == 42);
+    assert(generic_function_RunIntAgain() == 41);
+    assert(generic_function_RunLong() == 43);
     return 0;
 }

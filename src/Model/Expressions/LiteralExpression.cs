@@ -1,6 +1,6 @@
 namespace CxCompiler.Model.Expressions;
 
-public sealed class LiteralExpression : ExpressionBase
+public class LiteralExpression : ExpressionBase
 {
     public string SourceText { get; }
     public bool IsString => SourceText.StartsWith('"');

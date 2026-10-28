@@ -32,7 +32,7 @@ public sealed class ExceptionTests
         Assert.Contains("setjmp(__cx_exception_frame_", generatedSource);
         Assert.Contains("CX_THROW(", generatedSource);
         Assert.Contains(
-            "CX_ID_4(cxcore, System, Exception, Matches)(cx_exception_current(), CX_ID_4(cxcore, System, Exception, __typeinfo))",
+            "cxcore_System_Exception_Matches(cx_exception_current(), cxcore_System_Exception___typeinfo)",
             generatedSource);
         Assert.Contains("CX_RETHROW();", generatedSource);
         Assert.Contains("cx_int completed = 1;", generatedSource);
@@ -193,10 +193,10 @@ public sealed class ExceptionTests
         var generatedSource = GenerateSource(source);
 
         Assert.Contains(
-            "CX_ID_4(cxcore, System, Exception, Matches)(cx_exception_current(), CX_ID_3(unnamed, CustomException, __typeinfo))",
+            "cxcore_System_Exception_Matches(cx_exception_current(), unnamed_CustomException___typeinfo)",
             generatedSource);
         Assert.Contains(
-            "CX_ID_4(cxcore, System, Exception, Matches)(cx_exception_current(), CX_ID_4(cxcore, System, Exception, __typeinfo))",
+            "cxcore_System_Exception_Matches(cx_exception_current(), cxcore_System_Exception___typeinfo)",
             generatedSource);
     }
 

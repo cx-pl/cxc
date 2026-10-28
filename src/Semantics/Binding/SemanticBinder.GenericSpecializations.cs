@@ -151,13 +151,13 @@ public sealed partial class SemanticBinder
                 context.DeclarationScope.Declarations)
                 .Concat(context.DeclarationScope.Declarations
                     .OfType<ExtensionDeclaration>()
-                    .Where(extension => !context.IsProjectReference ||
+                    .Where(extension => !IsExternalReference(context) ||
                         extension.Visibility == Visibility.Public)
                     .SelectMany(extension => EnumerateFunctions(
                         extension.Members.MemberDeclarations.Declarations)))
                 .Where(function => function.IsGenericSpecialization))
             {
-                if (context.IsProjectReference && !IsPublicApiFunction(specialization))
+                if (IsExternalReference(context) && !IsPublicApiFunction(specialization))
                 {
                     continue;
                 }
@@ -204,7 +204,7 @@ public sealed partial class SemanticBinder
                     .Where(symbol => symbol.Declaration is
                         { GenericTypeNames.Length: > 0 } primaryDeclaration &&
                         (symbol.ModuleName == moduleName ||
-                         !context.IsProjectReference &&
+                         !IsExternalReference(context) &&
                          specialization.ParentClassDeclaration is null &&
                          primaryDeclaration.ParentClassDeclaration is null &&
                          IsReferencedModule(symbol.ModuleName) &&
@@ -317,7 +317,7 @@ public sealed partial class SemanticBinder
                         $"Duplicate generic function specialization for '{primaryDeclaration.FullName}'.",
                         specialization.SourceSpan);
                 }
-                if (!context.IsProjectReference && IsPublicApiFunction(specialization))
+                if (!IsExternalReference(context) && IsPublicApiFunction(specialization))
                 {
                     _project!.AddGenericFunctionInstance(new FunctionSymbol(
                         moduleName,
@@ -362,8 +362,11 @@ public sealed partial class SemanticBinder
     }
 
     private bool IsReferencedModule(string moduleName) =>
-        _project?.CompilationContexts.Any(context => context.IsProjectReference &&
+        _project?.CompilationContexts.Any(context => IsExternalReference(context) &&
             context.ProjectName == moduleName) == true;
+
+    private static bool IsExternalReference(CompilationContext context) =>
+        context.IsProjectReference && !context.IsSyntheticCore;
 
     private static bool IsPublicApiFunction(FunctionDeclaration function) =>
         function.ParentClassDeclaration is { } parent

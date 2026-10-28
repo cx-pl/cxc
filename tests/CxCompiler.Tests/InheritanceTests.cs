@@ -117,24 +117,24 @@ public sealed class InheritanceTests
         var (header, source) = GenerateOutput(project);
 
         Assert.True(
-            header.IndexOf("CX_TYPE_DEF(CX_ID_2(unnamed, Parent))", StringComparison.Ordinal) <
-            header.IndexOf("CX_TYPE_DEF(CX_ID_2(unnamed, Child))", StringComparison.Ordinal));
-        Assert.Contains("struct CX_ID_2(unnamed, Parent) __base;", header);
+            header.IndexOf("CX_TYPE_DEF(unnamed_Parent)", StringComparison.Ordinal) <
+            header.IndexOf("CX_TYPE_DEF(unnamed_Child)", StringComparison.Ordinal));
+        Assert.Contains("struct unnamed_Parent __base;", header);
         Assert.Contains(
-            "CX_ID_3(unnamed, Parent, __constructor)(&__this->__base, initial);",
+            "unnamed_Parent___constructor(&__this->__base, initial);",
             source);
         Assert.Contains("(__this)->__base.value", source);
         Assert.Contains(
-            "CX_ID_4(unnamed, Parent, Number, __const_get)(&((__this)->__base))",
+            "unnamed_Parent_Number___const_get(&((__this)->__base))",
             source);
         Assert.Contains(
-            "CX_ID_3(unnamed, Parent, Add)(&((other)->__base), 1)",
+            "unnamed_Parent_Add(&((other)->__base), 1)",
             source);
         Assert.Contains(
-            "CX_ID_4(unnamed, Parent, Number, __set)(&((__this)->__base)",
+            "unnamed_Parent_Number___set(&((__this)->__base)",
             source);
         Assert.Contains(
-            "CX_ID_3(unnamed, Parent, __typeinfo)",
+            "unnamed_Parent___typeinfo",
             source);
     }
 

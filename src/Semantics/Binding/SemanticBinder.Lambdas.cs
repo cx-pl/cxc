@@ -82,7 +82,7 @@ public sealed partial class SemanticBinder
         }
 
         var placeholderReturnType = targetType?.ReturnType ?? BuiltInSystemTypes.Void;
-        var generatedName = GetLambdaCName(lambda);
+        var generatedName = lambda.GeneratedCName ?? GetLambdaCName(lambda);
         var helper = new FunctionDeclaration(
             generatedName,
             currentNamespace,

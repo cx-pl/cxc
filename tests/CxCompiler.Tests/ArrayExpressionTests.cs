@@ -126,7 +126,7 @@ public sealed class ArrayExpressionTests
                 "cx_array_new((cx_uint)(2u), (cx_uint)sizeof(cx_int))",
                 generatedSource);
             Assert.Contains("cx_array_at", generatedSource);
-            Assert.Contains("struct CX_ID_4(cxcore, System, Collections, Array)*", generatedSource);
+            Assert.Contains("struct cxcore_System_Collections_Array*", generatedSource);
         }
         finally
         {
@@ -641,7 +641,7 @@ public sealed class ArrayExpressionTests
                 Path.Combine(outputDirectory, "unnamed.c"));
 
             Assert.Contains(
-                "return CX_ID_6(cxcore, System, Collections, Array, Length, __const_get)(values);",
+                "return cxcore_System_Collections_Array_Length___const_get(values);",
                 generatedSource);
         }
         finally
@@ -707,6 +707,38 @@ public sealed class ArrayExpressionTests
         {
             if (Directory.Exists(outputDirectory))
                 Directory.Delete(outputDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    [Trait("Area", "Lowering")]
+    public void OpenGenericArrayAllocationDoesNotRequireAClosedRuntimeIdentity()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("cxcore");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            namespace System.Collections;
+            public final class Array<T> {
+                public constructor(uint length) {}
+            }
+            public class Buffer<T> {
+                private Array<T> values;
+                public constructor() { values = new Array<T>(2u); }
+            }
+            """));
+        new SemanticBinder().Bind(project);
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-open-generic-array-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(directory, "cxcore.c"));
+            Assert.Contains("cx_array_new((cx_uint)(2u), (cx_uint)sizeof(cx_ptr))", source);
+            Assert.DoesNotContain("cx_array_with_type", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
         }
     }
 

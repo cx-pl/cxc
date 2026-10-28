@@ -1,0 +1,680 @@
+import System.Threading.Tasks;
+
+namespace App;
+
+public extern void ForceCollection();
+public extern void cx_test_root_object(object value);
+public extern void cx_test_allocation_probe_begin();
+public extern int cx_test_allocation_probe_end();
+
+public static class TaskAwaitPrefixProbe {
+    public static int Value;
+    public static void RecordValue(int value) { Value = value; }
+}
+
+public static class TaskLocalSourceProbe {
+    public static int Calls;
+    public static Task<int> Pass(Task<int> source) {
+        Calls += 1;
+        return source;
+    }
+}
+
+async Task<int> AwaitTaskDirectReturn(Task<int> source) {
+    return await source;
+}
+
+async Task<int> AwaitTaskLocalWithReferencePrefix(
+    Task<int> source, string marker) {
+    string prefix = marker;
+    Task<int> selected = source;
+    var result = await selected;
+    return result + (int)prefix.Length;
+}
+
+async Task<int> AwaitTaskLocalWithInferredReferencePrefix(
+    Task<int> source, string marker) {
+    string prefix = marker;
+    var selected = source;
+    var result = await selected;
+    return result + (int)prefix.Length;
+}
+
+async Task<int> AwaitTaskLocalCallWithInferredReferencePrefix(
+    Task<int> source, string marker) {
+    string prefix = marker;
+    var selected = TaskLocalSourceProbe.Pass(source);
+    var result = await selected;
+    return result + (int)prefix.Length;
+}
+
+async Task AwaitVoidTwoWithReferencePrefix(
+    Task first, Task second, string marker) {
+    string prefix = marker;
+    await first;
+    await second;
+    TaskAwaitPrefixProbe.RecordValue((int)prefix.Length);
+}
+
+async Task AwaitVoidTwoWithInferredReferencePrefix(
+    Task first, Task second, string marker) {
+    var prefix = marker;
+    await first;
+    await second;
+    TaskAwaitPrefixProbe.RecordValue((int)prefix.Length);
+}
+
+Task StartPendingVoidPrefix(Task first, Task second) {
+    string marker = new string(17u, 'p');
+    Task result = AwaitVoidTwoWithReferencePrefix(first, second, marker);
+    marker = null;
+    return result;
+}
+
+Task StartPendingVoidInferredPrefix(Task first, Task second) {
+    string marker = new string(18u, 'v');
+    Task result = AwaitVoidTwoWithInferredReferencePrefix(first, second, marker);
+    marker = null;
+    return result;
+}
+
+async Task<int> AwaitConditionalTaskWhile(
+    Task<int> first, Task<int> second, int limit) {
+    int iterations = 0;
+    int result = 0;
+    while (iterations < limit) {
+        var value = await (iterations == 0 ? first : second);
+        result = value;
+        iterations++;
+    }
+    return result;
+}
+
+async Task<int> AwaitTaskInsideLoop(Task<int> source, int count) {
+    int total = 0;
+    for (int index = 0; index < count; index++) {
+        int value = await source;
+        total += value;
+    }
+    return total;
+}
+
+async Task<int> AwaitConditionalTaskFor(
+    Task<int> first, Task<int> next, int limit) {
+    int result = 0;
+    for (int index = 0; index < limit; index++) {
+        var value = await (index == 0 ? first : next);
+        result = value;
+    }
+    return result;
+}
+
+async Task<int> AwaitForControl(Task<int> source, int limit) {
+    int result = 0;
+    for (int index = 0; index < limit; index++) {
+        var value = await source;
+        if (value == 99) break;
+        if (value == 0) continue;
+        if (value == 42) return value;
+        result = value;
+    }
+    return result;
+}
+
+async Task<int> AwaitWhileControl(Task<int> source, int limit) {
+    int iterations = 0;
+    int result = 0;
+    while (iterations < limit) {
+        var value = await source;
+        iterations++;
+        if (value == 99) break;
+        if (value == 0) continue;
+        if (value == 42) return value;
+        result = value;
+    }
+    return result;
+}
+
+async Task<int> AwaitDoWhileControl(Task<int> source, int limit) {
+    int iterations = 0;
+    int result = 0;
+    do {
+        var value = await source;
+        iterations++;
+        if (value == 99) break;
+        if (value == 0) continue;
+        if (value == 42) return value;
+        result = value;
+    } while (iterations < limit);
+    return result;
+}
+
+async Task<int> AwaitDoWhileCount(
+    Task<int> first, Task<int> next, int limit) {
+    int iterations = 0;
+    int result = 0;
+    do {
+        var value = await (iterations == 0 ? first : next);
+        result = value;
+        iterations++;
+    } while (iterations < limit);
+    return result;
+}
+
+async Task AwaitVoidWhile(Task first, Task next, int limit) {
+    int iterations = 0;
+    while (iterations < limit) {
+        await (iterations == 0 ? first : next);
+        iterations++;
+    }
+    return;
+}
+
+async Task AwaitVoidDoWhile(Task first, Task next, int limit) {
+    int iterations = 0;
+    do {
+        await (iterations == 0 ? first : next);
+        iterations++;
+    } while (iterations < limit);
+    return;
+}
+
+async Task AwaitVoidFor(Task first, Task next, int limit) {
+    for (int index = 0; index < limit; index++) {
+        await (index == 0 ? first : next);
+    }
+}
+
+int RunDoWhileTaskContract() {
+    TaskCompletionSource<int> doWhileZeroFirst = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> doWhileZeroNext = new TaskCompletionSource<int>();
+    doWhileZeroFirst.SetResult(29);
+    cx_test_allocation_probe_begin();
+    Task<int> doWhileZero = AwaitDoWhileCount(
+        doWhileZeroFirst.Task, doWhileZeroNext.Task, 0);
+    int doWhileZeroAllocations = cx_test_allocation_probe_end();
+    if (!doWhileZero.IsCompleted || doWhileZero.GetResult() != 29 ||
+        doWhileZeroAllocations != 1) return 21;
+
+    TaskCompletionSource<int> doWhileInlineFirst = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> doWhileInlineNext = new TaskCompletionSource<int>();
+    doWhileInlineFirst.SetResult(31);
+    doWhileInlineNext.SetResult(37);
+    cx_test_allocation_probe_begin();
+    Task<int> doWhileInline = AwaitDoWhileCount(
+        doWhileInlineFirst.Task, doWhileInlineNext.Task, 2);
+    int doWhileInlineAllocations = cx_test_allocation_probe_end();
+    if (!doWhileInline.IsCompleted || doWhileInline.GetResult() != 37 ||
+        doWhileInlineAllocations != 1) return 22;
+
+    TaskCompletionSource<int> doWhilePendingFirst = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> doWhilePendingNext = new TaskCompletionSource<int>();
+    Task<int> doWhilePending = AwaitDoWhileCount(
+        doWhilePendingFirst.Task, doWhilePendingNext.Task, 2);
+    cx_test_root_object(doWhilePendingFirst.Task);
+    cx_test_root_object(doWhilePendingNext.Task);
+    cx_test_root_object(doWhilePending);
+    if (doWhilePending.IsCompleted) return 23;
+    ForceCollection();
+    doWhilePendingFirst.SetResult(41);
+    TaskScheduler.Run();
+    if (doWhilePending.IsCompleted) return 24;
+    ForceCollection();
+    doWhilePendingNext.SetResult(43);
+    TaskScheduler.Run();
+    if (!doWhilePending.IsCompleted || doWhilePending.GetResult() != 43)
+        return 25;
+    return 0;
+}
+
+int RunConditionalForTaskContract() {
+    TaskCompletionSource<int> forZeroFirst = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> forZeroNext = new TaskCompletionSource<int>();
+    cx_test_allocation_probe_begin();
+    Task<int> forZero = AwaitConditionalTaskFor(
+        forZeroFirst.Task, forZeroNext.Task, 0);
+    int forZeroAllocations = cx_test_allocation_probe_end();
+    if (!forZero.IsCompleted || forZero.GetResult() != 0 ||
+        forZeroAllocations != 1) return 31;
+
+    TaskCompletionSource<int> forInlineFirst = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> forInlineNext = new TaskCompletionSource<int>();
+    forInlineFirst.SetResult(47);
+    forInlineNext.SetResult(53);
+    cx_test_allocation_probe_begin();
+    Task<int> forInline = AwaitConditionalTaskFor(
+        forInlineFirst.Task, forInlineNext.Task, 2);
+    int forInlineAllocations = cx_test_allocation_probe_end();
+    if (!forInline.IsCompleted || forInline.GetResult() != 53 ||
+        forInlineAllocations != 1) return 32;
+
+    TaskCompletionSource<int> forPendingFirst = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> forPendingNext = new TaskCompletionSource<int>();
+    Task<int> forPending = AwaitConditionalTaskFor(
+        forPendingFirst.Task, forPendingNext.Task, 2);
+    cx_test_root_object(forPendingFirst.Task);
+    cx_test_root_object(forPendingNext.Task);
+    cx_test_root_object(forPending);
+    if (forPending.IsCompleted) return 33;
+    ForceCollection();
+    forPendingFirst.SetResult(59);
+    TaskScheduler.Run();
+    if (forPending.IsCompleted) return 34;
+    ForceCollection();
+    forPendingNext.SetResult(61);
+    TaskScheduler.Run();
+    if (!forPending.IsCompleted || forPending.GetResult() != 61) return 35;
+    return 0;
+}
+
+int RunForControlTaskContract() {
+    TaskCompletionSource<int> inlineBreakSource = new TaskCompletionSource<int>();
+    inlineBreakSource.SetResult(99);
+    cx_test_allocation_probe_begin();
+    Task<int> inlineBreak = AwaitForControl(inlineBreakSource.Task, 3);
+    int inlineBreakAllocations = cx_test_allocation_probe_end();
+    if (!inlineBreak.IsCompleted || inlineBreak.GetResult() != 0 ||
+        inlineBreakAllocations != 1) return 41;
+
+    TaskCompletionSource<int> pendingReturnSource = new TaskCompletionSource<int>();
+    Task<int> pendingReturn = AwaitForControl(pendingReturnSource.Task, 3);
+    cx_test_root_object(pendingReturnSource.Task);
+    cx_test_root_object(pendingReturn);
+    if (pendingReturn.IsCompleted) return 42;
+    ForceCollection();
+    pendingReturnSource.SetResult(42);
+    TaskScheduler.Run();
+    if (!pendingReturn.IsCompleted || pendingReturn.GetResult() != 42) return 43;
+    return 0;
+}
+
+int RunWhileAndDoWhileControlTaskContract() {
+    TaskCompletionSource<int> whileBreakSource = new TaskCompletionSource<int>();
+    whileBreakSource.SetResult(99);
+    cx_test_allocation_probe_begin();
+    Task<int> whileBreak = AwaitWhileControl(whileBreakSource.Task, 3);
+    int whileBreakAllocations = cx_test_allocation_probe_end();
+    if (!whileBreak.IsCompleted || whileBreak.GetResult() != 0 ||
+        whileBreakAllocations != 1) return 51;
+
+    TaskCompletionSource<int> whileReturnSource = new TaskCompletionSource<int>();
+    Task<int> whileReturn = AwaitWhileControl(whileReturnSource.Task, 3);
+    cx_test_root_object(whileReturnSource.Task);
+    cx_test_root_object(whileReturn);
+    if (whileReturn.IsCompleted) return 52;
+    ForceCollection();
+    whileReturnSource.SetResult(42);
+    TaskScheduler.Run();
+    if (!whileReturn.IsCompleted || whileReturn.GetResult() != 42) return 53;
+
+    TaskCompletionSource<int> doBreakSource = new TaskCompletionSource<int>();
+    doBreakSource.SetResult(99);
+    cx_test_allocation_probe_begin();
+    Task<int> doBreak = AwaitDoWhileControl(doBreakSource.Task, 3);
+    int doBreakAllocations = cx_test_allocation_probe_end();
+    if (!doBreak.IsCompleted || doBreak.GetResult() != 0 ||
+        doBreakAllocations != 1) return 54;
+
+    TaskCompletionSource<int> doReturnSource = new TaskCompletionSource<int>();
+    Task<int> doReturn = AwaitDoWhileControl(doReturnSource.Task, 3);
+    cx_test_root_object(doReturnSource.Task);
+    cx_test_root_object(doReturn);
+    if (doReturn.IsCompleted) return 55;
+    ForceCollection();
+    doReturnSource.SetResult(42);
+    TaskScheduler.Run();
+    if (!doReturn.IsCompleted || doReturn.GetResult() != 42) return 56;
+    return 0;
+}
+
+int RunVoidReferencePrefixContract() {
+    string inlineMarker = new string(19u, 'i');
+    TaskCompletionSource inlineFirst = new TaskCompletionSource();
+    TaskCompletionSource inlineSecond = new TaskCompletionSource();
+    inlineFirst.SetResult();
+    inlineSecond.SetResult();
+    TaskAwaitPrefixProbe.Value = 0;
+    cx_test_allocation_probe_begin();
+    Task inlineResult = AwaitVoidTwoWithReferencePrefix(
+        inlineFirst.Task, inlineSecond.Task, inlineMarker);
+    int inlineAllocations = cx_test_allocation_probe_end();
+    if (!inlineResult.IsCompleted) return 61;
+    if (inlineAllocations != 2) return 65;
+    if (TaskAwaitPrefixProbe.Value != 19) return 66;
+    inlineResult.GetResult();
+
+    TaskCompletionSource pendingFirst = new TaskCompletionSource();
+    TaskCompletionSource pendingSecond = new TaskCompletionSource();
+    Task pendingResult = StartPendingVoidPrefix(
+        pendingFirst.Task, pendingSecond.Task);
+    cx_test_root_object(pendingFirst.Task);
+    cx_test_root_object(pendingSecond.Task);
+    cx_test_root_object(pendingResult);
+    TaskAwaitPrefixProbe.Value = 0;
+    if (pendingResult.IsCompleted) return 62;
+    ForceCollection();
+    pendingFirst.SetResult();
+    TaskScheduler.Run();
+    if (pendingResult.IsCompleted) return 63;
+    ForceCollection();
+    pendingSecond.SetResult();
+    TaskScheduler.Run();
+    if (!pendingResult.IsCompleted || TaskAwaitPrefixProbe.Value != 17)
+        return 64;
+    pendingResult.GetResult();
+
+    TaskCompletionSource inferredInlineFirst = new TaskCompletionSource();
+    TaskCompletionSource inferredInlineSecond = new TaskCompletionSource();
+    inferredInlineFirst.SetResult();
+    inferredInlineSecond.SetResult();
+    string inferredInlineMarker = new string(20u, 'j');
+    TaskAwaitPrefixProbe.Value = 0;
+    cx_test_allocation_probe_begin();
+    Task inferredInlineResult = AwaitVoidTwoWithInferredReferencePrefix(
+        inferredInlineFirst.Task, inferredInlineSecond.Task, inferredInlineMarker);
+    int inferredInlineAllocations = cx_test_allocation_probe_end();
+    if (!inferredInlineResult.IsCompleted || inferredInlineAllocations != 2)
+        return 67;
+    if (TaskAwaitPrefixProbe.Value != 20) return 68;
+    inferredInlineResult.GetResult();
+
+    TaskCompletionSource inferredPendingFirst = new TaskCompletionSource();
+    TaskCompletionSource inferredPendingSecond = new TaskCompletionSource();
+    Task inferredPendingResult = StartPendingVoidInferredPrefix(
+        inferredPendingFirst.Task, inferredPendingSecond.Task);
+    cx_test_root_object(inferredPendingFirst.Task);
+    cx_test_root_object(inferredPendingSecond.Task);
+    cx_test_root_object(inferredPendingResult);
+    TaskAwaitPrefixProbe.Value = 0;
+    if (inferredPendingResult.IsCompleted) return 69;
+    ForceCollection();
+    inferredPendingFirst.SetResult();
+    TaskScheduler.Run();
+    if (inferredPendingResult.IsCompleted) return 70;
+    ForceCollection();
+    inferredPendingSecond.SetResult();
+    TaskScheduler.Run();
+    if (!inferredPendingResult.IsCompleted || TaskAwaitPrefixProbe.Value != 18)
+        return 71;
+    inferredPendingResult.GetResult();
+    return 0;
+}
+
+int RunDirectReturnAwaitContract() {
+    TaskCompletionSource<int> inlineSource = new TaskCompletionSource<int>();
+    inlineSource.SetResult(41);
+    cx_test_allocation_probe_begin();
+    Task<int> inlineResult = AwaitTaskDirectReturn(inlineSource.Task);
+    int inlineAllocations = cx_test_allocation_probe_end();
+    if (!inlineResult.IsCompleted || inlineResult.GetResult() != 41 ||
+        inlineAllocations != 1) return 72;
+
+    TaskCompletionSource<int> pendingSource = new TaskCompletionSource<int>();
+    Task<int> pendingResult = AwaitTaskDirectReturn(pendingSource.Task);
+    cx_test_root_object(pendingSource.Task);
+    cx_test_root_object(pendingResult);
+    if (pendingResult.IsCompleted) return 73;
+    ForceCollection();
+    pendingSource.SetResult(43);
+    TaskScheduler.Run();
+    if (!pendingResult.IsCompleted || pendingResult.GetResult() != 43)
+        return 74;
+    return 0;
+}
+
+int RunTaskLocalReferencePrefixContract() {
+    TaskCompletionSource<int> inlineSource = new TaskCompletionSource<int>();
+    inlineSource.SetResult(41);
+    string inlineMarker = new string(3u, 'l');
+    cx_test_allocation_probe_begin();
+    Task<int> inlineResult = AwaitTaskLocalWithReferencePrefix(
+        inlineSource.Task, inlineMarker);
+    int inlineAllocations = cx_test_allocation_probe_end();
+    if (!inlineResult.IsCompleted || inlineResult.GetResult() != 44 ||
+        inlineAllocations != 1) return 75;
+
+    TaskCompletionSource<int> pendingSource = new TaskCompletionSource<int>();
+    string pendingMarker = new string(3u, 'p');
+    Task<int> pendingResult = AwaitTaskLocalWithReferencePrefix(
+        pendingSource.Task, pendingMarker);
+    pendingMarker = null;
+    cx_test_root_object(pendingSource.Task);
+    cx_test_root_object(pendingResult);
+    if (pendingResult.IsCompleted) return 76;
+    ForceCollection();
+    pendingSource.SetResult(44);
+    TaskScheduler.Run();
+    if (!pendingResult.IsCompleted || pendingResult.GetResult() != 47)
+        return 77;
+    return 0;
+}
+
+int RunTaskLocalInferredReferencePrefixContract() {
+    TaskCompletionSource<int> inlineSource = new TaskCompletionSource<int>();
+    inlineSource.SetResult(41);
+    string inlineMarker = new string(3u, 'i');
+    cx_test_allocation_probe_begin();
+    Task<int> inlineResult = AwaitTaskLocalWithInferredReferencePrefix(
+        inlineSource.Task, inlineMarker);
+    int inlineAllocations = cx_test_allocation_probe_end();
+    if (!inlineResult.IsCompleted || inlineResult.GetResult() != 44 ||
+        inlineAllocations != 1) return 78;
+
+    TaskCompletionSource<int> pendingSource = new TaskCompletionSource<int>();
+    string pendingMarker = new string(3u, 'q');
+    Task<int> pendingResult = AwaitTaskLocalWithInferredReferencePrefix(
+        pendingSource.Task, pendingMarker);
+    pendingMarker = null;
+    cx_test_root_object(pendingSource.Task);
+    cx_test_root_object(pendingResult);
+    if (pendingResult.IsCompleted) return 79;
+    ForceCollection();
+    pendingSource.SetResult(44);
+    TaskScheduler.Run();
+    if (!pendingResult.IsCompleted || pendingResult.GetResult() != 47)
+        return 80;
+    return 0;
+}
+
+int RunTaskLocalInferredCallReferencePrefixContract() {
+    TaskCompletionSource<int> inlineSource = new TaskCompletionSource<int>();
+    inlineSource.SetResult(41);
+    string inlineMarker = new string(3u, 'c');
+    TaskLocalSourceProbe.Calls = 0;
+    cx_test_allocation_probe_begin();
+    Task<int> inlineResult = AwaitTaskLocalCallWithInferredReferencePrefix(
+        inlineSource.Task, inlineMarker);
+    int inlineAllocations = cx_test_allocation_probe_end();
+    if (!inlineResult.IsCompleted || inlineResult.GetResult() != 44 ||
+        inlineAllocations != 1 || TaskLocalSourceProbe.Calls != 1) return 81;
+
+    TaskCompletionSource<int> pendingSource = new TaskCompletionSource<int>();
+    string pendingMarker = new string(3u, 'r');
+    TaskLocalSourceProbe.Calls = 0;
+    Task<int> pendingResult = AwaitTaskLocalCallWithInferredReferencePrefix(
+        pendingSource.Task, pendingMarker);
+    pendingMarker = null;
+    cx_test_root_object(pendingSource.Task);
+    cx_test_root_object(pendingResult);
+    if (pendingResult.IsCompleted || TaskLocalSourceProbe.Calls != 1) return 82;
+    ForceCollection();
+    pendingSource.SetResult(44);
+    TaskScheduler.Run();
+    if (!pendingResult.IsCompleted || pendingResult.GetResult() != 47 ||
+        TaskLocalSourceProbe.Calls != 1) return 83;
+    return 0;
+}
+
+int Run() {
+    int directReturnAwaitResult = RunDirectReturnAwaitContract();
+    if (directReturnAwaitResult != 0) return directReturnAwaitResult;
+    int taskLocalReferencePrefixResult = RunTaskLocalReferencePrefixContract();
+    if (taskLocalReferencePrefixResult != 0)
+        return taskLocalReferencePrefixResult;
+    int taskLocalInferredReferencePrefixResult =
+        RunTaskLocalInferredReferencePrefixContract();
+    if (taskLocalInferredReferencePrefixResult != 0)
+        return taskLocalInferredReferencePrefixResult;
+    int taskLocalInferredCallResult =
+        RunTaskLocalInferredCallReferencePrefixContract();
+    if (taskLocalInferredCallResult != 0)
+        return taskLocalInferredCallResult;
+    int doWhileContractResult = RunDoWhileTaskContract();
+    if (doWhileContractResult != 0) return doWhileContractResult;
+    int conditionalForContractResult = RunConditionalForTaskContract();
+    if (conditionalForContractResult != 0) return conditionalForContractResult;
+    int forControlContractResult = RunForControlTaskContract();
+    if (forControlContractResult != 0) return forControlContractResult;
+    int whileAndDoWhileControlContractResult =
+        RunWhileAndDoWhileControlTaskContract();
+    if (whileAndDoWhileControlContractResult != 0)
+        return whileAndDoWhileControlContractResult;
+    int voidReferencePrefixContractResult = RunVoidReferencePrefixContract();
+    if (voidReferencePrefixContractResult != 0)
+        return voidReferencePrefixContractResult;
+    TaskCompletionSource voidForInlineFirst = new TaskCompletionSource();
+    TaskCompletionSource voidForInlineNext = new TaskCompletionSource();
+    voidForInlineFirst.SetResult();
+    voidForInlineNext.SetResult();
+    cx_test_allocation_probe_begin();
+    Task voidForInlineResult = AwaitVoidFor(
+        voidForInlineFirst.Task, voidForInlineNext.Task, 2);
+    int voidForInlineAllocations = cx_test_allocation_probe_end();
+    if (!voidForInlineResult.IsCompleted || voidForInlineAllocations != 2)
+        return 17;
+    voidForInlineResult.GetResult();
+
+    TaskCompletionSource voidForPendingFirst = new TaskCompletionSource();
+    TaskCompletionSource voidForPendingNext = new TaskCompletionSource();
+    Task voidForPendingResult = AwaitVoidFor(
+        voidForPendingFirst.Task, voidForPendingNext.Task, 2);
+    cx_test_root_object(voidForPendingFirst.Task);
+    cx_test_root_object(voidForPendingNext.Task);
+    cx_test_root_object(voidForPendingResult);
+    if (voidForPendingResult.IsCompleted) return 18;
+    ForceCollection();
+    voidForPendingFirst.SetResult();
+    TaskScheduler.Run();
+    if (voidForPendingResult.IsCompleted) return 19;
+    ForceCollection();
+    voidForPendingNext.SetResult();
+    TaskScheduler.Run();
+    if (!voidForPendingResult.IsCompleted) return 20;
+    voidForPendingResult.GetResult();
+
+    TaskCompletionSource voidDoInlineFirst = new TaskCompletionSource();
+    TaskCompletionSource voidDoInlineNext = new TaskCompletionSource();
+    voidDoInlineFirst.SetResult();
+    voidDoInlineNext.SetResult();
+    cx_test_allocation_probe_begin();
+    Task voidDoInlineResult = AwaitVoidDoWhile(
+        voidDoInlineFirst.Task, voidDoInlineNext.Task, 2);
+    int voidDoInlineAllocations = cx_test_allocation_probe_end();
+    if (!voidDoInlineResult.IsCompleted || voidDoInlineAllocations != 2)
+        return 13;
+    voidDoInlineResult.GetResult();
+
+    TaskCompletionSource voidDoPendingFirst = new TaskCompletionSource();
+    TaskCompletionSource voidDoPendingNext = new TaskCompletionSource();
+    Task voidDoPendingResult = AwaitVoidDoWhile(
+        voidDoPendingFirst.Task, voidDoPendingNext.Task, 2);
+    cx_test_root_object(voidDoPendingFirst.Task);
+    cx_test_root_object(voidDoPendingNext.Task);
+    cx_test_root_object(voidDoPendingResult);
+    if (voidDoPendingResult.IsCompleted) return 14;
+    ForceCollection();
+    voidDoPendingFirst.SetResult();
+    TaskScheduler.Run();
+    if (voidDoPendingResult.IsCompleted) return 15;
+    ForceCollection();
+    voidDoPendingNext.SetResult();
+    TaskScheduler.Run();
+    if (!voidDoPendingResult.IsCompleted) return 16;
+    voidDoPendingResult.GetResult();
+
+    TaskCompletionSource voidInlineFirst = new TaskCompletionSource();
+    TaskCompletionSource voidInlineNext = new TaskCompletionSource();
+    voidInlineFirst.SetResult();
+    voidInlineNext.SetResult();
+    cx_test_allocation_probe_begin();
+    Task voidInlineResult = AwaitVoidWhile(
+        voidInlineFirst.Task, voidInlineNext.Task, 2);
+    int voidInlineAllocations = cx_test_allocation_probe_end();
+    if (!voidInlineResult.IsCompleted || voidInlineAllocations != 2) return 9;
+    voidInlineResult.GetResult();
+
+    TaskCompletionSource voidPendingFirst = new TaskCompletionSource();
+    TaskCompletionSource voidPendingNext = new TaskCompletionSource();
+    Task voidPendingResult = AwaitVoidWhile(
+        voidPendingFirst.Task, voidPendingNext.Task, 2);
+    cx_test_root_object(voidPendingFirst.Task);
+    cx_test_root_object(voidPendingNext.Task);
+    cx_test_root_object(voidPendingResult);
+    if (voidPendingResult.IsCompleted) return 10;
+    ForceCollection();
+    voidPendingFirst.SetResult();
+    TaskScheduler.Run();
+    if (voidPendingResult.IsCompleted) return 11;
+    ForceCollection();
+    voidPendingNext.SetResult();
+    TaskScheduler.Run();
+    if (!voidPendingResult.IsCompleted) return 12;
+    voidPendingResult.GetResult();
+
+    TaskCompletionSource<int> loopInlineSource = new TaskCompletionSource<int>();
+    loopInlineSource.SetResult(13);
+    cx_test_allocation_probe_begin();
+    Task<int> loopInlineResult = AwaitTaskInsideLoop(loopInlineSource.Task, 2);
+    int loopInlineAllocations = cx_test_allocation_probe_end();
+    if (!loopInlineResult.IsCompleted || loopInlineResult.GetResult() != 26 ||
+        loopInlineAllocations != 1) return 6;
+
+    TaskCompletionSource<int> loopPendingSource = new TaskCompletionSource<int>();
+    Task<int> loopPendingResult = AwaitTaskInsideLoop(loopPendingSource.Task, 2);
+    cx_test_root_object(loopPendingSource.Task);
+    cx_test_root_object(loopPendingResult);
+    if (loopPendingResult.IsCompleted) return 7;
+    ForceCollection();
+    loopPendingSource.SetResult(19);
+    TaskScheduler.Run();
+    if (!loopPendingResult.IsCompleted || loopPendingResult.GetResult() != 38)
+        return 8;
+
+    TaskCompletionSource<int> skippedFirst = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> skippedSecond = new TaskCompletionSource<int>();
+    cx_test_allocation_probe_begin();
+    Task<int> zeroIteration = AwaitConditionalTaskWhile(
+        skippedFirst.Task, skippedSecond.Task, 0);
+    int zeroIterationAllocations = cx_test_allocation_probe_end();
+    if (!zeroIteration.IsCompleted || zeroIteration.GetResult() != 0 ||
+        zeroIterationAllocations != 1) return 5;
+
+    TaskCompletionSource<int> inlineFirst = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> inlineSecond = new TaskCompletionSource<int>();
+    inlineFirst.SetResult(17);
+    inlineSecond.SetResult(23);
+    cx_test_allocation_probe_begin();
+    Task<int> inlineResult = AwaitConditionalTaskWhile(
+        inlineFirst.Task, inlineSecond.Task, 2);
+    int inlineAllocations = cx_test_allocation_probe_end();
+    if (!inlineResult.IsCompleted || inlineResult.GetResult() != 23 ||
+        inlineAllocations != 1) return 1;
+
+    TaskCompletionSource<int> pendingFirst = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> pendingSecond = new TaskCompletionSource<int>();
+    Task<int> pendingResult = AwaitConditionalTaskWhile(
+        pendingFirst.Task, pendingSecond.Task, 2);
+    cx_test_root_object(pendingFirst.Task);
+    cx_test_root_object(pendingSecond.Task);
+    cx_test_root_object(pendingResult);
+    if (pendingResult.IsCompleted) return 2;
+    ForceCollection();
+    pendingFirst.SetResult(31);
+    TaskScheduler.Run();
+    if (pendingResult.IsCompleted) return 3;
+    ForceCollection();
+    pendingSecond.SetResult(37);
+    TaskScheduler.Run();
+    if (!pendingResult.IsCompleted || pendingResult.GetResult() != 37) return 4;
+    return 0;
+}

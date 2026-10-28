@@ -86,7 +86,7 @@ public sealed class ConditionalExpressionTests
             Assert.Contains("CX_STRING_DEF", generatedSource);
             Assert.Contains("\"yes\"", generatedSource);
             Assert.Contains("\"no\"", generatedSource);
-            Assert.Contains("return (condition ? &CX_ID_2(unnamed, __string_", generatedSource);
+            Assert.Contains("return (condition ? &unnamed___string_", generatedSource);
         }
         finally
         {

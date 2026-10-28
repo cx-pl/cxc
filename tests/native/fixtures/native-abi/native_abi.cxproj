@@ -1,4 +1,4 @@
-name: native_abi
+name: nativeAbi
 version: 1.0.0
 type: Executable
 native_libraries:

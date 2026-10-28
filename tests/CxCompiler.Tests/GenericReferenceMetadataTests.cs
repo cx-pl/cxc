@@ -46,7 +46,7 @@ public sealed class GenericReferenceMetadataTests
             Assert.Contains("cx_iface_ref", header);
             Assert.Contains("_comparer", header);
             Assert.Contains(
-                "CX_ID_4(generic_interface_field, Holder, Comparer, __const_get)", header);
+                "generic_interface_field_Holder_Comparer___const_get", header);
         }
         finally
         {

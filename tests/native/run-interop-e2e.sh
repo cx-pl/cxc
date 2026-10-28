@@ -13,9 +13,9 @@ for fixture in native-abi native-text native-scalar; do
   "$cmake" -S "$source/.obj" -B "$build" -DCXCORE_SOURCE_DIR="$core" -DCMAKE_C_COMPILER="$compiler" -DCX_STATIC_LINK="$static"
   "$cmake" --build "$build" -j4
   case "$fixture" in
-    native-abi) executable=native_abi;;
-    native-text) executable=native_text;;
-    native-scalar) executable=native_scalar_app;;
+    native-abi) executable=nativeAbi;;
+    native-text) executable=nativeText;;
+    native-scalar) executable=nativeScalarApp;;
   esac
   timeout 90 "$source/.bin/$executable"
 done
@@ -27,10 +27,10 @@ for negative in signature layout field; do
   cat >"$checks/CMakeLists.txt" <<EOF
 cmake_minimum_required(VERSION 3.31)
 project(sdk_check C)
-add_library(bad_native OBJECT "$source/.obj/bad_native.c")
-target_include_directories(bad_native PRIVATE "$source" "$core/src" "$core/inc" "$core/platform")
-target_compile_features(bad_native PRIVATE c_std_11)
-target_compile_definitions(bad_native PRIVATE CX_STATIC_LINK CX_BAD_NATIVE_BUILD)
+add_library(badNative OBJECT "$source/.obj/badNative.c")
+target_include_directories(badNative PRIVATE "$source" "$core/src" "$core/inc" "$core/platform")
+target_compile_features(badNative PRIVATE c_std_11)
+target_compile_definitions(badNative PRIVATE CX_STATIC_LINK CX_BADNATIVE_BUILD)
 EOF
   "$cmake" -S "$checks" -B "$source/check-$compiler-$static" -DCMAKE_C_COMPILER="$compiler"
   if "$cmake" --build "$source/check-$compiler-$static" -j4 >"$source/build.log" 2>&1; then

@@ -82,10 +82,10 @@ public sealed class StringOperatorTests
             Directory.CreateDirectory(outputDirectory);
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(outputDirectory, "input.cx"));
             var source = File.ReadAllText(Path.Combine(outputDirectory, "unnamed.c"));
-            Assert.Contains("CX_ID_4(cxcore, System, String, __cx_operator_equal)(left, right)", source);
-            Assert.Contains("CX_ID_4(cxcore, System, String, __cx_operator_not_equal)(left, right)", source);
-            Assert.Contains("CX_ID_4(cxcore, System, String, __cx_operator_less)(left, right)", source);
-            Assert.Contains("CX_ID_4(cxcore, System, String, __cx_operator_greater_equal)(left, right)", source);
+            Assert.Contains("cxcore_System_String___cx_operator_equal(left, right)", source);
+            Assert.Contains("cxcore_System_String___cx_operator_not_equal(left, right)", source);
+            Assert.Contains("cxcore_System_String___cx_operator_less(left, right)", source);
+            Assert.Contains("cxcore_System_String___cx_operator_greater_equal(left, right)", source);
         }
         finally
         {
@@ -120,11 +120,11 @@ public sealed class StringOperatorTests
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var source = File.ReadAllText(Path.Combine(directory, "unnamed.c"));
             Assert.Contains(
-                "CX_ID_4(cxcore, System, String, __cx_operator_plus)(left, right)", source);
+                "cxcore_System_String___cx_operator_plus(left, right)", source);
             Assert.Contains(
-                "CX_ID_4(cxcore, System, String, __cx_operator_plus)(CX_NULL, value)", source);
+                "cxcore_System_String___cx_operator_plus(CX_NULL, value)", source);
             Assert.Contains(
-                "CX_ID_4(cxcore, System, String, __cx_operator_plus)(value, CX_NULL)", source);
+                "cxcore_System_String___cx_operator_plus(value, CX_NULL)", source);
         }
         finally
         {

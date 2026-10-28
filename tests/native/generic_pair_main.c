@@ -3,31 +3,30 @@
 
 #include "generic_pair.h"
 
-struct CX_ID_4(cxcore, System, Reflection, TypeInfo) CX_ID_4(cxcore, System, Object, __typeinfo);
-struct CX_ID_4(cxcore, System, Reflection, TypeInfo) CX_ID_4(cxcore, System, Void, __typeinfo);
-union cx_vtable_entry CX_ID_4(cxcore, System, String, __vtable)[1];
+struct cxcore_System_Reflection_TypeInfo cxcore_System_Object___typeinfo;
+struct cxcore_System_Reflection_TypeInfo cxcore_System_Void___typeinfo;
+union cx_vtable_entry cxcore_System_String___vtable[1];
 
-cx_ptr CX_ID_4(cxcore, System, Memory, Alloc)(cx_uint size) {
+cx_ptr cxcore_System_Memory_Alloc(cx_uint size) {
     return calloc(1, size);
 }
 
-void CX_ID_4(cxcore, System, Object,
-             __constructor)(struct CX_ID_3(cxcore, System, Object) * value) {
+void cxcore_System_Object___constructor(struct cxcore_System_Object * value) {
     (void)value;
 }
 
 int main(void) {
-    struct CX_ID_2(generic_pair, First) *firstValue =
-        (struct CX_ID_2(generic_pair, First) *)malloc(1);
-    struct CX_ID_2(generic_pair, Second) *secondValue =
-        (struct CX_ID_2(generic_pair, Second) *)malloc(1);
-    struct CX_ID_2(generic_pair, Pair) *forward =
-        CX_ID_2(generic_pair, CreateForward)(firstValue, secondValue);
-    struct CX_ID_2(generic_pair, Pair) *reverse =
-        CX_ID_2(generic_pair, CreateReverse)(secondValue, firstValue);
-    const struct CX_ID_4(cxcore, System, Reflection, TypeInfo) *forwardInfo =
+    struct generic_pair_First *firstValue =
+        (struct generic_pair_First *)malloc(1);
+    struct generic_pair_Second *secondValue =
+        (struct generic_pair_Second *)malloc(1);
+    struct generic_pair_Pair *forward =
+        generic_pair_CreateForward(firstValue, secondValue);
+    struct generic_pair_Pair *reverse =
+        generic_pair_CreateReverse(secondValue, firstValue);
+    const struct cxcore_System_Reflection_TypeInfo *forwardInfo =
         &CX_GET_TYPEINFO(forward);
-    const struct CX_ID_4(cxcore, System, Reflection, TypeInfo) *reverseInfo =
+    const struct cxcore_System_Reflection_TypeInfo *reverseInfo =
         &CX_GET_TYPEINFO(reverse);
     const struct cx_reflection_field *forwardFields =
         (const struct cx_reflection_field *)((const struct cx_runtime_type_info *)
@@ -45,10 +44,10 @@ int main(void) {
         (const struct cx_reflection_function *)((const struct cx_runtime_type_info *)
                                                     reverseInfo->RuntimeTypeInfo)
             ->functions;
-    const struct CX_ID_4(cxcore, System, Reflection, TypeInfo) *firstType =
-        &CX_ID_3(generic_pair, First, __typeinfo);
-    const struct CX_ID_4(cxcore, System, Reflection, TypeInfo) *secondType =
-        &CX_ID_3(generic_pair, Second, __typeinfo);
+    const struct cxcore_System_Reflection_TypeInfo *firstType =
+        &generic_pair_First___typeinfo;
+    const struct cxcore_System_Reflection_TypeInfo *secondType =
+        &generic_pair_Second___typeinfo;
 
     assert(firstValue != NULL && secondValue != NULL);
     assert(forward != NULL && reverse != NULL);

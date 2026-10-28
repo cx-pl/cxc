@@ -39,31 +39,31 @@ public sealed class RuntimeTypeTests
 
         var source = GenerateSource(project);
 
-        Assert.Contains("static const struct cx_interface_impl CX_ID_3(unnamed, Derived, __interfaces)[]", source);
-        Assert.Contains("static const struct cx_runtime_type_info CX_ID_3(unnamed, Derived, __runtime_type_info)", source);
-        Assert.Equal(1, source.Split("static const struct cx_runtime_type_info CX_ID_3(unnamed, Derived, __runtime_type_info)").Length - 1);
-        Assert.Contains(".interfaces = (const struct cx_interface_impl*)CX_ID_3(unnamed, Derived, __interfaces)", source);
+        Assert.Contains("static const struct cx_interface_impl unnamed_Derived___interfaces[]", source);
+        Assert.Contains("static const struct cx_runtime_type_info unnamed_Derived___runtime_type_info", source);
+        Assert.Equal(1, source.Split("static const struct cx_runtime_type_info unnamed_Derived___runtime_type_info").Length - 1);
+        Assert.Contains(".interfaces = (const struct cx_interface_impl*)unnamed_Derived___interfaces", source);
         Assert.Contains(".fields = CX_NULL", source);
-        Assert.Contains("struct CX_ID_4(cxcore, System, Reflection, TypeInfo) CX_ID_3(unnamed, Derived, __typeinfo)", source);
-        Assert.Contains(".RuntimeTypeInfo = (cx_ptr)&CX_ID_3(unnamed, Derived, __runtime_type_info)", source);
+        Assert.Contains("struct cxcore_System_Reflection_TypeInfo unnamed_Derived___typeinfo", source);
+        Assert.Contains(".RuntimeTypeInfo = (cx_ptr)&unnamed_Derived___runtime_type_info", source);
         Assert.DoesNotContain(".RuntimeFields =", source);
         Assert.DoesNotContain(".RuntimeFieldCount =", source);
         Assert.DoesNotContain(".RuntimeFunctions =", source);
         Assert.DoesNotContain(".RuntimeFunctionCount =", source);
         Assert.DoesNotContain(".RuntimeInterfaces =", source);
         Assert.DoesNotContain(".RuntimeInterfaceCount =", source);
-        Assert.Contains("CX_BEGIN_INTERFACE_VTABLE_DEF(CX_ID_5(unnamed, Derived, __iface, IDerived, __vtable), CX_ID_2(unnamed, Derived))", source);
+        Assert.Contains("CX_BEGIN_INTERFACE_VTABLE_DEF(unnamed_Derived___iface_IDerived___vtable, unnamed_Derived)", source);
         Assert.Contains(
-            "{ &CX_ID_3(unnamed, IBase, __typeinfo), CX_ID_5(unnamed, Value, __iface, IBase, __vtable) },",
+            "{ &unnamed_IBase___typeinfo, unnamed_Value___iface_IBase___vtable },",
             source);
-        Assert.Contains("cx_checked_cast_object((cx_ptr)(value), &CX_ID_3(unnamed, Derived, __typeinfo))", source);
-        Assert.Contains("cx_checked_cast_interface(value, &CX_ID_3(unnamed, Derived, __typeinfo))", source);
-        Assert.Contains("cx_checked_cast_object_to_interface((cx_ptr)(value), &CX_ID_3(unnamed, IBase, __typeinfo))", source);
-        Assert.Contains("cx_box_value((const void*)&((struct CX_ID_2(unnamed, Value)[])", source);
-        Assert.Contains("cx_checked_cast_interface_to_interface(value, &CX_ID_3(unnamed, IDerived, __typeinfo))", source);
-        Assert.Contains("cx_is_object((cx_ptr)(value), &CX_ID_3(unnamed, Derived, __typeinfo))", source);
-        Assert.Contains("cx_is_interface(value, &CX_ID_3(unnamed, IDerived, __typeinfo))", source);
-        Assert.Contains("(struct CX_ID_2(unnamed, Derived)*)CX_NULL", source);
+        Assert.Contains("cx_checked_cast_object((cx_ptr)(value), &unnamed_Derived___typeinfo)", source);
+        Assert.Contains("cx_checked_cast_interface(value, &unnamed_Derived___typeinfo)", source);
+        Assert.Contains("cx_checked_cast_object_to_interface((cx_ptr)(value), &unnamed_IBase___typeinfo)", source);
+        Assert.Contains("cx_box_value((const void*)&((struct unnamed_Value[])", source);
+        Assert.Contains("cx_checked_cast_interface_to_interface(value, &unnamed_IDerived___typeinfo)", source);
+        Assert.Contains("cx_is_object((cx_ptr)(value), &unnamed_Derived___typeinfo)", source);
+        Assert.Contains("cx_is_interface(value, &unnamed_IDerived___typeinfo)", source);
+        Assert.Contains("(struct unnamed_Derived*)CX_NULL", source);
     }
 
     [Theory]

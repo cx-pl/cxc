@@ -143,10 +143,10 @@ public sealed class ObjectCreationTests
         new SemanticBinder().Bind(project);
         var generatedSource = GenerateSource(project);
 
-        Assert.Contains("CX_INIT_VTABLE(__this, CX_ID_2(unnamed, Widget));", generatedSource);
-        Assert.Contains("CX_ID_4(cxcore, System, Memory, Alloc)((cx_uint)sizeof(struct CX_ID_2(unnamed, Widget)))", generatedSource);
-        Assert.Contains("CX_ID_3(unnamed, Widget, __constructor)(__cx_new_0 =", generatedSource);
-        Assert.Contains("CX_ID_3(unnamed, Number, __constructor)(&__cx_new_0, 7)", generatedSource);
+        Assert.Contains("CX_INIT_VTABLE(__this, unnamed_Widget);", generatedSource);
+        Assert.Contains("cxcore_System_Memory_Alloc((cx_uint)sizeof(struct unnamed_Widget))", generatedSource);
+        Assert.Contains("unnamed_Widget___constructor(__cx_new_0 =", generatedSource);
+        Assert.Contains("unnamed_Number___constructor(&__cx_new_0, 7)", generatedSource);
     }
 
     [Fact]

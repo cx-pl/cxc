@@ -1,0 +1,46 @@
+import System;
+
+public int Main(string[] args) {
+    int? parsed = Int.TryParse(" -2147483648 ");
+    if ((parsed ?? 0) != -2147483648) return 1;
+    parsed = Int.TryParse("2147483648");
+    if (parsed != null) return 2;
+    ulong? unsignedValue = ULong.TryParse("18446744073709551615");
+    if ((unsignedValue ?? 0ul) != 18446744073709551615ul) return 3;
+    double? realValue = Double.TryParse("1.25e2");
+    if ((realValue ?? 0.0) != 125.0) return 4;
+    decimal? money = Decimal.TryParse("123.4500");
+    if ((money ?? 0m) != 123.45m) return 5;
+    money = Decimal.TryParse("not a decimal");
+    if (money != null) return 6;
+
+    Uuid id = Uuid.NewUuidV4();
+    if (id.Version != 4u || id.ToString().Length != 36u) return 7;
+    id = Uuid.NewUuidV1(); if (id.Version != 1u) return 8;
+    id = Uuid.NewUuidV2((byte)0,42u); if (id.Version != 2u) return 9;
+    id = Uuid.NewUuidV3(Uuid.NamespaceDns,"www.example.com");
+    if (id.ToString() != "5df41881-3aed-3515-88a7-2f4a814cf09e") return 10;
+    id = Uuid.NewUuidV5(Uuid.NamespaceDns,"www.example.com");
+    if (id.ToString() != "2ed6657d-e927-568b-95e1-2665a8aea6a2") return 11;
+    id = Uuid.NewUuidV6(); if (id.Version != 6u) return 12;
+    id = Uuid.NewUuidV7(); if (id.Version != 7u) return 13;
+    id = Uuid.NewUuidV8(); if (id.Version != 8u) return 14;
+    id = Uuid.NewUuidV8(0x123456789abcul,(ushort)0xdef,0x123456789abcdeful);
+    if (id.ToString() != "12345678-9abc-8def-8123-456789abcdef") return 15;
+
+    StringBuilder builder = new StringBuilder(1u);
+    builder.Append("Amount=").Append(123.45m).Append(';').Append(42).Append(true);
+    string snapshot = builder.ToString();
+    if (snapshot != "Amount=123.45;42True") return 16;
+    builder.Clear().Append((char)0xe9).Append((char)0x1f98a);
+    if (builder.Length != 2u || builder.ToString().Length != 2u) return 17;
+    if (snapshot != "Amount=123.45;42True") return 18;
+    object boxedBuilder = builder;
+    if (boxedBuilder.ToString() != builder.ToString()) return 19;
+    if (builder.Capacity < 6u) return 20;
+    for (int i = 0; i < 10000; i++) { builder.Append('x'); }
+    if (builder.Length != 10002u) return 21;
+    builder.Clear().Append((byte)1).Append((sbyte)-2).Append((short)3).Append((ushort)4);
+    if (builder.ToString() != "1-234") return 22;
+    return 0;
+}

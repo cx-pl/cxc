@@ -46,6 +46,14 @@ public sealed class StatementParserVisitor : CxParserBaseVisitor<StatementBase>
         return new ReturnStatement(expression).WithSourceSpan(context);
     }
 
+    public override StatementBase VisitYieldStatement([NotNull] CxParser.YieldStatementContext context)
+    {
+        return context.Return() is not null
+            ? new YieldReturnStatement(
+                new ExpressionParserVisitor().Visit(context.expression()!)).WithSourceSpan(context)
+            : new YieldBreakStatement().WithSourceSpan(context);
+    }
+
     public override StatementBase VisitBreakStatement([NotNull] CxParser.BreakStatementContext context)
     {
         return new BreakStatement().WithSourceSpan(context);
@@ -140,7 +148,8 @@ public sealed class StatementParserVisitor : CxParserBaseVisitor<StatementBase>
             new TypeNameContextVisitor().Visit(context.typeName()),
             context.Identifier().GetText(),
             ParseExpression(context.expression()),
-            Visit(context.embeddedStatement())).WithSourceSpan(context);
+            Visit(context.embeddedStatement()),
+            context.Await() is not null).WithSourceSpan(context);
     }
 
     public override StatementBase VisitThrowStatement([NotNull] CxParser.ThrowStatementContext context)

@@ -3,19 +3,19 @@
 
 #include "generic_array_identity.h"
 
-struct CX_ID_4(cxcore, System, Reflection, TypeInfo) CX_ID_4(cxcore, System, Object, __typeinfo);
-union cx_vtable_entry CX_ID_4(cxcore, System, String, __vtable)[1];
+struct cxcore_System_Reflection_TypeInfo cxcore_System_Object___typeinfo;
+union cx_vtable_entry cxcore_System_String___vtable[1];
 
 int main(void) {
-    struct CX_ID_4(cxcore, System, Collections, Array) *first =
-        (struct CX_ID_4(cxcore, System, Collections, Array) *)malloc(1);
-    struct CX_ID_4(cxcore, System, Collections, Array) *second =
-        (struct CX_ID_4(cxcore, System, Collections, Array) *)malloc(1);
+    struct cxcore_System_Collections_Array *first =
+        (struct cxcore_System_Collections_Array *)malloc(1);
+    struct cxcore_System_Collections_Array *second =
+        (struct cxcore_System_Collections_Array *)malloc(1);
 
     assert(first != NULL && second != NULL);
     assert(first != second);
-    assert(CX_ID_2(generic_array_identity, RunFirst)(first) == first);
-    assert(CX_ID_2(generic_array_identity, RunSecond)(second) == second);
+    assert(generic_array_identity_RunFirst(first) == first);
+    assert(generic_array_identity_RunSecond(second) == second);
 
     free(first);
     free(second);

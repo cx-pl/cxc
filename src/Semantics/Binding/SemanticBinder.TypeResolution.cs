@@ -30,14 +30,21 @@ public sealed partial class SemanticBinder
         TypeSymbol candidate,
         TypeBase requestedType)
     {
+        if (requestedType is not NamedType requestedNamed)
+        {
+            return IsType(candidate.Type, requestedType);
+        }
+        if (candidate.Declaration.GenericTypeNames.Length != requestedNamed.TypeArguments.Count)
+        {
+            return false;
+        }
         if (IsType(candidate.Type, requestedType))
         {
             return true;
         }
-        return requestedType is NamedType named &&
-            named.ResolvedTypeFullName ==
+        return requestedNamed.ResolvedTypeFullName ==
                 new QualifiedIdentifier(candidate.ModuleName, candidate.Declaration.FullName) &&
-            named.TypeArguments.Count == candidate.Declaration.GenericTypeNames.Length;
+            requestedNamed.TypeArguments.Count == candidate.Declaration.GenericTypeNames.Length;
     }
 
     private void ResolveTypeReference(
@@ -106,8 +113,12 @@ public sealed partial class SemanticBinder
         var sourceName = new QualifiedIdentifier(
             namedType.Name.Split('.', StringSplitOptions.RemoveEmptyEntries));
         var candidateNames = GetCandidateNames(sourceName, currentNamespace, imports);
-        var classCandidates = _types
+        var namedClassCandidates = _types
             .Where(candidate => candidateNames.Contains(candidate.Declaration.FullName))
+            .ToArray();
+        var classCandidates = namedClassCandidates
+            .Where(candidate => candidate.Declaration.GenericTypeNames.Length ==
+                namedType.TypeArguments.Count)
             .ToArray();
         var enumCandidates = _enums
             .Where(candidate => candidateNames.Contains(candidate.Declaration.FullName))
@@ -115,14 +126,44 @@ public sealed partial class SemanticBinder
         var delegateCandidates = _delegates
             .Where(candidate => candidateNames.Contains(candidate.Declaration.FullName))
             .ToArray();
-        var aliasCandidates = _aliases
+        var namedAliasCandidates = _aliases
             .Where(candidate => candidateNames.Contains(candidate.Declaration.FullName))
+            .ToArray();
+        var aliasCandidates = namedAliasCandidates
+            .Where(candidate =>
+                candidate.Declaration.GenericTypeNames.Length ==
+                    namedType.TypeArguments.Count)
             .ToArray();
         if (classCandidates.Length + enumCandidates.Length + delegateCandidates.Length +
             aliasCandidates.Length > 1)
         {
             throw new CompilationErrorException(
                 $"Type name '{namedType.Name}' is ambiguous.");
+        }
+        if (classCandidates.Length == 0 && namedClassCandidates.Length > 0 &&
+            enumCandidates.Length == 0 && delegateCandidates.Length == 0 &&
+            aliasCandidates.Length == 0)
+        {
+            var distinctArities = namedClassCandidates
+                .Select(candidate => candidate.Declaration.GenericTypeNames.Length)
+                .Distinct().Order().ToArray();
+            var expectedArities = distinctArities.Length == 1
+                ? distinctArities[0].ToString()
+                : string.Join(" or ", distinctArities);
+            throw new CompilationErrorException(
+                $"Type '{namedType.Name}' expects {expectedArities} generic arguments, " +
+                $"but got {namedType.TypeArguments.Count}.");
+        }
+        if (aliasCandidates.Length == 0 && namedAliasCandidates.Length > 0 &&
+            classCandidates.Length == 0 && enumCandidates.Length == 0 &&
+            delegateCandidates.Length == 0)
+        {
+            var expected = string.Join(" or ", namedAliasCandidates
+                .Select(candidate => candidate.Declaration.GenericTypeNames.Length)
+                .Distinct().Order());
+            throw new CompilationErrorException(
+                $"Alias '{namedType.Name}' expects {expected} generic arguments, " +
+                $"but got {namedType.TypeArguments.Count}.");
         }
         if (classCandidates.SingleOrDefault() is { } classCandidate)
         {
@@ -242,12 +283,20 @@ public sealed partial class SemanticBinder
             return;
         }
         var parts = type.ResolvedTypeFullName.Parts;
+        var moduleName = type is ArrayType
+            ? _types.SingleOrDefault(candidate =>
+                candidate.Declaration.FullName ==
+                    new QualifiedIdentifier(parts.Skip(1).ToArray()) &&
+                candidate.Declaration.GenericTypeNames.Length == type.TypeArguments.Count)
+                ?.ModuleName ?? parts[0]
+            : parts[0];
         type.ConstructedIdentity = GenericTypeIdentity.Create(
-            parts[0], string.Join('.', parts.Skip(1)), type.TypeArguments);
+            moduleName, string.Join('.', parts.Skip(1)), type.TypeArguments);
         var identity = type.ConstructedIdentity.CanonicalName;
         if (_types.SingleOrDefault(candidate =>
-            candidate.ModuleName == parts[0] &&
-            candidate.Declaration.FullName == new QualifiedIdentifier(parts.Skip(1).ToArray()))
+            candidate.ModuleName == moduleName &&
+            candidate.Declaration.FullName == new QualifiedIdentifier(parts.Skip(1).ToArray()) &&
+            candidate.Declaration.GenericTypeNames.Length == type.TypeArguments.Count)
             is { } localType &&
             !_project!.ReferencedGenericTypeIdentities.Contains(identity))
         {

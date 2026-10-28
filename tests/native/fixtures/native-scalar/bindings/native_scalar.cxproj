@@ -1,4 +1,4 @@
-name: native_scalar
+name: nativeScalar
 version: 1.0.0
 type: Library
 native_libraries:

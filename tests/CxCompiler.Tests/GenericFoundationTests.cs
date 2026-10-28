@@ -85,7 +85,7 @@ public sealed class GenericFoundationTests
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var header = File.ReadAllText(Path.Combine(directory, "generic_array_field.h"));
             Assert.Contains($"struct {instance.Type.ConstructedIdentity!.CIdentifier} {{", header);
-            Assert.Contains("Array)* values;", header);
+            Assert.Contains("Array* values;", header);
         }
         finally
         {
@@ -117,7 +117,7 @@ public sealed class GenericFoundationTests
             var header = File.ReadAllText(Path.Combine(directory, "generic_concrete_array_field.h"));
             var source = File.ReadAllText(Path.Combine(directory, "generic_concrete_array_field.c"));
 
-            Assert.Contains("Array)* buckets;", header);
+            Assert.Contains("Array* buckets;", header);
             Assert.Contains("cx_array_new((cx_uint)(8u), (cx_uint)sizeof(cx_uint))", source);
             Assert.Contains("cx_array_at", source);
         }
@@ -446,7 +446,7 @@ public sealed class GenericFoundationTests
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var header = File.ReadAllText(Path.Combine(directory, "generic_type_reference.h"));
             var source = File.ReadAllText(Path.Combine(directory, "generic_type_reference.c"));
-            Assert.Contains("struct CX_ID_2(generic_type_reference, Box)* value;", header);
+            Assert.Contains("struct generic_type_reference_Box* value;", header);
             Assert.Contains(".GenericArity = 1", source);
             Assert.Contains("CX_REFLECTION_FLAG_TYPE_GENERIC", source);
         }
@@ -526,7 +526,7 @@ public sealed class GenericFoundationTests
             foreach (var instance in project.GenericTypeInstances)
             {
                 Assert.Contains(
-                    $"&CX_ID_2({instance.Type.ConstructedIdentity!.CIdentifier}, __typeinfo)",
+                    $"&{instance.Type.ConstructedIdentity!.CIdentifier}___typeinfo",
                     source);
             }
         }
@@ -638,7 +638,7 @@ public sealed class GenericFoundationTests
             var header = File.ReadAllText(Path.Combine(directory, "generic_value_box.h"));
             var source = File.ReadAllText(Path.Combine(directory, "generic_value_box.c"));
             Assert.Contains($"struct {identity.CIdentifier}", header);
-            Assert.Contains("struct CX_ID_2(generic_value_box, Payload) value;", header);
+            Assert.Contains("struct generic_value_box_Payload value;", header);
             Assert.Contains($"sizeof(struct {identity.CIdentifier})", source);
             Assert.Contains($"offsetof(struct {identity.CIdentifier}, value)", source);
             Assert.Contains($"CX_INIT_VTABLE(__cx_new_0, {identity.CIdentifier})", source);
@@ -687,8 +687,8 @@ public sealed class GenericFoundationTests
             Assert.Contains($"struct {identity.CIdentifier} {{", header);
             Assert.Contains("cx_int id;", header);
             Assert.Contains("cx_int computed;", header);
-            Assert.Contains("struct CX_ID_2(generic_value_mixed_fields, Payload) value;", header);
-            Assert.Contains("struct CX_ID_2(generic_value_mixed_fields, Payload) extra;", header);
+            Assert.Contains("struct generic_value_mixed_fields_Payload value;", header);
+            Assert.Contains("struct generic_value_mixed_fields_Payload extra;", header);
             Assert.Contains("__this->id = 7;", source);
             Assert.Contains("__this->computed = ((2 + 5) * 3);", source);
             Assert.Contains("__this->index = initialIndex;", source);
@@ -747,9 +747,9 @@ public sealed class GenericFoundationTests
             var innerDefinition = header.IndexOf($"struct {innerType} {{", StringComparison.Ordinal);
             var outerDefinition = header.IndexOf($"struct {outerType} {{", StringComparison.Ordinal);
             var innerTemplate = header.IndexOf(
-                "CX_TYPE_DEF(CX_ID_2(generic_value_nested_struct, ZInner))", StringComparison.Ordinal);
+                "CX_TYPE_DEF(generic_value_nested_struct_ZInner)", StringComparison.Ordinal);
             var outerTemplate = header.IndexOf(
-                "CX_TYPE_DEF(CX_ID_2(generic_value_nested_struct, AOuter))", StringComparison.Ordinal);
+                "CX_TYPE_DEF(generic_value_nested_struct_AOuter)", StringComparison.Ordinal);
             Assert.True(innerDefinition >= 0, header);
             Assert.True(outerDefinition > innerDefinition, header);
             Assert.True(innerTemplate >= 0 && outerTemplate > innerTemplate, header);
@@ -1000,8 +1000,8 @@ public sealed class GenericFoundationTests
             var source = File.ReadAllText(Path.Combine(directory, "generic_value_pair.c"));
 
             Assert.Contains($"struct {identity.CIdentifier} {{", header);
-            Assert.Contains("struct CX_ID_2(generic_value_pair, Payload) first;", header);
-            Assert.Contains("struct CX_ID_2(generic_value_pair, Payload) second;", header);
+            Assert.Contains("struct generic_value_pair_Payload first;", header);
+            Assert.Contains("struct generic_value_pair_Payload second;", header);
             Assert.Contains($"offsetof(struct {identity.CIdentifier}, first)", source);
             Assert.Contains($"offsetof(struct {identity.CIdentifier}, second)", source);
             Assert.Contains($"((struct {identity.CIdentifier}*)", source);
@@ -1046,8 +1046,8 @@ public sealed class GenericFoundationTests
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var header = File.ReadAllText(Path.Combine(directory, "generic_struct_pair.h"));
             Assert.Contains($"struct {identity.CIdentifier} {{", header);
-            Assert.Contains("struct CX_ID_2(generic_struct_pair, First) first;", header);
-            Assert.Contains("struct CX_ID_2(generic_struct_pair, Second) second;", header);
+            Assert.Contains("struct generic_struct_pair_First first;", header);
+            Assert.Contains("struct generic_struct_pair_Second second;", header);
             Assert.DoesNotContain("_unknowntype_", header);
         }
         finally
@@ -1112,8 +1112,8 @@ public sealed class GenericFoundationTests
             Assert.Contains($"CX_INIT_VTABLE(__cx_new_0, {identity.CIdentifier})", source);
             Assert.Contains($"CX_BEGIN_VTABLE_DEF({identity.CIdentifier})", source);
             Assert.Contains(".functionCount = 1", source);
-            Assert.Contains("extern CX_CLOSED_CONSTRUCTION_API struct CX_ID_2(closed_construction, Marker)* " +
-                "CX_ID_2(closed_construction, Create)()", header);
+            Assert.Contains("extern CX_CLOSED_CONSTRUCTION_API struct closed_construction_Marker* " +
+                "closed_construction_Create()", header);
         }
         finally
         {
@@ -1169,7 +1169,7 @@ public sealed class GenericFoundationTests
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var header = File.ReadAllText(Path.Combine(directory, "generic_array_field.h"));
             var source = File.ReadAllText(Path.Combine(directory, "generic_array_field.c"));
-            Assert.Contains("struct CX_ID_4(cxcore, System, Collections, Array)* values;", header);
+            Assert.Contains("struct cxcore_System_Collections_Array* values;", header);
             foreach (var instance in project.GenericTypeInstances)
             {
                 var identity = instance.Type.ConstructedIdentity!;
@@ -1271,8 +1271,8 @@ public sealed class GenericFoundationTests
                 Assert.Contains($"CX_INIT_VTABLE(__cx_new_", source);
                 Assert.Contains($"{identity.CIdentifier})", source);
                 Assert.Contains($".Hash = 0x{identity.RuntimeHash:X}ULL", source);
-                Assert.Contains($"CX_ID_2({identity.CIdentifier}, __reflection_parameters_0)", source);
-                Assert.Contains($"&CX_ID_3(generic_constructor_value, {argument.Name}, __typeinfo)",
+                Assert.Contains($"{identity.CIdentifier}___reflection_parameters_0", source);
+                Assert.Contains($"&generic_constructor_value_{argument.Name}___typeinfo",
                     source);
             }
         }
@@ -1382,13 +1382,13 @@ public sealed class GenericFoundationTests
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var header = File.ReadAllText(Path.Combine(directory, "generic_property_getter.h"));
             var source = File.ReadAllText(Path.Combine(directory, "generic_property_getter.c"));
-            Assert.Contains("void* CX_ID_4(generic_property_getter, Box, Value, __get)", header);
-            Assert.Contains("void* CX_ID_4(generic_property_getter, Box, Value, __get)", source);
+            Assert.Contains("void* generic_property_getter_Box_Value___get", header);
+            Assert.Contains("void* generic_property_getter_Box_Value___get", source);
             Assert.Contains("return __this->value;", source);
             foreach (var instance in project.GenericTypeInstances)
             {
                 var identity = instance.Type.ConstructedIdentity!;
-                Assert.Contains($"CX_ID_2({identity.CIdentifier}, __reflection_functions)", source);
+                Assert.Contains($"{identity.CIdentifier}___reflection_functions", source);
             }
         }
         finally
@@ -1551,14 +1551,14 @@ public sealed class GenericFoundationTests
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var header = File.ReadAllText(Path.Combine(directory, "generic_property_setter.h"));
             var source = File.ReadAllText(Path.Combine(directory, "generic_property_setter.c"));
-            Assert.Contains("void CX_ID_4(generic_property_setter, Box, Value, __set)", header);
+            Assert.Contains("void generic_property_setter_Box_Value___set", header);
             Assert.Contains("void* value", header);
             Assert.Contains("void* value", source);
             Assert.Contains("__this->stored = value;", source);
             foreach (var instance in project.GenericTypeInstances)
             {
                 var identity = instance.Type.ConstructedIdentity!;
-                Assert.Contains($"CX_ID_2({identity.CIdentifier}, __reflection_parameters_2)",
+                Assert.Contains($"{identity.CIdentifier}___reflection_parameters_2",
                     source);
             }
         }
@@ -1625,8 +1625,8 @@ public sealed class GenericFoundationTests
             foreach (var instance in project.GenericTypeInstances)
             {
                 var identity = instance.Type.ConstructedIdentity!;
-                Assert.Contains($"CX_ID_2({identity.CIdentifier}, __reflection_fields)", source);
-                Assert.Contains($"CX_ID_2({identity.CIdentifier}, __reflection_parameters_0)",
+                Assert.Contains($"{identity.CIdentifier}___reflection_fields", source);
+                Assert.Contains($"{identity.CIdentifier}___reflection_parameters_0",
                     source);
                 Assert.Contains($".Hash = 0x{identity.RuntimeHash:X}ULL", source);
             }
@@ -1717,7 +1717,7 @@ public sealed class GenericFoundationTests
                 Assert.Contains(setter.SpecializationName!, source);
                 var parameterType = Assert.IsType<NamedType>(setter.ParameterTypes[0]);
                 Assert.Contains(
-                    $"struct CX_ID_2(generic_class_method, {parameterType.Name})* initial",
+                    $"struct generic_class_method_{parameterType.Name}* initial",
                     source);
             }
             Assert.Contains("__this->value = initial;", source);
@@ -1725,8 +1725,8 @@ public sealed class GenericFoundationTests
             {
                 var identity = instance.Type.ConstructedIdentity!;
                 var argument = Assert.IsType<NamedType>(Assert.Single(instance.Type.TypeArguments));
-                Assert.Contains($"CX_ID_2({identity.CIdentifier}, __reflection_functions)", source);
-                Assert.Contains($"&CX_ID_3(generic_class_method, {argument.Name}, __typeinfo)",
+                Assert.Contains($"{identity.CIdentifier}___reflection_functions", source);
+                Assert.Contains($"&generic_class_method_{argument.Name}___typeinfo",
                     source);
             }
         }
@@ -1811,7 +1811,7 @@ public sealed class GenericFoundationTests
                 Assert.Contains(getter.SpecializationName!, source);
                 var returnType = Assert.IsType<NamedType>(getter.ReturnType);
                 Assert.Contains(
-                    $"struct CX_ID_2(generic_class_getter, {returnType.Name})* {getter.SpecializationName}(",
+                    $"struct generic_class_getter_{returnType.Name}* {getter.SpecializationName}(",
                     source);
             }
             Assert.Contains("return __this->value;", source);
@@ -2031,8 +2031,8 @@ public sealed class GenericFoundationTests
             {
                 var identity = instance.Type.ConstructedIdentity!;
                 var argument = Assert.IsType<NamedType>(Assert.Single(instance.Type.TypeArguments));
-                Assert.Contains($"CX_ID_2({identity.CIdentifier}, __reflection_fields)", source);
-                Assert.Contains($"&CX_ID_3(generic_reference_field, {argument.Name}, __typeinfo)",
+                Assert.Contains($"{identity.CIdentifier}___reflection_fields", source);
+                Assert.Contains($"&generic_reference_field_{argument.Name}___typeinfo",
                     source);
             }
         }

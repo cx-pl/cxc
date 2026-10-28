@@ -34,10 +34,10 @@ public sealed class PropertyAccessorTests
                 Path.Combine(outputDirectory, "ConstSignatures.cx"));
             var header = File.ReadAllText(Path.Combine(outputDirectory, "unnamed.h"));
 
-            Assert.Contains("const struct CX_ID_2(unnamed, Character)* __this", header);
-            Assert.Contains("const struct CX_ID_3(cxcore, System, String)* value", header);
+            Assert.Contains("const struct unnamed_Character* __this", header);
+            Assert.Contains("const struct cxcore_System_String* value", header);
             Assert.Contains(
-                "extern CX_UNNAMED_API const struct CX_ID_3(cxcore, System, String)* CX_ID_4(unnamed, Output, Empty, __const_get)()",
+                "extern CX_UNNAMED_API const struct cxcore_System_String* unnamed_Output_Empty___const_get()",
                 header);
         }
         finally
@@ -84,11 +84,11 @@ public sealed class PropertyAccessorTests
                 Path.Combine(outputDirectory, "Properties.cx"));
             var header = File.ReadAllText(Path.Combine(outputDirectory, "unnamed.h"));
 
-            Assert.Contains("CX_ID_4(unnamed, Container, Item, __const_get)", header);
-            Assert.Contains("const struct CX_ID_2(unnamed, Container)* __this", header);
+            Assert.Contains("unnamed_Container_Item___const_get", header);
+            Assert.Contains("const struct unnamed_Container* __this", header);
             Assert.Contains("cx_uint index", header);
             Assert.Contains("void* __returnValue", header);
-            Assert.Contains("CX_ID_4(unnamed, Container, Item, __set)", header);
+            Assert.Contains("unnamed_Container_Item___set", header);
             Assert.Contains("void* value", header);
         }
         finally

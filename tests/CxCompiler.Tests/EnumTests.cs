@@ -75,14 +75,14 @@ public sealed class EnumTests
 
         var (header, source) = GenerateOutput(project);
 
-        Assert.Contains("typedef enum CX_ID_3(unnamed, Drawing, Color) {", header);
-        Assert.Contains("CX_ID_4(unnamed, Drawing, Color, Red),", header);
-        Assert.Contains("CX_ID_4(unnamed, Drawing, Color, Green) = 5,", header);
-        Assert.Contains("} CX_ID_3(unnamed, Drawing, Color);", header);
+        Assert.Contains("typedef enum unnamed_Drawing_Color {", header);
+        Assert.Contains("unnamed_Drawing_Color_Red,", header);
+        Assert.Contains("unnamed_Drawing_Color_Green = 5,", header);
+        Assert.Contains("} unnamed_Drawing_Color;", header);
         Assert.Contains(
-            "CX_ID_3(unnamed, Drawing, Color) CX_ID_3(unnamed, Drawing, Favorite)()",
+            "unnamed_Drawing_Color unnamed_Drawing_Favorite()",
             source);
-        Assert.Contains("return CX_ID_4(unnamed, Drawing, Color, Green);", source);
+        Assert.Contains("return unnamed_Drawing_Color_Green;", source);
     }
 
     [Fact]

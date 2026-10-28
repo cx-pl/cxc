@@ -406,6 +406,9 @@ public sealed partial class SemanticBinder
         sourceType = UnwrapConst(sourceType);
         targetType = UnwrapConst(targetType);
 
+        if (targetType is DecimalType && sourceType is IntTypeBase or CharType)
+            return true;
+
         return sourceType switch
         {
             SByteType => targetType is ShortType or IntType or LongType or FloatType or DoubleType,

@@ -1,0 +1,159 @@
+import System.Collections;
+import System.Threading.Tasks;
+
+namespace Math;
+
+public interface IValueBox<T> {
+    T GetValue();
+}
+
+public struct TaskPayload {
+    public int Number;
+    public string Label;
+
+    public constructor(int number, string label) {
+        Number = number;
+        Label = label;
+    }
+}
+
+public struct LargeTaskPayload {
+    public int Number;
+    public string Label0;
+    public string Label1;
+    public string Label2;
+    public string Label3;
+    public string Label4;
+    public string Label5;
+    public string Label6;
+    public string Label7;
+    public string Label8;
+    public string Label9;
+    public string Label10;
+    public string Label11;
+
+    public constructor(int number, string label) {
+        Number = number;
+        Label0 = label;
+        Label1 = label;
+        Label2 = label;
+        Label3 = label;
+        Label4 = label;
+        Label5 = label;
+        Label6 = label;
+        Label7 = label;
+        Label8 = label;
+        Label9 = label;
+        Label10 = label;
+        Label11 = label;
+    }
+}
+
+public class ValueBox<T> : IValueBox<T> {
+    private T _value;
+    public constructor(T value) { _value = value; }
+    public T GetValue() { return _value; }
+}
+
+public class GenericCallbackSource<T> {
+    private int _callbackCount;
+    public constructor() { _callbackCount = 0; }
+    public int CallbackCount() { return _callbackCount; }
+    public void Register(delegate() => void callback) {
+        delegate() => void wrapped = () => {
+            _callbackCount += 1;
+            callback();
+        };
+        wrapped();
+    }
+}
+
+public class CrossModuleCoroutineProbe {
+    public static int IteratorFinalizers;
+    public static int ImportedTaskSourceCalls;
+    public static int ImportedTaskSourceLastPriorResult;
+
+    public static void ResetImportedTaskSource() {
+        ImportedTaskSourceCalls = 0;
+        ImportedTaskSourceLastPriorResult = -1;
+    }
+
+    public static Task<int> LaterTaskSource(int priorResult, Task<int> source) {
+        ImportedTaskSourceCalls += 1;
+        ImportedTaskSourceLastPriorResult = priorResult;
+        return source;
+    }
+
+    public static Task<TaskPayload> ForwardPayload(Task<TaskPayload> source) {
+        return source;
+    }
+
+    public static Task<LargeTaskPayload> ForwardLargePayload(
+        Task<LargeTaskPayload> source) {
+        return source;
+    }
+
+    public static TaskPayload CreateCallbackPayload(int number, string label) {
+        return new TaskPayload(number, label);
+    }
+
+    public static Task<int> CreateTask(int value) {
+        return new Task<int>(value);
+    }
+
+    public static Task<string> CreateTextTask(string value) {
+        return new Task<string>(value);
+    }
+
+    public static Task<TaskPayload> CreatePayloadTask(int value) {
+        return new Task<TaskPayload>(new TaskPayload(value, "payload-root"));
+    }
+
+    public static Task<int> ForwardTask(Task<int> source) {
+        return source;
+    }
+
+    public static ValueTask<int> ForwardValueTask(ValueTask<int> source) {
+        ImportedTaskSourceCalls += 1;
+        return source;
+    }
+
+    public static ValueTask<TaskPayload> ForwardPayloadValueTask(
+        ValueTask<TaskPayload> source) {
+        ImportedTaskSourceCalls += 1;
+        return source;
+    }
+
+    public static async Task<int> EchoAfterAwait(Task<int> source) {
+        int value = await source;
+        return value;
+    }
+
+    public static async Task<int> RelayAfterReturnAwait(Task<int> source) {
+        return await source;
+    }
+
+    public static async Task<string> RelayTextAfterReturnAwait(Task<string> source) {
+        return await source;
+    }
+
+    public static async Task<TaskPayload> RelayPayloadAfterReturnAwait(
+        Task<TaskPayload> source) {
+        return await source;
+    }
+
+    public static IEnumerable<int> Values() {
+        try {
+            yield return 31;
+            yield return 32;
+        } finally {
+            CrossModuleCoroutineProbe.IteratorFinalizers += 1;
+        }
+    }
+}
+
+public class AbiReflectionTarget {
+    public int Value;
+    public constructor(int value) { Value = value; }
+    public int ReadValue() { return Value; }
+}

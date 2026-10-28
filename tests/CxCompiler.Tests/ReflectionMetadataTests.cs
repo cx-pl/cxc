@@ -22,16 +22,16 @@ public sealed class ReflectionMetadataTests
             }
             """);
 
-        Assert.Contains("static const struct cx_reflection_field CX_ID_3(unnamed, Sample, __reflection_fields)[]", source);
-        Assert.Contains("offsetof(struct CX_ID_2(unnamed, Sample), _value)", source);
+        Assert.Contains("static const struct cx_reflection_field unnamed_Sample___reflection_fields[]", source);
+        Assert.Contains("offsetof(struct unnamed_Sample, _value)", source);
         Assert.Contains("CX_REFLECTION_NO_OFFSET", source);
-        Assert.Contains("static const struct cx_reflection_parameter CX_ID_3(unnamed, Sample, __reflection_params_", source);
+        Assert.Contains("static const struct cx_reflection_parameter unnamed_Sample___reflection_params_", source);
         Assert.Contains("CX_REFLECTION_FLAG_FUNCTION_CONSTRUCTOR", source);
         Assert.Contains("CX_REFLECTION_FLAG_FUNCTION_PROPERTY_GET", source);
         Assert.Contains("CX_REFLECTION_FLAG_FUNCTION_PROPERTY_SET", source);
         Assert.Contains("CX_REFLECTION_FLAG_VIRTUAL", source);
         Assert.Contains("\"scale\"", source);
-        Assert.Contains("&CX_ID_3(unnamed, Mode, __typeinfo)", source);
+        Assert.Contains("&unnamed_Mode___typeinfo", source);
         Assert.Contains("CX_REFLECTION_FLAG_TYPE_ENUM", source);
         Assert.Contains(".fieldCount = 3", source);
         Assert.Contains(".functionCount = 4", source);
@@ -48,13 +48,68 @@ public sealed class ReflectionMetadataTests
             }
             """);
 
-        Assert.Contains("CX_ID_3(unnamed, Outer, __typeinfo)", source);
+        Assert.Contains("unnamed_Outer___typeinfo", source);
         Assert.Contains(".GenericArity = 1", source);
         Assert.Contains("CX_REFLECTION_FLAG_TYPE_GENERIC", source);
-        Assert.Contains("CX_ID_4(unnamed, Outer, Nested, __typeinfo)", source);
-        Assert.Contains("CX_ID_4(unnamed, Outer, Nested, __interfaces)", source);
-        Assert.Contains("&CX_ID_3(unnamed, IBase, __typeinfo)", source);
-        Assert.Contains("&CX_ID_3(unnamed, IDerived, __typeinfo)", source);
+        Assert.Contains("unnamed_Outer_Nested___typeinfo", source);
+        Assert.Contains("unnamed_Outer_Nested___interfaces", source);
+        Assert.Contains("&unnamed_IBase___typeinfo", source);
+        Assert.Contains("&unnamed_IDerived___typeinfo", source);
+    }
+
+    [Fact]
+    public void AsyncIteratorReflectionCarriesVersionedMoveAndDisposeMethods()
+    {
+        var project = CxProject.CreateDefaultApplicationProject();
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            namespace System;
+            public interface IAsyncDisposable {
+                System.Threading.Tasks.ValueTaskHandle DisposeAsync();
+            }
+            """));
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            namespace System.Collections;
+            public interface IAsyncEnumerable<T> {
+                IAsyncEnumerator<T> GetAsyncEnumerator(
+                    System.Threading.Tasks.CancellationToken cancellationToken);
+            }
+            public interface IAsyncEnumerator<T> : System.IAsyncDisposable {
+                T Current { const get; }
+                System.Threading.Tasks.ValueTask<bool> MoveNextAsync();
+            }
+            """));
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            import System.Collections;
+            import System.Threading.Tasks;
+            public class Producer {
+                public async IAsyncEnumerable<int> Values() { yield return 1; }
+            }
+            """));
+        new SemanticBinder().Bind(project);
+        var outputDirectory = Path.Combine(Path.GetTempPath(),
+            $"cxc-async-iterator-reflection-{Guid.NewGuid():N}");
+        string source;
+        string[] generatedFileNames;
+        try
+        {
+            Directory.CreateDirectory(outputDirectory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(outputDirectory, "Async.cx"));
+            var generatedFiles = Directory.GetFiles(outputDirectory, "*.c", SearchOption.AllDirectories);
+            generatedFileNames = generatedFiles.Select(Path.GetFileName)
+                .Where(name => name is not null).Select(name => name!).ToArray();
+            source = string.Join(Environment.NewLine, generatedFiles.Select(File.ReadAllText));
+        }
+        finally
+        {
+            if (Directory.Exists(outputDirectory)) Directory.Delete(outputDirectory, recursive: true);
+        }
+
+        Assert.True(source.Contains("\"Values\"", StringComparison.Ordinal),
+            "Generated C files: " + string.Join(", ", generatedFileNames));
+        Assert.Contains("\"GetAsyncEnumerator\"", source);
+        Assert.Contains("\"MoveNextAsync\"", source);
+        Assert.Contains("\"DisposeAsync\"", source);
+        Assert.Contains("CX_REFLECTION_FLAG_VISIBILITY_PUBLIC", source);
     }
 
     [Fact]
@@ -70,19 +125,19 @@ public sealed class ReflectionMetadataTests
             """);
 
         Assert.Contains(
-            "static cx_ptr CX_ID_3(unnamed, PublicCtor, __reflection_create_instance)(void)",
+            "static cx_ptr unnamed_PublicCtor___reflection_create_instance(void)",
             source);
-        Assert.Contains("CX_ID_3(unnamed, PublicCtor, __constructor)(__instance);", source);
-        Assert.Contains("CX_INIT_VTABLE(__instance, CX_ID_2(unnamed, PublicCtor));", source);
+        Assert.Contains("unnamed_PublicCtor___constructor(__instance);", source);
+        Assert.Contains("CX_INIT_VTABLE(__instance, unnamed_PublicCtor);", source);
         Assert.Contains(
-            ".createInstance = CX_ID_3(unnamed, PublicCtor, __reflection_create_instance),",
+            ".createInstance = unnamed_PublicCtor___reflection_create_instance,",
             source);
         Assert.Contains(".createInstance = CX_NULL,", source);
         Assert.DoesNotContain(
-            "static cx_ptr CX_ID_3(unnamed, PrivateCtor, __reflection_create_instance)",
+            "static cx_ptr unnamed_PrivateCtor___reflection_create_instance",
             source);
         Assert.DoesNotContain(
-            "static cx_ptr CX_ID_3(unnamed, AbstractType, __reflection_create_instance)",
+            "static cx_ptr unnamed_AbstractType___reflection_create_instance",
             source);
     }
 
@@ -97,15 +152,15 @@ public sealed class ReflectionMetadataTests
             """);
 
         Assert.Contains(
-            "static cx_ptr CX_ID_3(unnamed, Point, __reflection_create_instance)(void)",
+            "static cx_ptr unnamed_Point___reflection_create_instance(void)",
             source);
-        Assert.Contains("struct CX_ID_2(unnamed, Point) __instance = { 0 };", source);
+        Assert.Contains("struct unnamed_Point __instance = { 0 };", source);
         Assert.Contains(
             "return cx_box_value(&__instance, (cx_uint)sizeof(__instance), " +
-            "&CX_ID_3(unnamed, Point, __typeinfo));",
+            "&unnamed_Point___typeinfo);",
             source);
         Assert.Contains(
-            ".createInstance = CX_ID_3(unnamed, Point, __reflection_create_instance),",
+            ".createInstance = unnamed_Point___reflection_create_instance,",
             source);
     }
 
@@ -129,19 +184,19 @@ public sealed class ReflectionMetadataTests
             """);
 
         Assert.Matches(
-            @"static cx_ptr CX_ID_2\(cx_generic_[0-9a-f]+, __reflection_create_instance\)\(void\)",
+            @"static cx_ptr cx_generic_[0-9a-f]+___reflection_create_instance\(void\)",
             source);
         Assert.Contains("__instance = { 0 };", source);
         Assert.Contains("cx_box_value(&__instance", source);
         Assert.Matches(
-            @"static cx_ptr CX_ID_2\(cx_generic_[0-9a-f]+, __reflection_invoke_0\)",
+            @"static cx_ptr cx_generic_[0-9a-f]+___reflection_invoke_0",
             source);
         Assert.Contains("cx_unbox_value(__arguments[0]", source);
         Assert.Matches(
-            @"\.invokers = CX_ID_2\(cx_generic_[0-9a-f]+, __reflection_invokers\),",
+            @"\.invokers = cx_generic_[0-9a-f]+___reflection_invokers,",
             source);
         Assert.Matches(
-            @"\.createInstance = CX_ID_2\(cx_generic_[0-9a-f]+, __reflection_create_instance\),",
+            @"\.createInstance = cx_generic_[0-9a-f]+___reflection_create_instance,",
             source);
     }
 
@@ -170,17 +225,17 @@ public sealed class ReflectionMetadataTests
             """);
 
         Assert.Contains(
-            "static cx_ptr CX_ID_3(unnamed, Constructed, __reflection_invoke_0)", source);
+            "static cx_ptr unnamed_Constructed___reflection_invoke_0", source);
         Assert.Contains("if (__target != CX_NULL) return CX_NULL;", source);
-        Assert.Contains("CX_ID_3(unnamed, Constructed, __constructor)(__instance", source);
-        Assert.Contains("CX_ID_3(unnamed, InterfaceConstructed, __reflection_invoke_0)", source);
+        Assert.Contains("unnamed_Constructed___constructor(__instance", source);
+        Assert.Contains("unnamed_InterfaceConstructed___reflection_invoke_0", source);
         Assert.Contains("cx_checked_cast_object_to_interface(__arguments[0]", source);
-        Assert.Contains("CX_ID_3(unnamed, ValueConstructed, __reflection_invoke_0)", source);
+        Assert.Contains("unnamed_ValueConstructed___reflection_invoke_0", source);
         Assert.Contains("cx_unbox_value(__arguments[0]", source);
         Assert.Contains("return cx_box_value(&__instance", source);
         Assert.Contains("return (cx_ptr)__instance;", source);
         Assert.Contains(
-            "CX_ID_6(cxcore, System, Reflection, TypeInfo, CreateInstance, _2)", source);
+            "cxcore_System_Reflection_TypeInfo_CreateInstance__2", source);
     }
 
     [Fact]
@@ -201,22 +256,22 @@ public sealed class ReflectionMetadataTests
             }
             public class Thing : IThing { }
             """);
-        Assert.Contains("static cx_ptr CX_ID_3(unnamed, InvokeTarget, __reflection_invoke_0)", source);
-        Assert.Contains("return (cx_ptr)CX_ID_3(unnamed, InvokeTarget, Echo)(", source);
-        Assert.Contains("CX_ID_3(unnamed, InvokeTarget, Touch)(", source);
-        Assert.Contains("CX_ID_3(unnamed, InvokeTarget, StaticEcho)(", source);
+        Assert.Contains("static cx_ptr unnamed_InvokeTarget___reflection_invoke_0", source);
+        Assert.Contains("return (cx_ptr)unnamed_InvokeTarget_Echo(", source);
+        Assert.Contains("unnamed_InvokeTarget_Touch(", source);
+        Assert.Contains("unnamed_InvokeTarget_StaticEcho(", source);
         Assert.Contains("CX_REFLECTION_FLAG_STATIC", source);
         Assert.Contains(
-            "static cx_ptr CX_ID_3(unnamed, InvokeTarget, __reflection_invoke_5)", source);
+            "static cx_ptr unnamed_InvokeTarget___reflection_invoke_5", source);
         Assert.Contains("CX_GET_VTABLE(", source);
         Assert.Contains(
-            "return (cx_ptr)(CX_ID_3(unnamed, InvokeTarget, ReturnInterface)(",
+            "return (cx_ptr)(unnamed_InvokeTarget_ReturnInterface(",
             source);
         Assert.Contains(
-            "static cx_ptr CX_ID_3(unnamed, InvokeTarget, __reflection_invoke_2)",
+            "static cx_ptr unnamed_InvokeTarget___reflection_invoke_2",
             source);
         Assert.Contains("cx_checked_cast_object_to_interface(__arguments[0]", source);
-        Assert.Contains(".invokers = (const cx_reflection_invoker*)CX_ID_3(unnamed, InvokeTarget, __reflection_invokers)", source);
+        Assert.Contains(".invokers = (const cx_reflection_invoker*)unnamed_InvokeTarget___reflection_invokers", source);
         Assert.Contains("CX_NULL,", source);
     }
 
@@ -234,10 +289,10 @@ public sealed class ReflectionMetadataTests
             """);
 
         Assert.Contains(
-            "CX_ID_5(cxcore, System, Object, Type, __const_get)",
+            "cxcore_System_Object_Type___const_get",
             source);
         Assert.Contains(
-            "CX_ID_5(cxcore, System, Reflection, TypeInfo, CreateInstance)",
+            "cxcore_System_Reflection_TypeInfo_CreateInstance",
             source);
     }
 
@@ -251,13 +306,13 @@ public sealed class ReflectionMetadataTests
             """);
 
         Assert.Matches(
-            @"static cx_ptr CX_ID_2\(cx_generic_[0-9a-f]+, __reflection_create_instance\)\(void\)",
+            @"static cx_ptr cx_generic_[0-9a-f]+___reflection_create_instance\(void\)",
             source);
         Assert.Matches(
-            @"\.createInstance = CX_ID_2\(cx_generic_[0-9a-f]+, __reflection_create_instance\),",
+            @"\.createInstance = cx_generic_[0-9a-f]+___reflection_create_instance,",
             source);
         Assert.Contains(
-            "CX_ID_3(unnamed, Marker, __constructor)(__instance);",
+            "unnamed_Marker___constructor(__instance);",
             source);
     }
 
@@ -283,8 +338,69 @@ public sealed class ReflectionMetadataTests
             @"struct cx_generic_[0-9a-f]+ __cx_value_return = cx_generic_[0-9a-f]+\(\(struct cx_generic_[0-9a-f]+\*\)__target\);",
             source);
         Assert.DoesNotContain(
-            "struct CX_ID_2(unnamed, Pair) __cx_value_return =",
+            "struct unnamed_Pair __cx_value_return =",
             source);
+    }
+
+    [Fact]
+    public void ForwardDeclaresOpenGenericTypeInfoBeforeEarlierGenericReferences()
+    {
+        var source = Generate("""
+            public class Holder<T> { public Provider<T> Value; public constructor() {} }
+            public class Provider<T> { public constructor() {} }
+            public class Client {
+                public object Create() {
+                    Holder<int> holder = default;
+                    Provider<int> provider = new Provider<int>();
+                    return provider;
+                }
+            }
+            """);
+
+        var declaration = "extern struct cxcore_System_Reflection_TypeInfo " +
+            "unnamed_Provider___typeinfo;";
+        var vtable = "CX_BEGIN_VTABLE_DEF(unnamed_Holder)";
+        Assert.True(source.IndexOf(declaration, StringComparison.Ordinal) >= 0);
+        Assert.True(source.IndexOf(declaration, StringComparison.Ordinal) <
+            source.IndexOf(vtable, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ClosedGenericReflectionSubstitutionUsesConstructedTypeInfo()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("closed_generic_reflection_typeinfo");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Provider<T> { public constructor() {} }
+            public class Holder<T> { public Provider<T> Value; public constructor() {} }
+            public class Client {
+                public object Create() {
+                    Holder<int> holder = default;
+                    Provider<int> provider = new Provider<int>();
+                    return provider;
+                }
+            }
+            """));
+        new SemanticBinder().Bind(project);
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-closed-generic-reflection-typeinfo-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(directory,
+                "closed_generic_reflection_typeinfo.c"));
+            var provider = project.GenericTypeInstances.Single(instance =>
+                instance.Type.Name == "Provider" &&
+                instance.Type.TypeArguments.Single() is CxCompiler.Model.Types.BuiltInTypes.IntType);
+            var providerInfo = $"&{provider.Type.ConstructedIdentity!.CIdentifier}___typeinfo";
+
+            Assert.Contains(providerInfo, source);
+            Assert.DoesNotContain("&unnamed_Provider___typeinfo", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
     }
 
     private static string Generate(string input)

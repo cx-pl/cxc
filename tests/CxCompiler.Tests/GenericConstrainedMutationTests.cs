@@ -67,8 +67,8 @@ public sealed class GenericConstrainedMutationTests
 
             Assert.Contains("__cx_property_value_0 += delta", generated,
                 StringComparison.Ordinal);
-            Assert.Contains("Value, __get)", generated, StringComparison.Ordinal);
-            Assert.Contains("Value, __set)", generated, StringComparison.Ordinal);
+            Assert.Contains("Value___get", generated, StringComparison.Ordinal);
+            Assert.Contains("Value___set", generated, StringComparison.Ordinal);
         }
         finally
         {
@@ -131,8 +131,8 @@ public sealed class GenericConstrainedMutationTests
 
             Assert.Contains("Adjust", generated, StringComparison.Ordinal);
             Assert.Contains("struct cx_iface_ref", generated, StringComparison.Ordinal);
-            Assert.Contains("Value, __set)", generated, StringComparison.Ordinal);
-            Assert.Contains("Item, __set)", generated, StringComparison.Ordinal);
+            Assert.Contains("Value___set", generated, StringComparison.Ordinal);
+            Assert.Contains("Item___set", generated, StringComparison.Ordinal);
         }
         finally
         {

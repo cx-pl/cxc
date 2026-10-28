@@ -12,6 +12,7 @@ public sealed class FunctionSymbol
     public int OverloadIndex { get; }
     public FunctionDeclaration? Declaration { get; }
     public NativeImportMetadata? NativeImport => Declaration?.NativeImport;
+    public bool IsAsync => Declaration?.IsAsync ?? false;
     public FunctionDeclaration? ImplementationDeclaration { get; }
     public string? SpecializationName { get; }
     public NamedType? ClosedContainingType { get; }

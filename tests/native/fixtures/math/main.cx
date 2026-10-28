@@ -1,0 +1,40 @@
+import System;
+
+public int Main(string[] args) {
+    if (Math.Abs(-4) != 4 || Math.Abs(-5000000000l) != 5000000000l) return 1;
+    if (Math.Abs(-1.5f) != 1.5f || Math.Abs(-1.5) != 1.5) return 2;
+    if (Math.Clamp(-5, -2, 2) != -2 || Math.Clamp(5000000000l, -3l, 3l) != 3l) return 3;
+    if (Math.Clamp(5.0f, -2.0f, 2.0f) != 2.0f || Math.Clamp(-5.0, -2.0, 2.0) != -2.0) return 4;
+    if (Math.Floor(-3) != -3 || Math.Floor(5000000000l) != 5000000000l) return 5;
+    if (Math.Floor(-1.5f) != -2.0f || Math.Floor(1.5) != 1.0) return 6;
+    if (Math.Ceiling(-3) != -3 || Math.Ceiling(5000000000l) != 5000000000l) return 7;
+    if (Math.Ceiling(1.5f) != 2.0f || Math.Ceiling(-1.5) != -1.0) return 8;
+    if (Math.Min(-3, 2) != -3 || Math.Min(-5000000000l, 2l) != -5000000000l) return 9;
+    if (Math.Min(-1.5f, 2.5f) != -1.5f || Math.Min(2.5, -1.5) != -1.5) return 10;
+    if (Math.Max(-3, 2) != 2 || Math.Max(2l, 5000000000l) != 5000000000l) return 11;
+    if (Math.Max(-1.5f, 2.5f) != 2.5f || Math.Max(2.5, -1.5) != 2.5) return 12;
+    if (Math.Round(2.5f) != 2.0f || Math.Round(3.5) != 4.0) return 13;
+    if (Math.Round(1.125f, 2) != 1.12f || Math.Round(-1.375, 2) != -1.38) return 14;
+    if (Math.Abs(Math.Log((float)Math.E) - 1.0f) > 0.000001f) return 15;
+    if (Math.Abs(Math.Log(Math.E) - 1.0) > 0.000000000001) return 16;
+    if (Math.Abs(Math.Log(8.0f, 2.0f) - 3.0f) > 0.000001f) return 17;
+    if (Math.Abs(Math.Log(8.0, 2.0) - 3.0) > 0.000000000001) return 18;
+    if (Math.ReciprocalEstimate(4.0f) != 0.25f || Math.ReciprocalEstimate(-4.0) != -0.25) return 19;
+    if (Math.ReciprocalSqrtEstimate(16.0f) != 0.25f || Math.ReciprocalSqrtEstimate(16.0) != 0.25) return 20;
+    if (Math.Pi < 3.14159 || Math.Pi > 3.14160 || Math.Tau != 2.0 * Math.Pi) return 21;
+    if (Math.Abs(Math.Sqrt2 * Math.Sqrt2 - 2.0) > 0.000000000001) return 22;
+    if (Math.Abs(Math.Sqrt3 * Math.Sqrt3 - 3.0) > 0.000000000001) return 23;
+    bool caught = false;
+    try { Math.Abs(-2147483648); }
+    catch (Exception error) { caught = error.Message.Length > 0u; }
+    if (!caught) return 24;
+    caught = false;
+    try { Math.Clamp(0, 2, 1); }
+    catch (Exception error) { caught = true; }
+    if (!caught) return 25;
+    caught = false;
+    try { Math.Round(1.5, 16); }
+    catch (Exception error) { caught = true; }
+    if (!caught) return 26;
+    return 0;
+}

@@ -201,14 +201,11 @@ public sealed partial class SemanticBinder
                 context.DeclarationScope.Declarations,
                 context.Namespace,
                 context.Imports,
-                context.IsProjectReference);
-            AddProjectSymbols(
-                context.ProjectName ?? project.Name,
-                context.DeclarationScope.Declarations);
+                IsExternalReference(context));
             foreach (var extension in context.DeclarationScope.Declarations
                 .OfType<ExtensionDeclaration>())
             {
-                if (context.IsProjectReference && extension.Visibility != Visibility.Public)
+                if (IsExternalReference(context) && extension.Visibility != Visibility.Public)
                 {
                     continue;
                 }
@@ -216,7 +213,38 @@ public sealed partial class SemanticBinder
                     extension.Members.MemberDeclarations.Declarations,
                     extension.Namespace,
                     context.Imports,
-                    context.IsProjectReference);
+                    IsExternalReference(context));
+            }
+        }
+
+        var asyncLoweringFunctions = project.CompilationContexts
+            .Where(context => !context.IsSyntheticCore)
+            .SelectMany(context => EnumerateFunctions(
+                context.DeclarationScope.Declarations).Where(function =>
+                    !IsExternalReference(context) || IsPublicApiFunction(function)))
+            .Distinct()
+            .ToArray();
+        foreach (var context in project.CompilationContexts)
+        {
+            if (!IsExternalReference(context))
+            {
+                foreach (var function in EnumerateFunctions(
+                    context.DeclarationScope.Declarations))
+                {
+                    AsyncFunctionLowerer.Lower(
+                        function, asyncLoweringFunctions, context.Imports);
+                }
+            }
+            AddProjectSymbols(
+                context.ProjectName ?? project.Name,
+                context.DeclarationScope.Declarations);
+            foreach (var extension in context.DeclarationScope.Declarations
+                .OfType<ExtensionDeclaration>())
+            {
+                if (IsExternalReference(context) && extension.Visibility != Visibility.Public)
+                {
+                    continue;
+                }
                 AddProjectSymbols(
                     context.ProjectName ?? project.Name,
                     extension.Members.MemberDeclarations.Declarations);
@@ -243,7 +271,7 @@ public sealed partial class SemanticBinder
 
         foreach (var context in project.CompilationContexts)
         {
-            if (context.IsProjectReference)
+            if (IsExternalReference(context))
             {
                 continue;
             }
@@ -271,6 +299,67 @@ public sealed partial class SemanticBinder
                 }
             }
         }
+
+        foreach (var context in project.CompilationContexts)
+        {
+            if (IsExternalReference(context))
+            {
+                continue;
+            }
+
+            var generatedIteratorTypes = IteratorDeclarationLowerer.Lower(
+                context, project.CompilationContexts);
+            if (generatedIteratorTypes.Count == 0)
+            {
+                continue;
+            }
+
+            var moduleName = context.ProjectName ?? project.Name;
+            AddProjectTypes(moduleName, generatedIteratorTypes, context.Imports);
+            ResolveGenericTypeConstraints(
+                generatedIteratorTypes, context.Imports);
+            ResolveBaseTypes(
+                moduleName, generatedIteratorTypes, context.Imports);
+            ValidateGenericBaseTypeConstraints(generatedIteratorTypes);
+            ResolveDeclarationTypes(
+                generatedIteratorTypes,
+                context.Namespace,
+                context.Imports,
+                publicApiOnly: false);
+            AddProjectSymbols(moduleName, generatedIteratorTypes);
+        }
+
+        BindVirtualMethods();
+
+        foreach (var context in project.CompilationContexts)
+        {
+            if (IsExternalReference(context))
+            {
+                continue;
+            }
+
+            foreach (var function in EnumerateFunctions(context.DeclarationScope.Declarations)
+                .Where(function => function.IsIteratorFactory))
+            {
+                BindFunction(function, context.Imports);
+            }
+
+            foreach (var iteratorType in context.DeclarationScope.Declarations
+                .OfType<ClassDeclaration>()
+                .Where(declaration => declaration.Name.StartsWith(
+                    "__CxIterator_", StringComparison.Ordinal)))
+            {
+                foreach (var function in EnumerateFunctions([iteratorType]))
+                {
+                    BindFunction(function, context.Imports);
+                }
+                foreach (var accessor in EnumeratePropertyAccessors([iteratorType]))
+                {
+                    BindPropertyAccessor(accessor, context.Imports);
+                }
+            }
+        }
+
         RegisterClosedClassConceptFunctionInstances();
         while (true)
         {
@@ -278,6 +367,7 @@ public sealed partial class SemanticBinder
             var genericFunctionCount = project.GenericFunctionInstances.Count;
             RegisterClosedGenericClassFunctionInstances();
             RegisterClosedGenericClassFunctionTargets();
+            RegisterClosedGenericMethodFunctionTargets();
             RegisterClosedGenericConstructorObjectCreations();
             BindGenericVirtualDispatchTargets(project);
             if (project.GenericTypeInstances.Count == genericTypeCount &&

@@ -1,0 +1,43 @@
+import System.Threading.Tasks;
+
+namespace App;
+
+public int Run() {
+    ReusableValueTaskSource<int> source =
+        new ReusableValueTaskSource<int>();
+    uint firstVersion = source.GetVersion();
+    ReusableValueTask<int> first = new ReusableValueTask<int>();
+    first.SetSource(source, firstVersion);
+    source.SetResult(firstVersion, 41);
+    if (!first.IsCompleted || first.GetResult() != 41) return 1;
+    source.Reset();
+
+    try {
+        bool staleStatus = first.IsCompleted;
+        return 2;
+    } catch (Exception) { }
+    try {
+        first.GetResult();
+        return 3;
+    } catch (Exception) { }
+    try {
+        first.AsTask();
+        return 4;
+    } catch (Exception) { }
+    try {
+        first.OnCompleted(() => { });
+        return 5;
+    } catch (Exception) { }
+
+    uint secondVersion = source.GetVersion();
+    ReusableValueTask<int> second = new ReusableValueTask<int>();
+    second.SetSource(source, secondVersion);
+    try {
+        source.SetResult(firstVersion, 99);
+        return 6;
+    } catch (Exception) { }
+    if (second.IsCompleted) return 7;
+    source.SetResult(secondVersion, 42);
+    if (!second.IsCompleted || second.GetResult() != 42) return 8;
+    return 0;
+}

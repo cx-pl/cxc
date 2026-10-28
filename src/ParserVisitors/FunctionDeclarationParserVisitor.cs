@@ -23,7 +23,7 @@ public class FunctionDeclarationParserVisitor : CxParserBaseVisitor<FunctionDecl
             new TypeNameContextVisitor().Visit(context.returnType));
         var memberModifiers = new MemberModifiersParserVisitor().Visit(context.memberModifiers());
 
-        var operatorToken = OperatorNames.GetToken(context.name.Text);
+        var operatorToken = context.operatorToken?.GetText();
         var genericConstraints = context.genericConstraintClauses()?
             .genericConstraintClause()
             .Select(clause => new GenericTypeConstraint(
@@ -64,7 +64,8 @@ public class FunctionDeclarationParserVisitor : CxParserBaseVisitor<FunctionDecl
             genericConstraints,
             conceptConstraints,
             [],
-            unclassifiedGenericTypeArguments).WithSourceSpan(context);
+            unclassifiedGenericTypeArguments,
+            isAsync: context.async is not null).WithSourceSpan(context);
         _functionDeclaration.Annotations = AnnotationParser.Parse(context.annotations());
 
         foreach (var parameter in EnumerateFunctionParameters(context.functionParameters()))

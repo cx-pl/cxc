@@ -213,6 +213,12 @@ public interface ICxParserVisitor<Result> : IParseTreeVisitor<Result> {
 	/// <return>The visitor result.</return>
 	Result VisitFunctionDeclaration([NotNull] CxParser.FunctionDeclarationContext context);
 	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.overloadableOperator"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitOverloadableOperator([NotNull] CxParser.OverloadableOperatorContext context);
+	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.functionGenericTypeList"/>.
 	/// </summary>
 	/// <param name="context">The parse tree.</param>
@@ -663,6 +669,18 @@ public interface ICxParserVisitor<Result> : IParseTreeVisitor<Result> {
 	/// <return>The visitor result.</return>
 	Result VisitPrimaryExpressionStart([NotNull] CxParser.PrimaryExpressionStartContext context);
 	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.nameOfExpression"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitNameOfExpression([NotNull] CxParser.NameOfExpressionContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.typeOfExpression"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitTypeOfExpression([NotNull] CxParser.TypeOfExpressionContext context);
+	/// <summary>
 	/// Visit a parse tree produced by <see cref="CxParser.nativeTypeQuery"/>.
 	/// </summary>
 	/// <param name="context">The parse tree.</param>
@@ -862,5 +880,11 @@ public interface ICxParserVisitor<Result> : IParseTreeVisitor<Result> {
 	/// <param name="context">The parse tree.</param>
 	/// <return>The visitor result.</return>
 	Result VisitBooleanLiteral([NotNull] CxParser.BooleanLiteralContext context);
+	/// <summary>
+	/// Visit a parse tree produced by <see cref="CxParser.yieldStatement"/>.
+	/// </summary>
+	/// <param name="context">The parse tree.</param>
+	/// <return>The visitor result.</return>
+	Result VisitYieldStatement([NotNull] CxParser.YieldStatementContext context);
 }
 } // namespace CxCompiler.Grammar

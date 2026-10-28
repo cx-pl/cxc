@@ -3,12 +3,74 @@ using CxCompiler.Grammar;
 using CxCompiler.Model.Errors;
 using CxCompiler.Model.Project;
 using CxCompiler.Model.Types;
+using CxCompiler.OutputGenerators;
 using CxCompiler.Semantics;
 
 namespace CxCompiler.Tests;
 
 public sealed class SourceLocationTests
 {
+    [Fact]
+    public void LoweredAwaitAndYieldKeepSourceLineDirectivesAndNatvisStateFields()
+    {
+        const string source = """
+            import System.Threading.Tasks;
+            import System.Collections;
+            public class DebugOwner {
+                public int Offset;
+                public async Task<int> Await(Task<int> source) {
+                    int prefix = Offset;
+                    int result = await source;
+                    return prefix + result;
+                }
+                public System.Collections.IEnumerable<int> Values(int offset) {
+                    int saved = Offset + offset;
+                    yield return saved;
+                    offset = saved;
+                }
+            }
+            """;
+        var project = CxProject.CreateDefaultApplicationProject();
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            namespace System.Collections;
+            public interface IEnumerable<T> { IEnumerator<T> GetEnumerator() const; }
+            public interface IEnumerator<T> { T Current { const get; } bool MoveNext(); }
+            """, "debug-collections.cx"));
+        project.AddCompilationContext(CompilerTestHelper.Parse(
+            source, "debug-mapping.cx"));
+        new SemanticBinder().Bind(project);
+        var outputDirectory = Path.Combine(Path.GetTempPath(),
+            $"cxc-source-map-{Guid.NewGuid():N}");
+
+        try
+        {
+            Directory.CreateDirectory(outputDirectory);
+            CCodeOutputGenerator.GenerateOutput(project,
+                Path.Combine(outputDirectory, "debug-mapping.cx"));
+            var generatedC = File.ReadAllText(
+                Path.Combine(outputDirectory, "unnamed.c"));
+            var natvis = File.ReadAllText(
+                Path.Combine(outputDirectory, "unnamed.natvis"));
+            var escapedSourcePath = Path.GetFullPath("debug-mapping.cx")
+                .Replace("\\", "\\\\", StringComparison.Ordinal);
+
+            Assert.Contains($"#line 7 \"{escapedSourcePath}\"", generatedC);
+            Assert.Contains($"#line 8 \"{escapedSourcePath}\"", generatedC);
+            Assert.Contains($"#line 12 \"{escapedSourcePath}\"", generatedC);
+            Assert.Contains($"#line 13 \"{escapedSourcePath}\"", generatedC);
+            Assert.Contains("<Item Name=\"__cx_state\">__cx_state</Item>", natvis);
+            Assert.Contains("<Item Name=\"__cx_receiver\">__cx_receiver</Item>", natvis);
+            Assert.Contains("<Item Name=\"__cx_local_0\">__cx_local_0</Item>", natvis);
+        }
+        finally
+        {
+            if (Directory.Exists(outputDirectory))
+            {
+                Directory.Delete(outputDirectory, recursive: true);
+            }
+        }
+    }
+
     [Fact]
     public void ParserAttachesFileAndRangeToDeclarationsStatementsAndExpressions()
     {

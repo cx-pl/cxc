@@ -682,7 +682,7 @@ public sealed class GenericFunctionBodyTests
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var source = File.ReadAllText(Path.Combine(directory, "generic_array_count.c"));
             Assert.Contains(
-                "CX_ID_6(cxcore, System, Collections, Array, Length, __const_get)(values)",
+                "cxcore_System_Collections_Array_Length___const_get(values)",
                 source);
         }
         finally
@@ -806,7 +806,7 @@ public sealed class GenericFunctionBodyTests
             var source = File.ReadAllText(Path.Combine(directory,
                 "generic_array_length_equality.c"));
             Assert.True(source.Split(
-                "CX_ID_6(cxcore, System, Collections, Array, Length, __const_get)(").Length - 1 >= 8);
+                "cxcore_System_Collections_Array_Length___const_get(").Length - 1 >= 8);
             Assert.DoesNotContain("_unknowntype_", source);
         }
         finally

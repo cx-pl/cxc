@@ -36,7 +36,7 @@ public sealed class NativeInteropTests
         var files = Generate(project);
         Assert.Contains("native_add(20, 22)", files.Source);
         Assert.Contains("#include <fixture.h>", files.Header);
-        Assert.DoesNotContain("CX_ID_2(interop, Add)", files.Header);
+        Assert.DoesNotContain("interop_Add", files.Header);
         Assert.Contains("CMAKE_SYSTEM_NAME STREQUAL \"Linux\"", files.CMake);
         Assert.Contains("target_link_libraries(interop PUBLIC \"fixture\")", files.CMake);
     }
@@ -80,7 +80,7 @@ public sealed class NativeInteropTests
         Assert.Contains("unsafe", Assert.Throws<CompilationErrorException>(() => new SemanticBinder().Bind(project)).Message);
         project = Project("public extern int Native(); public int Main() { return Native(); }");
         new SemanticBinder().Bind(project);
-        Assert.Contains("CX_ID_2(interop, Native)", Generate(project).Source);
+        Assert.Contains("interop_Native", Generate(project).Source);
     }
 
     [Fact]

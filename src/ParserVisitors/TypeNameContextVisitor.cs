@@ -145,7 +145,7 @@ public class TypeNameContextVisitor : CxParserBaseVisitor<TypeBase>
         {
             CxLexer.Float => BuiltInSystemTypes.Float,
             CxLexer.Double => BuiltInSystemTypes.Double,
-            // CxLexer.Decimal => BuiltInSystemTypes.Decimal, // TODO
+            CxLexer.Decimal => BuiltInSystemTypes.Decimal,
             CxLexer.Float32 => BuiltInSystemTypes.Float,
             CxLexer.Float64 => BuiltInSystemTypes.Double,
             _ => throw new InternalCompilerException($"Unknown floating type: {context.GetText()}"),

@@ -1,5 +1,21 @@
 # Native conformance checks
 
+`run-stdlib-additions.ps1` builds and runs `fixtures/stdlib-additions/main.cx`
+against `cxcore`. It checks all eight UUID versions, deterministic name-based
+IDs, numeric nullable `TryParse` results, fluent StringBuilder calls, Unicode
+length, immutable snapshots, and virtual `ToString`. It accepts the same build
+and static/shared link options as `run-keyword-expressions.ps1`.
+
+`run-keyword-expressions.ps1` builds and runs
+`fixtures/keyword-expressions/main.cx`. It covers safe reference/interface and
+array casts, nullable unboxing, generic safe casts and type queries, exact decimal
+arithmetic, conversions, properties, array storage, `nameof` without evaluation,
+and `typeof` identities. It accepts `-Cxc`, `-CxCoreDir`, `-Generator`,
+`-Architecture`, `-Configuration`, and `-StaticLink ON|OFF`.
+The runtime's `cxcore_decimal_tests` additionally checks 400 arithmetic vectors
+generated from .NET's System.Decimal; regenerate them with
+`cxcore/tests/generate_decimal_vectors.ps1`.
+
 `run-threading-e2e.ps1` verifies the Milestone 16 `System.Threading` API and GC
 integration. It generates `fixtures/threading.cx`, builds through the portable
 `fixtures/threading/CMakeLists.txt`, and checks normal execution plus subprocess
@@ -310,3 +326,97 @@ gcc/clang. CMAKE selects the CMake executable and CX_STATIC_LINK selects ON/OFF.
 NegativeOnly runs just SDK rejection checks on Windows. The small handwritten C
 fixture is compiler conformance infrastructure; SDK bindings and consuming examples
 contain only CX. Package integration runners are in ../../../examples/native-bindings.
+
+## Milestone 18 strict generated-C checks
+
+After regenerating `cxcore`, `cxnet`, and `streaming-read`, compile each generated
+C translation unit with MSVC C11 warnings enabled for both architecture and
+linkage configurations:
+
+```powershell
+.\tests\native\run-generated-c-strict.ps1 -Architecture x64
+.\tests\native\run-generated-c-strict.ps1 -Architecture x86
+```
+
+The script uses `/W4 /WX`; it suppresses C4100 for unused generated thunk
+parameters, C4130 for intentional constant comparisons, and C4702 for
+unreachable coroutine continuation paths. It writes object files to a unique
+temporary directory and removes them after a successful run.
+
+## Milestone 18 coroutine acceptance fixture
+
+`run-coroutine-acceptance.ps1` generates the existing awaited-finally probe source
+and builds it through `fixtures/coroutine-acceptance/CMakeLists.txt`. The runner
+accepts `-Platform Windows|Linux`, `-Architecture x64|x86` (Linux currently x64),
+and `-LinkMode static|shared|both`. The positive runtime scenario checks
+synchronous iterator cleanup and reentrancy rejection; pending, faulted and
+canceled Tasks with awaited cleanup; async enumeration and exactly-once
+disposal; closure capture after forced GC and enumerator disposal; and shared
+library relocations. Compiler acceptance and rejection tests remain in the
+separate compiler test project.
+
+Windows x64 static/shared:
+
+```powershell
+./cxc/tests/native/run-coroutine-acceptance.ps1 `
+  -Cxc ./cxc/src/bin/Debug/net10.0/CxCompiler.dll `
+  -Platform Windows -Architecture x64 -LinkMode both
+```
+
+Linux x64 static/shared uses WSL, GCC, `ldd`, and CMake 3.31 or newer:
+
+```powershell
+./cxc/tests/native/run-coroutine-acceptance.ps1 `
+  -Cxc ./cxc/src/bin/Debug/net10.0/CxCompiler.dll `
+  -Platform Linux -Architecture x64 -LinkMode both `
+  -Distribution Ubuntu -CMake /path/in/wsl/to/cmake
+```
+
+`run-awaited-finally-linux.ps1` remains as the underlying probe generator and
+accepts the same platform, architecture and link-mode options. Fixture output is
+kept in the Windows temporary directory on failure and removed after all selected
+builds, runtime checks and relocation checks pass. The fixture exercises positive
+runtime behavior only; negative compiler tests remain separate.
+
+## Milestone 18 cross-module task and iterator ABI fixture
+
+`run-cross-module-abi.ps1` builds a CX library and its app consumer. It checks
+public task/iterator APIs, typed results, reusable sources, forced GC,
+reflection, callback ownership, and the supported imported Task/ValueTask await
+forms with allocation assertions. For example, from the workspace root:
+
+```powershell
+./cxc/tests/native/run-cross-module-abi.ps1 `
+  -Cxc ./cxc/src/bin/Debug/net10.0/CxCompiler.dll `
+  -Platform Windows -Architecture x86 -LinkMode static -KeepBuild
+```
+
+Windows also supports x64. Linux uses `-Platform Linux -Architecture x64`, WSL
+Ubuntu and `-CMake /path/in/wsl/to/cmake` (3.31 or newer); shared execution also
+checks `ldd -r`. Each CTest reports a failing process result code, limits app
+execution to 60 seconds, and has a 90-second outer timeout. Linux process exit
+codes follow the OS's eight-bit limit. Compiler structural and negative tests
+remain separate from native execution.
+
+Failures retain their unique temporary build root. `-KeepBuild` also retains a
+successful root and prints `BUILD PRESERVED: ...`. Use that path to investigate
+intermittent assertions, for example:
+
+```powershell
+ctest --test-dir <retained-root>/build-Windows-x86-static `
+  -C Release --output-on-failure --repeat until-fail:5
+```
+
+Use a separate `-LinkMode shared -KeepBuild` run to repeat the shared build.
+Both-mode runs test each mode immediately, but share the app output path; after
+both modes finish, the executable there belongs to the last build. Preserve the
+first failure and report repeat results independently; successful retries do not
+explain an intermittent failure.
+
+## System.Math
+
+`run-math.ps1` compiles and executes all declared Math overloads and constants,
+including managed errors for integer absolute-value overflow, reversed clamp
+bounds, and invalid rounding precision. It accepts `-StaticLink ON` or `OFF`.
+The cxcore CTest suite additionally checks NaN, infinity, signed zero,
+ties-to-even rounding, and native rounding-mode independence.

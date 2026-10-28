@@ -81,17 +81,20 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
     {
         ExpressionBase expression = Visit(context.shiftExpression(0));
         var shiftIndex = 1;
+        var isSafeCast = false;
         foreach (var child in context.children.Skip(1))
         {
-            if (child is ITerminalNode { Symbol.Type: CxLexer.Is })
+            if (child is ITerminalNode { Symbol.Type: CxLexer.Is or CxLexer.As } typeOperator)
             {
+                isSafeCast = typeOperator.Symbol.Type == CxLexer.As;
                 continue;
             }
             if (child is CxParser.TypeNameContext typeName)
             {
-                expression = new TypeTestExpression(
-                    expression,
-                    new TypeNameContextVisitor().Visit(typeName));
+                var targetType = new TypeNameContextVisitor().Visit(typeName);
+                expression = isSafeCast
+                    ? new CastExpression(targetType, expression, isSafe: true)
+                    : new TypeTestExpression(expression, targetType);
                 continue;
             }
             if (child is ITerminalNode terminal)
@@ -150,7 +153,7 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
         }
         if (context.Await() is not null)
         {
-            throw new InternalCompilerException($"Unary expression '{context.GetText()}' is not yet supported.");
+            return new AwaitExpression(Visit(context.unaryExpression())).WithSourceSpan(context);
         }
 
         var operatorText = context.children.OfType<ITerminalNode>().First().GetText();
@@ -230,6 +233,10 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
 
     public override ExpressionBase VisitPrimaryExpressionStart([NotNull] CxParser.PrimaryExpressionStartContext context)
     {
+        if (context.typeOfExpression() is { } typeOf)
+            return new TypeOfExpression(new TypeNameContextVisitor().Visit(typeOf.typeNameOrVoid()))
+                .WithSourceSpan(typeOf);
+        if (context.nameOfExpression() is { } nameOf) return Visit(nameOf);
         if (context.nativeStackAllocation() is { } allocation)
             return new NativeStackAllocationExpression(new TypeNameContextVisitor().Visit(allocation.typeName()),
                 Visit(allocation.expression())).WithSourceSpan(allocation);
@@ -286,6 +293,22 @@ public sealed class ExpressionParserVisitor : CxParserBaseVisitor<ExpressionBase
         }
 
         throw new InternalCompilerException($"Expression '{context.GetText()}' is not yet supported.");
+
+    }
+
+    public override ExpressionBase VisitNameOfExpression([NotNull] CxParser.NameOfExpressionContext context)
+    {
+        var type = context.typeName() is { } namedType ? new TypeNameContextVisitor().Visit(namedType) : null;
+        var operand = context.expression() is { } argument ? Visit(argument) : null;
+        var name = type is NamedType named ? named.Name.Split('.').Last()
+            : context.typeName()?.builtInType()?.GetText() ?? operand switch
+            {
+                IdentifierExpression identifier => identifier.Identifier.Parts.Last(),
+                MemberAccessExpression member => member.MemberName,
+                _ => throw new CxCompiler.Model.Errors.CompilationErrorException(
+                    "nameof requires a type, namespace, variable, or member name.", SourceSpan.From(context)),
+            };
+        return new NameOfExpression(name, type, operand).WithSourceSpan(context);
     }
 
     public override ExpressionBase VisitLiteral([NotNull] CxParser.LiteralContext context)

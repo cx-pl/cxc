@@ -34,7 +34,7 @@ public sealed class DefaultParameterTests
             .OfType<FunctionDeclaration>().First();
 
         Assert.Equal(value, function.Parameters[0].DefaultValueText);
-        Assert.Contains($"Read)({value})", GenerateSource(source));
+        Assert.Contains($"Read({value})", GenerateSource(source));
     }
 
     [Fact]
@@ -45,7 +45,7 @@ public sealed class DefaultParameterTests
             short Run() { return Read(); }
             """);
 
-        Assert.Contains("Read)(-32768)", generated);
+        Assert.Contains("Read(-32768)", generated);
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public sealed class DefaultParameterTests
             int Run() { return Add(7); }
             """);
 
-        Assert.Contains("Add)(7, 5)", generated);
+        Assert.Contains("Add(7, 5)", generated);
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public sealed class DefaultParameterTests
             short Run() { return Read(); }
             """);
 
-        Assert.Contains("Read)(0)", generated);
+        Assert.Contains("Read(0)", generated);
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public sealed class DefaultParameterTests
             int Run() { return Pick(7); }
             """);
 
-        Assert.Contains("Pick)(7, 1)", generated);
+        Assert.Contains("Pick(7, 1)", generated);
     }
 
     [Fact]
@@ -127,7 +127,7 @@ public sealed class DefaultParameterTests
             Item Run() { return Read(); }
             """);
 
-        Assert.Contains("Read)(CX_NULL)", generated);
+        Assert.Contains("Read(CX_NULL)", generated);
     }
 
     [Fact]
@@ -138,7 +138,7 @@ public sealed class DefaultParameterTests
             int Run() { return Read(); }
             """);
 
-        Assert.Contains("Read)(((cx_int){ 0 })", generated);
+        Assert.Contains("Read(((cx_int){ 0 })", generated);
     }
 
     [Fact]
@@ -185,7 +185,7 @@ public sealed class DefaultParameterTests
             Shade Run() { return Read(); }
             """);
 
-        Assert.Contains("Read)(CX_ID_3(default_parameter_test, Shade, Light)", generated);
+        Assert.Contains("Read(default_parameter_test_Shade_Light", generated);
     }
 
     [Fact]
@@ -200,7 +200,7 @@ public sealed class DefaultParameterTests
             Lamp Run() { return new Lamp(); }
             """);
 
-        Assert.Contains("CX_ID_3(default_parameter_test, Shade, Light)", generated);
+        Assert.Contains("default_parameter_test_Shade_Light", generated);
     }
 
     [Fact]

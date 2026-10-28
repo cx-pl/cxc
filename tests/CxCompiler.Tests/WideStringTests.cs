@@ -21,7 +21,7 @@ public sealed class WideStringTests
         new SemanticBinder().Bind(project);
         Assert.Single(project.CompilationContexts);
         var source = NativeInteropTests.Generate(project).Source;
-        Assert.Contains("CX_ID_4(cxcore, System, String, ToWideString)", source);
+        Assert.Contains("cxcore_System_String_ToWideString", source);
         Assert.Contains("cx_vtable_entry", source);
     }
 

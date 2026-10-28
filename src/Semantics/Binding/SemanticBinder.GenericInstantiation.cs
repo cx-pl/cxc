@@ -6,7 +6,6 @@ using CxCompiler.Model.Project;
 using CxCompiler.Model.Statements;
 using CxCompiler.Model.Types;
 using CxCompiler.Model.Types.BuiltInTypes;
-using CxCompiler.OutputGenerators;
 
 namespace CxCompiler.Semantics;
 
@@ -19,7 +18,7 @@ public sealed partial class SemanticBinder
         {
             foreach (var function in EnumerateFunctions(context.DeclarationScope.Declarations))
             {
-                foreach (var invocation in CCodeOutputGenerator.EnumerateBodyExpressions(
+                foreach (var invocation in CoroutineSyntaxAnalysis.EnumerateBodyExpressions(
                     function.Body ?? []).OfType<InvocationExpression>())
                 {
                     if (invocation.TargetSymbol?.Declaration is not
@@ -147,7 +146,7 @@ public sealed partial class SemanticBinder
         {
             foreach (var function in EnumerateFunctions(context.DeclarationScope.Declarations))
             {
-                foreach (var methodValue in CCodeOutputGenerator.EnumerateBodyExpressions(
+                foreach (var methodValue in CoroutineSyntaxAnalysis.EnumerateBodyExpressions(
                     function.Body ?? []).OfType<MemberAccessExpression>())
                 {
                     if (methodValue.FunctionValueSymbol is not
@@ -396,8 +395,14 @@ public sealed partial class SemanticBinder
                 continue;
             }
 
+            var interfaceImplementations = declaration.InterfaceDispatchTables
+                .SelectMany(table => table.Slots)
+                .Select(slot => slot.ImplementationFunction)
+                .OfType<FunctionDeclaration>()
+                .ToHashSet();
             var ownerFunctions = declaration.MemberDeclarations.Declarations
                 .OfType<FunctionDeclaration>()
+                .Concat(interfaceImplementations)
                 .Concat(declaration.InterfaceDispatchTables
                     .SelectMany(table => table.Slots)
                     .Select(slot => slot.ImplementationAccessor?.BodyFunction)
@@ -406,7 +411,9 @@ public sealed partial class SemanticBinder
             foreach (var method in ownerFunctions
                 .Where(method => method is not ConstructorDeclaration &&
                     method.GenericTypeNames.Length == 0 &&
-                    !method.IsStatic && method.VirtualSlotIndex is null))
+                    !method.IsStatic &&
+                    (method.VirtualSlotIndex is null ||
+                        interfaceImplementations.Contains(method))))
             {
                 var symbol = _symbols.SingleOrDefault(candidate =>
                     ReferenceEquals(candidate.Declaration, method));
@@ -452,13 +459,17 @@ public sealed partial class SemanticBinder
         while (true)
         {
             var callers = _project!.GenericFunctionInstances
-                .Where(instance => instance.SpecializationName is not null &&
-                    instance.ClosedContainingType is not null &&
-                    instance.ClosedContainingType.TypeArguments.All(argument =>
-                        !ContainsOpenTypeParameter(argument)) &&
-                    instance.Declaration?.ParentClassDeclaration is
-                        { GenericTypeNames.Length: > 0 } &&
-                    processed.Add(instance.SpecializationName))
+                .Where(instance => instance.SpecializationName is { } specialization &&
+                    instance.Declaration is { } declaration &&
+                    (instance.ClosedContainingType is { } containingType &&
+                        containingType.TypeArguments.All(argument =>
+                            !ContainsOpenTypeParameter(argument)) ||
+                     declaration.GenericTypeNames.Length > 0 &&
+                        declaration.GenericTypeNames.All(
+                            instance.GenericTypeArguments.ContainsKey) &&
+                        declaration.GenericTypeNames.All(name =>
+                            !ContainsOpenTypeParameter(instance.GenericTypeArguments[name]))) &&
+                    processed.Add(specialization))
                 .ToArray();
             if (callers.Length == 0)
             {
@@ -468,11 +479,21 @@ public sealed partial class SemanticBinder
             foreach (var caller in callers)
             {
                 var declaration = caller.Declaration!;
-                var owner = declaration.ParentClassDeclaration!;
-                var closedOwner = caller.ClosedContainingType!;
-                var ownerArguments = owner.GenericTypeNames.Zip(closedOwner.TypeArguments)
-                    .ToDictionary(pair => pair.First, pair => pair.Second, StringComparer.Ordinal);
-                foreach (var invocation in CCodeOutputGenerator.EnumerateBodyExpressions(
+                var owner = declaration.ParentClassDeclaration;
+                var closedOwner = caller.ClosedContainingType;
+                var ownerArguments = caller.GenericTypeArguments.ToDictionary(
+                    pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+                if (owner is { GenericTypeNames.Length: > 0 } genericOwner &&
+                    closedOwner is { } closedContainingType &&
+                    closedContainingType.TypeArguments.Count == genericOwner.GenericTypeNames.Length)
+                {
+                    foreach (var pair in genericOwner.GenericTypeNames.Zip(
+                        closedContainingType.TypeArguments))
+                    {
+                        ownerArguments[pair.First] = pair.Second;
+                    }
+                }
+                foreach (var invocation in EnumerateGenericCallerExpressions(
                     declaration.Body ?? []).OfType<InvocationExpression>())
                 {
                     if (invocation.TargetSymbol is not { Declaration: { } targetDeclaration } target ||
@@ -484,8 +505,8 @@ public sealed partial class SemanticBinder
                     }
 
                     TypeBase? receiverType = invocation.Receiver?.InferredType;
-                    if (receiverType is null &&
-                        ReferenceEquals(targetOwner, owner))
+                    if (receiverType is null && owner is not null &&
+                        ReferenceEquals(targetOwner, owner) && closedOwner is not null)
                     {
                         receiverType = closedOwner;
                     }
@@ -516,6 +537,120 @@ public sealed partial class SemanticBinder
         }
     }
 
+    private void RegisterClosedGenericMethodFunctionTargets()
+    {
+        var processed = new HashSet<string>(StringComparer.Ordinal);
+        while (true)
+        {
+            var callers = _project!.GenericFunctionInstances
+                .Where(instance => instance.SpecializationName is { } specialization &&
+                    instance.Declaration is { GenericTypeNames.Length: > 0 } declaration &&
+                    declaration.IsAsync &&
+                    declaration.GenericTypeNames.All(
+                        instance.GenericTypeArguments.ContainsKey) &&
+                    declaration.GenericTypeNames.All(name =>
+                        !ContainsOpenTypeParameter(instance.GenericTypeArguments[name])) &&
+                    processed.Add(specialization))
+                .ToArray();
+            if (callers.Length == 0)
+            {
+                break;
+            }
+
+            foreach (var caller in callers)
+            {
+                var declaration = caller.Declaration!;
+                var callerName = caller.SpecializationName!;
+                var typeArguments = caller.GenericTypeArguments.ToDictionary(
+                    pair => pair.Key,
+                    pair => pair.Value,
+                    StringComparer.Ordinal);
+                if (declaration.ParentClassDeclaration is
+                        { GenericTypeNames.Length: > 0 } owner &&
+                    caller.ClosedContainingType is { } closedOwner &&
+                    closedOwner.TypeArguments.Count == owner.GenericTypeNames.Length)
+                {
+                    foreach (var pair in owner.GenericTypeNames.Zip(
+                        closedOwner.TypeArguments))
+                    {
+                        typeArguments[pair.First] = pair.Second;
+                    }
+                }
+
+                foreach (var invocation in EnumerateGenericCallerExpressions(
+                    declaration.Body ?? []).OfType<InvocationExpression>())
+                {
+                    if (invocation.TargetSymbol is not
+                        { Declaration: { GenericTypeNames.Length: > 0 } targetDeclaration } openTarget ||
+                        targetDeclaration.ParentClassDeclaration is not null)
+                    {
+                        continue;
+                    }
+
+                    var argumentTypes = invocation.Arguments
+                        .Select(argument => argument.InferredType is { } argumentType
+                            ? CloseConstructedTypes(
+                                GenericTypeSubstitution.Substitute(
+                                    argumentType, typeArguments))
+                            : throw new InternalCompilerException(
+                                "Generic method call argument has no inferred type."))
+                        .ToArray();
+                    var explicitTypeArguments = invocation.ExplicitTypeArguments
+                        .Select(type => CloseConstructedTypes(
+                            GenericTypeSubstitution.Substitute(type, typeArguments)))
+                        .ToArray();
+                    if (explicitTypeArguments.Length == 0 &&
+                        targetDeclaration.GenericTypeNames.All(
+                            openTarget.GenericTypeArguments.ContainsKey))
+                    {
+                        explicitTypeArguments = targetDeclaration.GenericTypeNames
+                            .Select(name => CloseConstructedTypes(
+                                GenericTypeSubstitution.Substitute(
+                                    openTarget.GenericTypeArguments[name], typeArguments)))
+                            .ToArray();
+                    }
+                    if (argumentTypes.Any(ContainsOpenTypeParameter) ||
+                        explicitTypeArguments.Any(ContainsOpenTypeParameter))
+                    {
+                        continue;
+                    }
+
+                    var closedTarget = CloseGenericFunction(
+                        openTarget, argumentTypes, explicitTypeArguments);
+                    if (closedTarget?.SpecializationName is null)
+                    {
+                        throw new CompilationErrorException(
+                            $"Cannot close generic method call to '{openTarget.FullName}' " +
+                            $"from '{declaration.FullName}'.",
+                            invocation.SourceSpan);
+                    }
+
+                    invocation.BindClosedGenericTarget(callerName, closedTarget);
+                    _project.AddGenericFunctionInstance(closedTarget);
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<ExpressionBase> EnumerateGenericCallerExpressions(
+        IEnumerable<StatementBase> body)
+    {
+        var expressions = CoroutineSyntaxAnalysis.EnumerateBodyExpressions(body)
+            .ToArray();
+        foreach (var expression in expressions)
+        {
+            yield return expression;
+            if (expression is LambdaExpression
+                { GeneratedFunction.Body: { } lambdaBody })
+            {
+                foreach (var nested in EnumerateGenericCallerExpressions(lambdaBody))
+                {
+                    yield return nested;
+                }
+            }
+        }
+    }
+
     private void RegisterClosedGenericConstructorObjectCreations()
     {
         var processedSpecializations = new HashSet<string>(StringComparer.Ordinal);
@@ -534,27 +669,44 @@ public sealed partial class SemanticBinder
             {
                 if (caller.SpecializationName is not { } callerSpecialization ||
                     !processedSpecializations.Add(callerSpecialization) ||
-                    caller.ClosedContainingType is not { } closedOwner ||
-                    closedOwner.TypeArguments.Any(ContainsOpenTypeParameter) ||
-                    caller.Declaration is not
-                    {
-                        ParentClassDeclaration: { GenericTypeNames.Length: > 0 } owner,
-                        Body: { } body,
-                    })
+                    caller.Declaration is not { Body: { } body } declaration)
                 {
                     continue;
                 }
 
-                var ownerArguments = owner.GenericTypeNames.Zip(closedOwner.TypeArguments)
-                    .ToDictionary(pair => pair.First, pair => pair.Second, StringComparer.Ordinal);
-                var objectCreations = CCodeOutputGenerator.EnumerateBodyExpressions(body)
+                var owner = declaration.ParentClassDeclaration;
+                var hasClosedOwner = owner is { GenericTypeNames.Length: > 0 } &&
+                    caller.ClosedContainingType is { } closedContainingType &&
+                    closedContainingType.TypeArguments.All(argument =>
+                        !ContainsOpenTypeParameter(argument));
+                var hasClosedMethod = declaration.GenericTypeNames.Length > 0 &&
+                    declaration.GenericTypeNames.All(caller.GenericTypeArguments.ContainsKey) &&
+                    declaration.GenericTypeNames.All(name =>
+                        !ContainsOpenTypeParameter(caller.GenericTypeArguments[name]));
+                if (!hasClosedOwner && !hasClosedMethod)
+                {
+                    continue;
+                }
+
+                var ownerArguments = caller.GenericTypeArguments.ToDictionary(
+                    pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+                if (hasClosedOwner && owner is { } closedGenericOwner &&
+                    caller.ClosedContainingType is { } closedOwner)
+                {
+                    foreach (var pair in closedGenericOwner.GenericTypeNames.Zip(
+                        closedOwner.TypeArguments))
+                    {
+                        ownerArguments[pair.First] = pair.Second;
+                    }
+                }
+                var objectCreations = CoroutineSyntaxAnalysis.EnumerateBodyExpressions(body)
                     .OfType<ObjectCreationExpression>();
-                if (caller.Declaration is ConstructorDeclaration)
+                if (declaration is ConstructorDeclaration && owner is not null)
                 {
                     objectCreations = objectCreations.Concat(
                         owner.MemberDeclarations.Declarations.OfType<FieldDeclaration>()
                             .Where(field => !field.IsStatic && field.Initializer is not null)
-                            .SelectMany(field => CCodeOutputGenerator.EnumerateBodyExpressions(
+                            .SelectMany(field => CoroutineSyntaxAnalysis.EnumerateBodyExpressions(
                                 [new ExpressionStatement(field.Initializer!)]))
                             .OfType<ObjectCreationExpression>());
                 }
@@ -830,9 +982,11 @@ public sealed partial class SemanticBinder
         }
 
         var parameterTypes = symbol.ParameterTypes
-            .Select(type => GenericTypeSubstitution.Substitute(type, inferred))
+            .Select(type => CloseConstructedGenericTypeArguments(
+                GenericTypeSubstitution.Substitute(type, inferred)))
             .ToArray();
-        var returnType = GenericTypeSubstitution.Substitute(symbol.ReturnType, inferred);
+        var returnType = CloseConstructedGenericTypeArguments(
+            GenericTypeSubstitution.Substitute(symbol.ReturnType, inferred));
         var typeArguments = declaration.GenericTypeNames.Select(name => inferred[name]).ToArray();
         if (typeArguments.Any(ContainsOpenTypeParameter))
         {
@@ -1224,6 +1378,37 @@ public sealed partial class SemanticBinder
                 foreach (var argument in named.TypeArguments)
                 {
                     CloseConstructedTypes(argument);
+                }
+                SetConstructedIdentity(named);
+                break;
+        }
+        return type;
+    }
+
+    private TypeBase CloseConstructedGenericTypeArguments(TypeBase type)
+    {
+        switch (type)
+        {
+            case ConstType constant:
+                CloseConstructedGenericTypeArguments(constant.UnderlyingType);
+                break;
+            case ArrayType array:
+                CloseConstructedGenericTypeArguments(array.ElementType);
+                break;
+            case NullableType nullable:
+                CloseConstructedGenericTypeArguments(nullable.UnderlyingType);
+                break;
+            case FunctionType function:
+                CloseConstructedGenericTypeArguments(function.ReturnType);
+                foreach (var parameter in function.ParameterTypes)
+                {
+                    CloseConstructedGenericTypeArguments(parameter);
+                }
+                break;
+            case NamedType named when named.TypeArguments.Count > 0:
+                foreach (var argument in named.TypeArguments)
+                {
+                    CloseConstructedGenericTypeArguments(argument);
                 }
                 SetConstructedIdentity(named);
                 break;

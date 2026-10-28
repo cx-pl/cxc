@@ -59,11 +59,11 @@ public sealed class VirtualDispatchTests
 
         var (_, source) = GenerateOutput(project);
 
-        Assert.Contains("CX_VTABLE_ENTRY(CX_ID_3(unnamed, Parent, Value))", source);
-        Assert.Contains("CX_VTABLE_ENTRY(CX_ID_3(unnamed, Child, Value))", source);
+        Assert.Contains("CX_VTABLE_ENTRY(unnamed_Parent_Value)", source);
+        Assert.Contains("CX_VTABLE_ENTRY(unnamed_Child_Value)", source);
         Assert.Contains("CX_GET_VTABLE(value))[4]", source);
-        Assert.Contains("CX_ID_2(unnamed, Parent)* value = (", source);
-        Assert.Contains("CX_ID_2(unnamed, Parent)*)(", source);
+        Assert.Contains("unnamed_Parent* value = (", source);
+        Assert.Contains("unnamed_Parent*)(", source);
     }
 
     [Fact]

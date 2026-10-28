@@ -25,7 +25,7 @@ public sealed class FieldInitializerTests
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var source = File.ReadAllText(Path.Combine(directory, "field_initializer.c"));
             Assert.Contains(
-                "__this->Value = CX_ID_2(field_initializer, CreateInitialValue)();",
+                "__this->Value = field_initializer_CreateInitialValue();",
                 source);
         }
         finally
@@ -145,8 +145,8 @@ public sealed class FieldInitializerTests
 
             Assert.Contains("static struct cx_runtime_once __cx_module_once_", source);
             Assert.Contains("__cx_module_init_", source);
-            Assert.Contains(" = CX_ID_2(field_initializer, CreateInitialValue)();", source);
-            Assert.True(source.IndexOf("CreateInitialValue)();", StringComparison.Ordinal) <
+            Assert.Contains(" = field_initializer_CreateInitialValue();", source);
+            Assert.True(source.IndexOf("CreateInitialValue();", StringComparison.Ordinal) <
                 source.LastIndexOf("cx_runtime_once_complete", StringComparison.Ordinal));
         }
         finally
@@ -223,16 +223,16 @@ public sealed class FieldInitializerTests
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var source = File.ReadAllText(Path.Combine(directory, "field_initializer.c"));
             var initializer = source.IndexOf(
-                "CreateInitialValue)();", StringComparison.Ordinal);
+                "CreateInitialValue();", StringComparison.Ordinal);
             var staticConstructorCall = source.IndexOf(
-                "StaticState, __constructor", Math.Max(initializer, 0), StringComparison.Ordinal);
+                "StaticState___constructor", Math.Max(initializer, 0), StringComparison.Ordinal);
             var initialized = source.IndexOf("cx_runtime_once_complete", staticConstructorCall,
                 StringComparison.Ordinal);
 
             Assert.True(initializer >= 0);
             Assert.True(staticConstructorCall > initializer);
             Assert.True(initialized > staticConstructorCall);
-            Assert.Contains("StaticState, __constructor, _2", source);
+            Assert.Contains("StaticState___constructor__2", source);
             Assert.DoesNotContain(
                 "CX_REFLECTION_FLAG_STATIC | CX_REFLECTION_FLAG_FUNCTION_CONSTRUCTOR", source);
         }

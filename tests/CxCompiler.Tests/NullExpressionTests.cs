@@ -137,9 +137,9 @@ public sealed class NullExpressionTests
             }
             """);
 
-        Assert.Contains("CX_ID_4(cxcore, System, Nullable, CreateValueStorage)(", generatedSource);
+        Assert.Contains("cxcore_System_Nullable_CreateValueStorage(", generatedSource);
         Assert.Contains("(cx_uint)sizeof(cx_int)", generatedSource);
-        Assert.Contains("(cx_ptr)(&CX_ID_2(unnamed, __string_", generatedSource);
+        Assert.Contains("(cx_ptr)(&unnamed___string_", generatedSource);
     }
 
     [Fact]
@@ -180,10 +180,10 @@ public sealed class NullExpressionTests
             var generatedSource = File.ReadAllText(
                 Path.Combine(outputDirectory, "unnamed.c"));
 
-            Assert.Contains("((value) != CX_NULL ? (value) : &CX_ID_2(unnamed, __string_", generatedSource);
+            Assert.Contains("((value) != CX_NULL ? (value) : &unnamed___string_", generatedSource);
             Assert.Contains("((value)._obj != CX_NULL ? *(cx_int*)(value)._obj : 42)", generatedSource);
             Assert.Contains("((value)._obj == CX_NULL)", generatedSource);
-            Assert.Contains("return (struct CX_ID_3(cxcore, System, Nullable)){ CX_NULL };", generatedSource);
+            Assert.Contains("return (struct cxcore_System_Nullable){ CX_NULL };", generatedSource);
             Assert.Contains("return CX_NULL;", generatedSource);
         }
         finally

@@ -21,7 +21,7 @@ $cmakePath = if (Test-Path -LiteralPath $CMake -PathType Leaf) {
 $buildRoot = Join-Path ([IO.Path]::GetTempPath()) "cx-entry-point-e2e-$([guid]::NewGuid().ToString('N'))"
 $outputDirectory = Join-Path $buildRoot 'generated'
 $binaryDirectory = Join-Path $buildRoot '.bin'
-$sourcePath = Join-Path $buildRoot 'entry_point_e2e.cx'
+$sourcePath = Join-Path $buildRoot 'entryPointE2e.cx'
 $previousPath = $env:PATH
 $previousGenerator = $env:CMAKE_GENERATOR
 $previousCCompiler = $env:CC
@@ -29,8 +29,9 @@ $completed = $false
 
 try {
     New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
-    [IO.File]::WriteAllText($sourcePath, @'
+    $entryPointSource = @'
 import System;
+import System.Threading.Tasks;
 
 public delegate int SpecializationTransform(int value);
 public delegate int StateTransform(int state, int value);
@@ -2914,8 +2915,9 @@ public int Main(string[] args) {
     if (RunRepeatedGenericFieldConstructor() != 42) return 159;
     if (RunGenericConditionalProperty() != 516) return 160;
     if (RunBoxedGenericInterface() != 74) return 142;
-    string combinedString = "A" + "€" + "😀";
-    if (combinedString.Length != 3u || combinedString != "A€😀") return 98;
+    string combinedString = "A" + "__CX_EURO__" + "__CX_FACE__";
+    if (combinedString.Length != 3u ||
+        combinedString != "A" + "__CX_EURO__" + "__CX_FACE__") return 98;
     string nullCombined = null + "tail";
     if (nullCombined != "tail") return 99;
     string nullSuffix = "head" + null;
@@ -3060,7 +3062,7 @@ public int Main(string[] args) {
         firstString == differentString) return 77;
     string lowerString = "alpha";
     string higherString = "beta";
-    string unicodeHigherString = "ä";
+    string unicodeHigherString = "__CX_A_UMLAUT__";
     if (!(lowerString < higherString) || !(lowerString <= lowerString) ||
         !(higherString > lowerString) || !(higherString >= higherString) ||
         !("z" < unicodeHigherString)) return 92;
@@ -3475,7 +3477,12 @@ public int Main(string[] args) {
     Console.WriteLine("native e2e pass");
     return 0;
 }
-'@, [Text.UTF8Encoding]::new($false))
+'@
+    $entryPointSource = $entryPointSource.Replace('__CX_EURO__', [string][char]0x20AC)
+    $entryPointSource = $entryPointSource.Replace(
+        '__CX_FACE__', [string][char]::ConvertFromUtf32(0x1F600))
+    $entryPointSource = $entryPointSource.Replace('__CX_A_UMLAUT__', [string][char]0x00E4)
+    [IO.File]::WriteAllText($sourcePath, $entryPointSource, [Text.UTF8Encoding]::new($false))
     $env:PATH = "$(Split-Path -Parent $cmakePath);$env:PATH"
     if ($Generator -like '*Ninja*') {
         $ninjaDirectory = Join-Path (Split-Path -Parent $cmakePath) '..\..\Ninja'
@@ -3524,12 +3531,167 @@ public int Main(string[] args) {
     $collectionsSourceDirectory = Join-Path $collectionsRoot 'src'
     $collectionsOutput = Join-Path $collectionsRoot 'generated'
     New-Item -ItemType Directory -Path $collectionsSourceDirectory, $collectionsOutput -Force | Out-Null
-    [IO.File]::WriteAllText((Join-Path $collectionsRoot 'collections-array.cxproj'), "name: collections_array_e2e`ntype: Executable`n", [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $collectionsRoot 'collections-array.cxproj'), "name: collectionsArrayE2e`ntype: Executable`n", [Text.UTF8Encoding]::new($false))
     foreach ($collectionSource in @('Array.cx', 'ICollection.cx', 'IEnumerable.cx', 'IEnumerator.cx')) {
         Copy-Item -LiteralPath (Join-Path $cxCorePath "src\System\Collections\$collectionSource") -Destination (Join-Path $collectionsSourceDirectory $collectionSource)
     }
     [IO.File]::WriteAllText((Join-Path $collectionsSourceDirectory 'main.cx'), @'
 import System.Collections;
+public class IteratorProbe {
+    public static int Starts;
+    public static int Finalizers;
+}
+public class ReentrantIteratorProbe {
+    public static IEnumerator<int> Enumerator;
+    public static bool ReentryRejected;
+}
+public struct IteratorPoint { public int Value; }
+public class DisposeProbe { public static int Calls; }
+public class StaticIteratorSource {
+    public static IEnumerable<int> Values(int count) {
+        for (int i = 0; i < count; i++) yield return i;
+    }
+}
+public class InstanceIteratorSource {
+    private int _start;
+    public constructor(int start) { _start = start; }
+    private int Add(int offset) { return _start + offset; }
+    public IEnumerable<int> Values() {
+        yield return this._start;
+        yield return this.Add(1);
+    }
+}
+public class GenericIteratorSource<T> {
+    public T Identity(T value) { return value; }
+    public IEnumerable<T> Values(T value) { yield return this.Identity(value); }
+}
+public IEnumerable<int> CountUp(int first) {
+    IteratorProbe.Starts += 1;
+    int value = first;
+    yield return value;
+    value += 1;
+    yield return value;
+}
+public IEnumerable<int> AddWhen(bool enabled) {
+    int value = 10;
+    if (enabled) {
+        value += 2;
+        yield return value;
+        value += 3;
+    } else {
+        value += 4;
+        yield return value;
+        value += 5;
+    }
+    yield return value;
+}
+public IEnumerable<int> CountSkipping(int limit) {
+    int value = 0;
+    while (value < limit) {
+        value += 1;
+        if (value == 2) continue;
+        yield return value;
+    }
+}
+public IEnumerable<int> CountFor(int limit) {
+    for (int index = 0; index < limit; index++) {
+        if (index == 1) continue;
+        yield return index + 1;
+    }
+}
+public IEnumerable<int> CountDoWhile(int limit) {
+    int value = 0;
+    do {
+        value += 1;
+        if (value == 2) continue;
+        yield return value;
+    } while (value < limit);
+}
+public IEnumerable<int> YieldBySwitch(int selector) {
+    switch (selector) {
+        case 0:
+            yield return 2;
+            break;
+        case 1:
+            yield return 3;
+            yield return 4;
+            break;
+        default:
+            yield return 5;
+            break;
+    }
+    yield return 6;
+}
+public IEnumerable<int> FailAfterYield() {
+    yield return 11;
+    throw new Exception("iterator failed");
+}
+public IEnumerable<int> ReenterDuringMove() {
+    ReentrantIteratorProbe.ReentryRejected = false;
+    IEnumerator<int> activeEnumerator = ReentrantIteratorProbe.Enumerator;
+    try { activeEnumerator.MoveNext(); }
+    catch (Exception) { ReentrantIteratorProbe.ReentryRejected = true; }
+    yield return ReentrantIteratorProbe.ReentryRejected ? 1 : 0;
+}
+public IEnumerable<IteratorPoint> YieldIteratorPoint(IteratorPoint point) {
+    yield return point;
+}
+public IEnumerable<int> EmptyByYieldBreak() {
+    yield break;
+}
+public IEnumerable<int> CountWithFinally() {
+    try {
+        yield return 1;
+        yield return 2;
+    } finally {
+        IteratorProbe.Finalizers += 1;
+    }
+}
+public IEnumerable<int> YieldBreakWithFinally() {
+    try {
+        yield return 7;
+        yield break;
+    } finally {
+        IteratorProbe.Finalizers += 1;
+    }
+}
+public IEnumerable<int> BreakFromProtectedFinally() {
+    for (int index = 0; index < 2; index++) {
+        try {
+            yield return index + 1;
+            break;
+        } finally {
+            IteratorProbe.Finalizers += 1;
+        }
+    }
+    yield return 9;
+}
+public IEnumerable<int> ContinueFromProtectedFinally() {
+    for (int index = 0; index < 2; index++) {
+        try {
+            yield return index + 1;
+            continue;
+        } finally {
+            IteratorProbe.Finalizers += 1;
+        }
+    }
+}
+public IEnumerable<int> YieldArrayItems(int[] items) {
+    foreach (int item in items) {
+        yield return item * 2;
+    }
+    yield return 99;
+}
+public IEnumerable<char> YieldStringItems(string text) {
+    foreach (char item in text) {
+        yield return item;
+    }
+}
+public IEnumerable<int> YieldEnumeratorItems(IntegerSequence sequence) {
+    foreach (int item in sequence) {
+        yield return item * 10;
+    }
+}
 public class IntegerCursor : IEnumerator<int> {
     private int _next;
     private int _current;
@@ -3541,6 +3703,7 @@ public class IntegerCursor : IEnumerator<int> {
         _next += 1;
         return true;
     }
+    public void Dispose() { DisposeProbe.Calls += 1; }
 }
 public class IntegerSequence : IEnumerable<int> {
     public IEnumerator<int> GetEnumerator() const { return new IntegerCursor(); }
@@ -3578,6 +3741,124 @@ public bool HasScaledArrayLength<T>(T[] values, uint baseline, uint scale) {
     return values.Length == baseline * scale;
 }
 public int Main(string[] args) {
+    int staticMethodTotal = 0;
+    foreach (int value in StaticIteratorSource.Values(4)) staticMethodTotal += value;
+    if (staticMethodTotal != 6) return 42;
+    InstanceIteratorSource instanceSource = new InstanceIteratorSource(3);
+    int instanceMethodTotal = 0;
+    foreach (int value in instanceSource.Values()) instanceMethodTotal += value;
+    if (instanceMethodTotal != 7) return 43;
+    GenericIteratorSource<string> genericSource =
+        new GenericIteratorSource<string>();
+    bool genericIteratorObserved = false;
+    foreach (string value in genericSource.Values("generic iterator")) {
+        if (value == "generic iterator") genericIteratorObserved = true;
+    }
+    if (!genericIteratorObserved) return 44;
+    IteratorPoint yieldedPoint = default;
+    yieldedPoint.Value = 73;
+    bool observedYieldedStruct = false;
+    foreach (IteratorPoint point in YieldIteratorPoint(yieldedPoint)) {
+        if (point.Value == 73) observedYieldedStruct = true;
+    }
+    if (!observedYieldedStruct) return 49;
+    IEnumerable<int> generatedSequence = CountUp(2);
+    if (IteratorProbe.Starts != 0) return 23;
+    int firstEnumeration = 0;
+    foreach (int value in generatedSequence) { firstEnumeration += value; }
+    if (IteratorProbe.Starts != 1) return 24;
+    int secondEnumeration = 0;
+    foreach (int value in generatedSequence) { secondEnumeration += value; }
+    if (firstEnumeration != 5 || secondEnumeration != 5 ||
+        IteratorProbe.Starts != 2) return 22;
+    IEnumerator<int> manuallyDisposed = CountUp(20).GetEnumerator();
+    bool rejectedInvalidCurrent = false;
+    try { int invalid = manuallyDisposed.Current; }
+    catch (Exception) { rejectedInvalidCurrent = true; }
+    if (!rejectedInvalidCurrent) return 30;
+    if (!manuallyDisposed.MoveNext()) return 28;
+    if (manuallyDisposed.Current != 20) return 31;
+    manuallyDisposed.Dispose();
+    if (manuallyDisposed.MoveNext()) return 29;
+    rejectedInvalidCurrent = false;
+    try { int invalid = manuallyDisposed.Current; }
+    catch (Exception) { rejectedInvalidCurrent = true; }
+    if (!rejectedInvalidCurrent) return 32;
+    IEnumerator<int> failedIterator = FailAfterYield().GetEnumerator();
+    if (!failedIterator.MoveNext() || failedIterator.Current != 11) return 33;
+    bool observedIteratorFault = false;
+    try { failedIterator.MoveNext(); }
+    catch (Exception) { observedIteratorFault = true; }
+    if (!observedIteratorFault || failedIterator.MoveNext() ||
+        failedIterator.MoveNext()) return 34;
+    rejectedInvalidCurrent = false;
+    try { int invalid = failedIterator.Current; }
+    catch (Exception) { rejectedInvalidCurrent = true; }
+    if (!rejectedInvalidCurrent) return 45;
+    int finallyStart = IteratorProbe.Finalizers;
+    IEnumerator<int> disposedWithFinally = CountWithFinally().GetEnumerator();
+    if (!disposedWithFinally.MoveNext() || disposedWithFinally.Current != 1) return 35;
+    disposedWithFinally.Dispose();
+    disposedWithFinally.Dispose();
+    if (IteratorProbe.Finalizers != finallyStart + 1) return 36;
+    int finallyValue = 0;
+    foreach (int value in CountWithFinally()) { finallyValue += value; }
+    if (finallyValue != 3 || IteratorProbe.Finalizers != finallyStart + 2) return 37;
+    IEnumerator<int> breakWithFinally = YieldBreakWithFinally().GetEnumerator();
+    if (!breakWithFinally.MoveNext() || breakWithFinally.Current != 7) return 38;
+    if (breakWithFinally.MoveNext() ||
+        IteratorProbe.Finalizers != finallyStart + 3) return 39;
+    if (breakWithFinally.MoveNext()) return 46;
+    rejectedInvalidCurrent = false;
+    try { int invalid = breakWithFinally.Current; }
+    catch (Exception) { rejectedInvalidCurrent = true; }
+    if (!rejectedInvalidCurrent) return 47;
+    IEnumerator<int> reentrantEnumerator = ReenterDuringMove().GetEnumerator();
+    ReentrantIteratorProbe.Enumerator = reentrantEnumerator;
+    if (!reentrantEnumerator.MoveNext() || !ReentrantIteratorProbe.ReentryRejected ||
+        reentrantEnumerator.Current != 1 || reentrantEnumerator.MoveNext()) return 48;
+    ReentrantIteratorProbe.Enumerator = null;
+    int protectedBreakSum = 0;
+    foreach (int value in BreakFromProtectedFinally()) protectedBreakSum += value;
+    if (protectedBreakSum != 10 ||
+        IteratorProbe.Finalizers != finallyStart + 4) return 250;
+    int protectedContinueSum = 0;
+    foreach (int value in ContinueFromProtectedFinally()) protectedContinueSum += value;
+    if (protectedContinueSum != 3 ||
+        IteratorProbe.Finalizers != finallyStart + 6) return 251;
+    if (EmptyByYieldBreak().GetEnumerator().MoveNext()) return 40;
+    int[] sourceValues = new int[3];
+    sourceValues[0] = 3;
+    sourceValues[1] = 5;
+    sourceValues[2] = 7;
+    int arrayYieldSum = 0;
+    foreach (int value in YieldArrayItems(sourceValues)) { arrayYieldSum += value; }
+    int stringYieldCount = 0;
+    foreach (char value in YieldStringItems("Aé")) { stringYieldCount += 1; }
+    int disposeCallsBeforeYieldedForeach = DisposeProbe.Calls;
+    int enumeratorYieldSum = 0;
+    IntegerSequence yieldedSequence = new IntegerSequence();
+    foreach (int value in YieldEnumeratorItems(yieldedSequence)) {
+        enumeratorYieldSum += value;
+    }
+    if (arrayYieldSum != 129 || stringYieldCount != 2 ||
+        enumeratorYieldSum != 60 ||
+        DisposeProbe.Calls != disposeCallsBeforeYieldedForeach + 1) return 41;
+    int conditionalValue = 0;
+    foreach (int value in AddWhen(true)) { conditionalValue += value; }
+    int alternateConditionalValue = 0;
+    foreach (int value in AddWhen(false)) { alternateConditionalValue += value; }
+    int loopValue = 0;
+    foreach (int value in CountSkipping(4)) { loopValue += value; }
+    int forValue = 0;
+    foreach (int value in CountFor(4)) { forValue += value; }
+    int doWhileValue = 0;
+    foreach (int value in CountDoWhile(4)) { doWhileValue += value; }
+    int switchValue = 0;
+    foreach (int value in YieldBySwitch(1)) { switchValue += value; }
+    if (conditionalValue != 27 || alternateConditionalValue != 33 ||
+        loopValue != 8 || forValue != 8 || doWhileValue != 8 ||
+        switchValue != 13) return 25;
     int[] builtinInts = new int[2];
     Array<int> publicInts = builtinInts;
     int[] differentLengthInts = new int[3];
@@ -3632,6 +3913,13 @@ public int Main(string[] args) {
     int interfaceSum = 0;
     foreach (int value in interfaceSequence) { interfaceSum += value; }
     if (interfaceSum != 6) return 17;
+    DisposeProbe.Calls = 0;
+    foreach (int value in interfaceSequence) { if (value == 1) break; }
+    if (DisposeProbe.Calls != 1) return 30;
+    try {
+        foreach (int value in interfaceSequence) { throw new Exception(); }
+    } catch (Exception) {}
+    if (DisposeProbe.Calls != 2) return 34;
     if (ints.GetOrDefault(1u) != 24 || ints.GetOrDefault(2u) != 0) return 6;
     if (!ints.TrySet(1u, 25) || ints.Get(1u) != 25 || ints.TrySet(2u, 30)) return 7;
     if (ints.GetOrDefault(2u) != 0) return 8;
@@ -3685,7 +3973,7 @@ public int Main(string[] args) {
         throw "System.Collections.Array<T> native compilation failed (exit $LASTEXITCODE). Build files are in '$collectionsRoot'."
     }
     $collectionsBinaryDirectory = Join-Path $collectionsRoot '.bin\Release'
-    $collectionsExecutable = Get-ChildItem -LiteralPath $collectionsBinaryDirectory -Filter 'collections_array_e2e.exe' -File |
+    $collectionsExecutable = Get-ChildItem -LiteralPath $collectionsBinaryDirectory -Filter 'collectionsArrayE2e.exe' -File |
         Select-Object -First 1
     if ($null -eq $collectionsExecutable) {
         throw "System.Collections.Array<T> native executable was not created. Build files are in '$collectionsRoot'."
@@ -3694,15 +3982,16 @@ public int Main(string[] args) {
     if ($LASTEXITCODE -ne 0) {
         throw "System.Collections.Array<T> native run failed (exit $LASTEXITCODE)."
     }
+    Write-Output 'PASS synchronous iterators: lazy values, retained locals, independent enumeration, and static class methods'
     Write-Output 'PASS System.Collections.Array<T>/T[]: shared API and storage, matching and computed generic length comparisons, Fill, TryCopyTo, enumeration, and closed-owner construction'
 
     $stringForeachRoot = Join-Path $buildRoot 'string-foreach'
     $stringForeachOutput = Join-Path $stringForeachRoot 'generated'
     New-Item -ItemType Directory -Path $stringForeachRoot, $stringForeachOutput -Force | Out-Null
-    $stringForeachSource = Join-Path $stringForeachRoot 'string_foreach.cx'
-    [IO.File]::WriteAllText($stringForeachSource, @'
+    $stringForeachSource = Join-Path $stringForeachRoot 'stringForeach.cx'
+    $stringForeachSourceText = @'
 public int Main(string[] args) {
-    string text = "AÄ🙂";
+    string text = "A__CX_A_UMLAUT____CX_SLIGHT_SMILE__";
     int count = 0;
     int sum = 0;
     foreach (var scalar in text) { count += 1; sum += scalar; }
@@ -3715,7 +4004,13 @@ public int Main(string[] args) {
     if (emptyCount != 0) return 3;
     return 0;
 }
-'@, [Text.UTF8Encoding]::new($false))
+'@
+    $stringForeachSourceText = $stringForeachSourceText.Replace(
+        '__CX_A_UMLAUT__', [string][char]0x00C4)
+    $stringForeachSourceText = $stringForeachSourceText.Replace(
+        '__CX_SLIGHT_SMILE__', [string][char]::ConvertFromUtf32(0x1F642))
+    [IO.File]::WriteAllText(
+        $stringForeachSource, $stringForeachSourceText, [Text.UTF8Encoding]::new($false))
     $stringForeachCompilerArguments = @(
         '--compile', '--cxcore-dir', $cxCorePath, '--verbosity', 'quiet',
         '--output-dir', $stringForeachOutput, $stringForeachSource
@@ -3729,7 +4024,7 @@ public int Main(string[] args) {
         throw "String foreach native compilation failed (exit $LASTEXITCODE). Build files are in '$stringForeachRoot'."
     }
     $stringForeachExecutable = Get-ChildItem -LiteralPath (Join-Path $stringForeachRoot '.bin') `
-        -Filter 'string_foreach.exe' -File -Recurse | Select-Object -First 1
+        -Filter 'stringForeach.exe' -File -Recurse | Select-Object -First 1
     if ($null -eq $stringForeachExecutable) {
         throw "String foreach native executable was not created. Build files are in '$stringForeachRoot'."
     }
@@ -3743,7 +4038,7 @@ public int Main(string[] args) {
     $listSourceDirectory = Join-Path $listRoot 'src'
     $listOutput = Join-Path $listRoot 'generated'
     New-Item -ItemType Directory -Path $listSourceDirectory, $listOutput -Force | Out-Null
-    [IO.File]::WriteAllText((Join-Path $listRoot 'collections-list.cxproj'), "name: collections_list_e2e`ntype: Executable`n", [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $listRoot 'collections-list.cxproj'), "name: collectionsListE2e`ntype: Executable`n", [Text.UTF8Encoding]::new($false))
     foreach ($collectionSource in @('Array.cx', 'ICollection.cx', 'IEnumerable.cx', 'IEnumerator.cx', 'List.cx')) {
         Copy-Item -LiteralPath (Join-Path $cxCorePath "src\System\Collections\$collectionSource") -Destination (Join-Path $listSourceDirectory $collectionSource)
     }
@@ -3828,7 +4123,7 @@ public int Main(string[] args) {
     if ($LASTEXITCODE -ne 0) {
         throw "System.Collections.List<T> native compilation failed (exit $LASTEXITCODE). Build files are in '$listRoot'."
     }
-    $listExecutable = Get-ChildItem -LiteralPath (Join-Path $listRoot '.bin\Release') -Filter 'collections_list_e2e.exe' -File |
+    $listExecutable = Get-ChildItem -LiteralPath (Join-Path $listRoot '.bin\Release') -Filter 'collectionsListE2e.exe' -File |
         Select-Object -First 1
     if ($null -eq $listExecutable) {
         throw "System.Collections.List<T> native executable was not created. Build files are in '$listRoot'."
@@ -3843,7 +4138,7 @@ public int Main(string[] args) {
     $adaptersSourceDirectory = Join-Path $adaptersRoot 'src'
     $adaptersOutput = Join-Path $adaptersRoot 'generated'
     New-Item -ItemType Directory -Path $adaptersSourceDirectory, $adaptersOutput -Force | Out-Null
-    [IO.File]::WriteAllText((Join-Path $adaptersRoot 'collections-adapters.cxproj'), "name: collections_adapters_e2e`ntype: Executable`n", [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $adaptersRoot 'collections-adapters.cxproj'), "name: collectionsAdaptersE2e`ntype: Executable`n", [Text.UTF8Encoding]::new($false))
     foreach ($collectionSource in @('Array.cx', 'ICollection.cx', 'IEnumerable.cx', 'IEnumerator.cx', 'List.cx', 'Stack.cx', 'Queue.cx')) {
         Copy-Item -LiteralPath (Join-Path $cxCorePath "src\System\Collections\$collectionSource") -Destination (Join-Path $adaptersSourceDirectory $collectionSource)
     }
@@ -3908,7 +4203,7 @@ public int Main(string[] args) {
     if ($LASTEXITCODE -ne 0) {
         throw "System.Collections.Stack<T>/Queue<T> native compilation failed (exit $LASTEXITCODE). Build files are in '$adaptersRoot'."
     }
-    $adaptersExecutable = Get-ChildItem -LiteralPath (Join-Path $adaptersRoot '.bin\Release') -Filter 'collections_adapters_e2e.exe' -File |
+    $adaptersExecutable = Get-ChildItem -LiteralPath (Join-Path $adaptersRoot '.bin\Release') -Filter 'collectionsAdaptersE2e.exe' -File |
         Select-Object -First 1
     if ($null -eq $adaptersExecutable) {
         throw "System.Collections.Stack<T>/Queue<T> native executable was not created. Build files are in '$adaptersRoot'."
@@ -3923,7 +4218,7 @@ public int Main(string[] args) {
     $linkedListSourceDirectory = Join-Path $linkedListRoot 'src'
     $linkedListOutput = Join-Path $linkedListRoot 'generated'
     New-Item -ItemType Directory -Path $linkedListSourceDirectory, $linkedListOutput -Force | Out-Null
-    [IO.File]::WriteAllText((Join-Path $linkedListRoot 'collections-linked-list.cxproj'), "name: collections_linked_list_e2e`ntype: Executable`n", [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $linkedListRoot 'collections-linked-list.cxproj'), "name: collectionsLinkedListE2e`ntype: Executable`n", [Text.UTF8Encoding]::new($false))
     foreach ($collectionSource in @('ICollection.cx', 'IEnumerable.cx', 'IEnumerator.cx', 'LinkedList.cx')) {
         Copy-Item -LiteralPath (Join-Path $cxCorePath "src\System\Collections\$collectionSource") -Destination (Join-Path $linkedListSourceDirectory $collectionSource)
     }
@@ -3970,7 +4265,7 @@ public int Main(string[] args) {
     if ($LASTEXITCODE -ne 0) {
         throw "System.Collections.LinkedList<T> native compilation failed (exit $LASTEXITCODE). Build files are in '$linkedListRoot'."
     }
-    $linkedListExecutable = Get-ChildItem -LiteralPath (Join-Path $linkedListRoot '.bin\Release') -Filter 'collections_linked_list_e2e.exe' -File |
+    $linkedListExecutable = Get-ChildItem -LiteralPath (Join-Path $linkedListRoot '.bin\Release') -Filter 'collectionsLinkedListE2e.exe' -File |
         Select-Object -First 1
     if ($null -eq $linkedListExecutable) {
         throw "System.Collections.LinkedList<T> native executable was not created. Build files are in '$linkedListRoot'."
@@ -3985,7 +4280,7 @@ public int Main(string[] args) {
     $dictionarySourceDirectory = Join-Path $dictionaryRoot 'src'
     $dictionaryOutput = Join-Path $dictionaryRoot 'generated'
     New-Item -ItemType Directory -Path $dictionarySourceDirectory, $dictionaryOutput -Force | Out-Null
-    [IO.File]::WriteAllText((Join-Path $dictionaryRoot 'collections-dictionary.cxproj'), "name: collections_dictionary_e2e`ntype: Executable`n", [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $dictionaryRoot 'collections-dictionary.cxproj'), "name: collectionsDictionaryE2e`ntype: Executable`n", [Text.UTF8Encoding]::new($false))
     foreach ($collectionSource in @('Array.cx', 'ICollection.cx', 'IEnumerable.cx', 'IEnumerator.cx', 'IEqualityComparer.cx', 'Dictionary.cx')) {
         Copy-Item -LiteralPath (Join-Path $cxCorePath "src\System\Collections\$collectionSource") -Destination (Join-Path $dictionarySourceDirectory $collectionSource)
     }
@@ -4133,7 +4428,7 @@ public int Main(string[] args) {
     if ($LASTEXITCODE -ne 0) {
         throw "System.Collections.Dictionary<TKey, TValue> native compilation failed (exit $LASTEXITCODE). Build files are in '$dictionaryRoot'."
     }
-    $dictionaryExecutable = Get-ChildItem -LiteralPath (Join-Path $dictionaryRoot '.bin\Release') -Filter 'collections_dictionary_e2e.exe' -File |
+    $dictionaryExecutable = Get-ChildItem -LiteralPath (Join-Path $dictionaryRoot '.bin\Release') -Filter 'collectionsDictionaryE2e.exe' -File |
         Select-Object -First 1
     if ($null -eq $dictionaryExecutable) {
         throw "System.Collections.Dictionary<TKey, TValue> native executable was not created. Build files are in '$dictionaryRoot'."
@@ -4147,7 +4442,7 @@ public int Main(string[] args) {
     $genericFieldInitializerRoot = Join-Path $buildRoot 'generic-field-initializer'
     $genericFieldInitializerOutput = Join-Path $genericFieldInitializerRoot 'generated'
     New-Item -ItemType Directory -Path $genericFieldInitializerRoot, $genericFieldInitializerOutput -Force | Out-Null
-    $genericFieldInitializerSource = Join-Path $genericFieldInitializerRoot 'generic_field_initializer.cx'
+    $genericFieldInitializerSource = Join-Path $genericFieldInitializerRoot 'genericFieldInitializer.cx'
     [IO.File]::WriteAllText($genericFieldInitializerSource, @'
 public class Seed {
     public static int Created;
@@ -4257,7 +4552,7 @@ public int Main(string[] args) {
         throw "Closed generic field initializer compilation failed (exit $LASTEXITCODE). Build files are in '$genericFieldInitializerRoot'."
     }
     $genericFieldInitializerExecutable = Get-ChildItem -LiteralPath (Join-Path $genericFieldInitializerRoot '.bin') `
-        -Filter 'generic_field_initializer.exe' -File -Recurse | Select-Object -First 1
+        -Filter 'genericFieldInitializer.exe' -File -Recurse | Select-Object -First 1
     if ($null -eq $genericFieldInitializerExecutable) {
         throw "Closed generic field initializer executable was not created. Build files are in '$genericFieldInitializerRoot'."
     }
@@ -4274,7 +4569,27 @@ public int Main(string[] args) {
     New-Item -ItemType Directory -Path $appDirectory, $libraryDirectory, $projectOutput -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $libraryDirectory 'math.cxproj'), "name: math`ntype: Library`n", [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $libraryDirectory 'api.cx'), @'
+import System.Threading.Tasks;
 namespace Math;
+public interface IValueBox<T> { T GetValue(); }
+public class ValueBox<T> : IValueBox<T> {
+    private T _value;
+    public constructor(T value) { _value = value; }
+    public T GetValue() { return _value; }
+}
+public class CrossModuleCoroutineProbe {
+    public static Task<int> CreateTask(int value) { return new Task<int>(value); }
+    public static Task<int> ForwardTask(Task<int> source) { return source; }
+    public static async Task<int> EchoAfterAwait(Task<int> source) {
+        int value = await source;
+        return value;
+    }
+}
+public class AbiReflectionTarget {
+    public int Value;
+    public constructor(int value) { Value = value; }
+    public int ReadValue() { return Value; }
+}
 public class Box<T> { }
 public int AddOne(int value) { return value + 1; }
 public T Identity<T>(T value) { return value; }
@@ -4636,10 +4951,250 @@ namespace Math;
 public int Identity<int>(int value) { return value + 100; }
 public long Identity<long>(long value) { return value + 200L; }
 '@, [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $appDirectory 'async_enumerable.cx'), @'
+namespace System.Collections;
+public interface IAsyncEnumerable<T> {
+    IAsyncEnumerator<T> GetAsyncEnumerator(
+        System.Threading.Tasks.CancellationToken cancellationToken);
+}
+public interface IAsyncEnumerator<T> {
+    T Current { const get; }
+    System.Threading.Tasks.Task<bool> MoveNextAsync();
+    System.Threading.Tasks.TaskHandle DisposeAsync();
+}
+'@, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $appDirectory 'main.cx'), @'
 import Math;
 import NumericExtensions;
+import System.Collections;
+import System.Reflection;
+import System.Threading.Tasks;
 namespace App;
+public delegate int CapturedIteratorValue();
+public static class IteratorCaptureProbe {
+    public static CapturedIteratorValue Value;
+}
+public class IteratorRetentionProbe {
+    public int Value;
+    public constructor(int value) { Value = value; }
+}
+public static class AsyncIteratorProbe {
+    public static int Starts;
+    public static int Reads;
+    public static int Finalizers;
+    public static int Disposals;
+    public static int LastAwaitedValue;
+    public static int AwaitPrefixStarts;
+    public static CancellationTokenSource CancelDuringAwait;
+    public static void CancelDuringAwaitToken() { CancelDuringAwait.Cancel(); }
+}
+public extern void ForceCollection();
+public static class PendingAsyncDisposeProbe {
+    public static TaskCompletionSourceVoid Completion;
+    public static TaskCompletionSource<bool> FaultedMove;
+    public static int DisposeCount;
+    public static Exception DisposalException;
+    public static Exception CurrentException;
+    public static bool CancelDisposal;
+    public static void CompleteDisposal() { Completion.SetResult(); }
+    public static void FailMove(Exception exception) {
+        FaultedMove.SetException(exception);
+    }
+}
+public class PendingDisposeSequence : IAsyncEnumerable<int> {
+    public IAsyncEnumerator<int> GetAsyncEnumerator(CancellationToken token) {
+        return new PendingDisposeEnumerator();
+    }
+}
+public class PendingDisposeEnumerator : IAsyncEnumerator<int> {
+    private bool _yielded;
+    public int Current { const get => 17; }
+    public Task<bool> MoveNextAsync() {
+        if (_yielded) return new Task<bool>(false);
+        _yielded = true;
+        return new Task<bool>(true);
+    }
+    public TaskHandle DisposeAsync() {
+        PendingAsyncDisposeProbe.DisposeCount += 1;
+        if (PendingAsyncDisposeProbe.DisposalException != null)
+            return TaskHandle.Faulted(PendingAsyncDisposeProbe.DisposalException);
+        if (PendingAsyncDisposeProbe.CancelDisposal)
+            return TaskHandle.Faulted(new OperationCanceledException());
+        return PendingAsyncDisposeProbe.Completion.Task;
+    }
+}
+public class PendingFaultDisposeSequence : IAsyncEnumerable<int> {
+    public IAsyncEnumerator<int> GetAsyncEnumerator(CancellationToken token) {
+        return new PendingFaultDisposeEnumerator();
+    }
+}
+public class PendingFaultDisposeEnumerator : IAsyncEnumerator<int> {
+    public int Current { const get => 23; }
+    public Task<bool> MoveNextAsync() {
+        return PendingAsyncDisposeProbe.FaultedMove.Task;
+    }
+    public TaskHandle DisposeAsync() {
+        PendingAsyncDisposeProbe.DisposeCount += 1;
+        return PendingAsyncDisposeProbe.Completion.Task;
+    }
+}
+public class CurrentFaultDisposeSequence : IAsyncEnumerable<int> {
+    public IAsyncEnumerator<int> GetAsyncEnumerator(CancellationToken token) {
+        return new CurrentFaultDisposeEnumerator();
+    }
+}
+public class CurrentFaultDisposeEnumerator : IAsyncEnumerator<int> {
+    public int Current { const get {
+        throw PendingAsyncDisposeProbe.CurrentException;
+    } }
+    public Task<bool> MoveNextAsync() { return new Task<bool>(true); }
+    public TaskHandle DisposeAsync() {
+        PendingAsyncDisposeProbe.DisposeCount += 1;
+        if (PendingAsyncDisposeProbe.DisposalException != null)
+            return TaskHandle.Faulted(PendingAsyncDisposeProbe.DisposalException);
+        return PendingAsyncDisposeProbe.Completion.Task;
+    }
+}
+async IAsyncEnumerable<int> AsyncValues(int count) {
+    AsyncIteratorProbe.Starts += 1;
+    for (int value = 0; value < count; value++) yield return value;
+}
+async IAsyncEnumerable<int> AsyncCountingValues(int count) {
+    for (int value = 0; value < count; value++) {
+        AsyncIteratorProbe.Reads += 1;
+        yield return value;
+    }
+}
+async IAsyncEnumerable<int> AsyncFinally() {
+    try {
+        yield return 7;
+        yield return 8;
+    } finally {
+        AsyncIteratorProbe.Finalizers = AsyncIteratorProbe.Finalizers + 1;
+    }
+}
+async IAsyncEnumerable<int> AsyncFinallyValues(int count) {
+    try {
+        for (int value = 0; value < count; value++) yield return value;
+    } finally {
+        AsyncIteratorProbe.Disposals += 1;
+    }
+}
+async IAsyncEnumerable<int> AsyncFault() {
+    try {
+        yield return 9;
+        throw new Exception("async iterator failure");
+    } finally {
+        AsyncIteratorProbe.Finalizers = AsyncIteratorProbe.Finalizers + 1;
+    }
+}
+async IAsyncEnumerable<int> AsyncAwaitValue(Task<int> pending) {
+    int value = await pending;
+    AsyncIteratorProbe.LastAwaitedValue = value;
+    yield return value;
+}
+async IAsyncEnumerable<int> AsyncAwaitWithObservablePrefix(Task<int> pending) {
+    AsyncIteratorProbe.AwaitPrefixStarts += 1;
+    yield return await pending;
+}
+Task<bool> StartPendingAsyncIteratorMove(Task<int> source) {
+    IAsyncEnumerator<int> enumerator =
+        AsyncAwaitValue(source).GetAsyncEnumerator(CancellationToken.None);
+    return enumerator.MoveNextAsync();
+}
+async IAsyncEnumerable<int> AsyncAwaitClosure(Task<int> pending) {
+    int capturedValue = 49;
+    delegate() => int readCapturedValue = () => capturedValue;
+    await pending;
+    int value = readCapturedValue();
+    AsyncIteratorProbe.LastAwaitedValue = value;
+    yield return value;
+}
+Task<int> CancelDuringAwaitOperand(Task<int> pending) {
+    AsyncIteratorProbe.CancelDuringAwaitToken();
+    return pending;
+}
+async IAsyncEnumerable<int> AsyncCancelDuringAwait(Task<int> pending) {
+    int value = await CancelDuringAwaitOperand(pending);
+    yield return value;
+}
+Task<bool> StartPendingAsyncIteratorClosure(Task<int> source) {
+    IAsyncEnumerator<int> enumerator =
+        AsyncAwaitClosure(source).GetAsyncEnumerator(CancellationToken.None);
+    return enumerator.MoveNextAsync();
+}
+async IAsyncEnumerable<int> AsyncYieldCapturedValue() {
+    int capturedValue = 52;
+    IteratorCaptureProbe.Value = () => capturedValue;
+    yield return 1;
+}
+async IAsyncEnumerable<int> AsyncRetainReferenceAcrossAwait(Task<int> pending) {
+    IteratorRetentionProbe retained = new IteratorRetentionProbe(73);
+    int result = await pending;
+    yield return retained.Value;
+}
+async IAsyncEnumerable<int> AsyncMutateCaptureAlias(Task pending) {
+    int capturedValue = 41;
+    delegate() => int readCapturedValue = () => capturedValue;
+    IteratorCaptureProbe.Value = readCapturedValue;
+    await pending;
+    capturedValue = 52;
+    yield return readCapturedValue();
+}
+async IAsyncEnumerable<int> AsyncAwaitVoid(Task pending) {
+    await pending;
+    yield return 43;
+}
+async IAsyncEnumerable<int> AsyncForward(IAsyncEnumerable<int> source) {
+    await foreach (int value in source) {
+        yield return value;
+    }
+}
+async IAsyncEnumerable<int> AsyncBreakForward(IAsyncEnumerable<int> source) {
+    await foreach (int value in source) {
+        yield return value;
+        break;
+    }
+}
+async IAsyncEnumerable<int> AsyncNestedForward(IAsyncEnumerable<int> source) {
+    await foreach (int outer in source) {
+        await foreach (int inner in AsyncFinallyValues(2)) {
+            yield return outer * 10 + inner;
+        }
+    }
+}
+async IAsyncEnumerable<int> AsyncFaultForward(IAsyncEnumerable<int> source) {
+    await foreach (int value in source) {
+        yield return value;
+    }
+}
+async IAsyncEnumerable<int> AsyncThrowForward(IAsyncEnumerable<int> source) {
+    await foreach (int value in source) {
+        throw new Exception("async consumer failure");
+    }
+    yield return 99;
+}
+bool ThrowAsyncSwitchFilter() {
+    throw new Exception("async switch filter failure");
+}
+async IAsyncEnumerable<int> AsyncFilterForward(IAsyncEnumerable<int> source) {
+    await foreach (int value in source) {
+        switch (value) {
+            case 7 when ThrowAsyncSwitchFilter(): yield return value;
+            default: yield return value;
+        }
+    }
+}
+Task ReadyVoidTask() { return new Task(); }
+async Task AwaitVoidTask() {
+    await ReadyVoidTask();
+}
+async Task FailTask() {
+    throw new Exception("async failure");
+}
+async Task<int> FailGenericTask() {
+    throw new Exception("generic async failure");
+}
 public T ForwardReferencedIdentity<T>(T value) {
     T forwarded = Identity(value);
     return forwarded;
@@ -4997,8 +5552,1132 @@ public T[] DefaultArrayLocal<T>() {
     T[] values = default;
     return values;
 }
+Task<int> CompletedTask(int value) {
+    return new Task<int>(value);
+}
+Task<int> CompletePendingTask(int value) {
+    TaskCompletionSource<int> source = new TaskCompletionSource<int>();
+    Task<int> task = source.Task;
+    if (task.IsCompleted) return new Task<int>(-1);
+    source.SetResult(value);
+    if (!task.IsCompleted || source.Task != task || task.GetResult() != value)
+        return new Task<int>(-2);
+    return task;
+}
+async Task<int> AwaitTemporaryTask(int value) {
+    return await CompletedTask(value);
+}
+async Task<int> AwaitPendingTask(Task<int> pending) {
+    return await pending;
+}
+async Task ConsumeAsyncSequence(IAsyncEnumerable<int> source) {
+    await foreach (int value in source) {
+        AsyncIteratorProbe.LastAwaitedValue = value;
+    }
+}
+async Task<int> ConsumeAndReturnLastAsyncSequenceValue(
+    IAsyncEnumerable<int> source) {
+    int last = -1;
+    await foreach (int value in source) {
+        last = value;
+    }
+    return last;
+}
+async Task ConsumeOneAsyncSequenceValue(IAsyncEnumerable<int> source) {
+    await foreach (int value in source) {
+        AsyncIteratorProbe.LastAwaitedValue = value;
+        break;
+    }
+}
+async Task ConsumeAndReturnFromAsyncSequence(IAsyncEnumerable<int> source) {
+    await foreach (int value in source) {
+        AsyncIteratorProbe.LastAwaitedValue = value;
+        return;
+    }
+}
+async Task ConsumeAndThrowFromAsyncSequence(IAsyncEnumerable<int> source) {
+    await foreach (int value in source) {
+        throw new Exception("async task consumer failure");
+    }
+}
+void RethrowException(Exception original) {
+    try { throw original; }
+    catch (Exception) { throw; }
+}
+async Task<int> AwaitPendingTaskIntoLocal(Task<int> pending) {
+    var result = await pending;
+    return result;
+}
+async Task<int> AwaitThenTransform(Task<int> pending) {
+    var value = await pending;
+    value += 2;
+    return value * 3;
+}
+async Task<int> AwaitThenTransformCanceled(Task<int> pending) {
+    var value = await pending;
+    value += 2;
+    return value * 3;
+}
+async Task<int> AwaitConditionalReturn(Task<int> pending, bool chooseAwaitedValue) {
+    var value = await pending;
+    if (chooseAwaitedValue) return value;
+    return 17;
+}
+bool ChooseAwaitBranch(bool chooseFirst) {
+    AsyncAwaitProbe.Steps += 1;
+    return chooseFirst;
+}
+async Task<int> AwaitIfElse(Task<int> first, Task<int> second, bool chooseFirst) {
+    if (ChooseAwaitBranch(chooseFirst)) return await first;
+    else return await second;
+}
+async Task<int> AwaitBranchThenTransform(
+    Task<int> first, Task<int> second, bool chooseFirst) {
+    if (ChooseAwaitBranch(chooseFirst)) {
+        var value = await first;
+        return value + 10;
+    } else {
+        var value = await second;
+        return value + 20;
+    }
+}
+async Task<int> AwaitBranchTwice(
+    Task<int> firstA, Task<int> firstB,
+    Task<int> secondA, Task<int> secondB, bool chooseFirst) {
+    if (ChooseAwaitBranch(chooseFirst)) {
+        var left = await firstA;
+        var right = await firstB;
+        return left + right;
+    } else {
+        var left = await secondA;
+        var right = await secondB;
+        return left - right;
+    }
+}
+async Task<int> AwaitWhileCount(
+    Task<int> first, Task<int> second, int limit) {
+    int iterations = 0;
+    int result = 0;
+    while (iterations < limit) {
+        var value = await (iterations == 0 ? first : second);
+        result = value;
+        iterations++;
+    }
+    return result;
+}
+async Task<int> AwaitWhileControl(Task<int> pending, int limit) {
+    int iterations = 0;
+    int result = 0;
+    while (iterations < limit) {
+        var value = await pending;
+        iterations++;
+        if (value == 99) break;
+        if (value == 0) continue;
+        if (value == 42) return value;
+        result = value;
+    }
+    return result;
+}
+async Task<int> AwaitWhileCompletedDepth(int limit) {
+    int iterations = 0;
+    int result = 0;
+    while (iterations < limit) {
+        var value = await CompletedTask(1);
+        result += value;
+        iterations++;
+    }
+    return result;
+}
+async Task AwaitVoidWhile(Task first, Task next, int limit) {
+    int iterations = 0;
+    while (iterations < limit) {
+        await (iterations == 0 ? first : next);
+        iterations++;
+    }
+    return;
+}
+async Task AwaitVoidWhileControl(Task pending, int limit, int mode) {
+    int iterations = 0;
+    while (iterations < limit) {
+        await pending;
+        iterations++;
+        if (mode == 1) break;
+        if (mode == 2 && iterations < limit) continue;
+        if (mode == 3) return;
+    }
+    return;
+}
+async Task AwaitVoidDoWhile(Task first, Task next, int limit) {
+    int iterations = 0;
+    do {
+        await (iterations == 0 ? first : next);
+        iterations++;
+    } while (iterations < limit);
+    return;
+}
+async Task AwaitVoidDoWhileControl(Task pending, int limit, int mode) {
+    int iterations = 0;
+    do {
+        await pending;
+        iterations++;
+        if (mode == 1) break;
+        if (mode == 2 && iterations < limit) continue;
+        if (mode == 3) return;
+    } while (iterations < limit);
+    return;
+}
+async Task AwaitVoidFor(Task first, Task next, int limit) {
+    for (int index = 0; index < limit; index++) {
+        await (index == 0 ? first : next);
+    }
+}
+async Task AwaitVoidForControl(Task pending, int limit, int mode) {
+    for (int iterations = 0; iterations < limit; iterations++) {
+        await pending;
+        if (mode == 1) break;
+        if (mode == 2) continue;
+        if (mode == 3) return;
+    }
+    return;
+}
+async Task AwaitVoidWhileCompletedDepth(Task pending, int limit) {
+    int iterations = 0;
+    while (iterations < limit) {
+        await pending;
+        iterations++;
+    }
+    return;
+}
+async Task<int> AwaitDoWhileCount(
+    Task<int> first, Task<int> next, int limit) {
+    int iterations = 0;
+    int result = 0;
+    do {
+        var value = await (iterations == 0 ? first : next);
+        result = value;
+        iterations++;
+    } while (iterations < limit);
+    return result;
+}
+async Task<int> AwaitDoWhileControl(Task<int> pending, int limit) {
+    int iterations = 0;
+    int result = 0;
+    do {
+        var value = await pending;
+        iterations++;
+        if (value == 99) break;
+        if (value == 0) continue;
+        if (value == 42) return value;
+        result = value;
+    } while (iterations < limit);
+    return result;
+}
+async Task<int> AwaitForCount(Task<int> first, Task<int> next, int limit) {
+    int result = 0;
+    for (int index = 0; index < limit; index++) {
+        var value = await (index == 0 ? first : next);
+        result = value;
+    }
+    return result;
+}
+async Task<int> AwaitForControl(Task<int> pending, int limit) {
+    int result = 0;
+    for (int index = 0; index < limit; index++) {
+        var value = await pending;
+        if (value == 99) break;
+        if (value == 0) continue;
+        if (value == 42) return value;
+        result = value;
+    }
+    return result;
+}
+int SelectAwaitCase(int selector) {
+    AsyncAwaitProbe.Steps += 1;
+    return selector;
+}
+async Task<int> AwaitSwitchCase(
+    Task<int> first, Task<int> fallback, int selector) {
+    switch (SelectAwaitCase(selector)) {
+        case 1:
+        case 2: {
+            var value = await first;
+            return value;
+        }
+        default: {
+            var value = await fallback;
+            return value;
+        }
+    }
+}
+async Task<int> AwaitSwitchContinuation(
+    Task<int> first, Task<int> fallback, int selector) {
+    int result = 0;
+    switch (SelectAwaitCase(selector)) {
+        case 1:
+        case 2: {
+            var value = await first;
+            result = value + 1;
+            break;
+        }
+        default: {
+            var value = await fallback;
+            result = value + 2;
+            break;
+        }
+    }
+    return result;
+}
+async Task AwaitVoidSwitchContinuation(
+    Task first, Task fallback, int selector) {
+    switch (SelectAwaitCase(selector)) {
+        case 1: {
+            await first;
+            AsyncAwaitProbe.Steps += 10;
+            break;
+        }
+        default: {
+            await fallback;
+            AsyncAwaitProbe.Steps += 20;
+            break;
+        }
+    }
+}
+Task<int> SelectNestedAwaitSource(Task<int> source) {
+    AsyncAwaitProbe.Steps += 1;
+    return source;
+}
+int ConsumeNestedAwaitValue(int value) {
+    AsyncAwaitProbe.Steps += 10;
+    return value + 1;
+}
+async Task<int> AwaitNestedCallArgument(Task<int> source) {
+    return ConsumeNestedAwaitValue(await SelectNestedAwaitSource(source));
+}
+int ReadNestedBinaryLeft() {
+    AsyncAwaitProbe.Steps = AsyncAwaitProbe.Steps * 10 + 1;
+    return 7;
+}
+Task<int> SelectNestedBinarySource(Task<int> source) {
+    AsyncAwaitProbe.Steps = AsyncAwaitProbe.Steps * 10 + 2;
+    return source;
+}
+async Task<int> AwaitNestedBinaryOperand(Task<int> source) {
+    return ReadNestedBinaryLeft() + await SelectNestedBinarySource(source);
+}
+int ReadMultiCallArgumentBefore() {
+    AsyncAwaitProbe.Steps = AsyncAwaitProbe.Steps * 10 - 1;
+    return 10;
+}
+Task<int> SelectMultiCallArgumentSource(Task<int> source) {
+    AsyncAwaitProbe.Steps = AsyncAwaitProbe.Steps * 10 - 2;
+    return source;
+}
+int ReadMultiCallArgumentAfter() {
+    AsyncAwaitProbe.Steps = AsyncAwaitProbe.Steps * 10 - 3;
+    return 30;
+}
+int CombineMultiCallArguments(int before, int value, int after) {
+    return before == 10 && after == 30 ? value : -99;
+}
+async Task<int> AwaitMultipleCallArguments(Task<int> source) {
+    return CombineMultiCallArguments(
+        ReadMultiCallArgumentBefore(),
+        await SelectMultiCallArgumentSource(source),
+        ReadMultiCallArgumentAfter());
+}
+bool ChooseNestedAwaitBranch(bool choose) {
+    AsyncAwaitProbe.Steps += 1;
+    return choose;
+}
+Task<int> SelectConditionalAwaitSource(Task<int> source) {
+    AsyncAwaitProbe.Steps += 10;
+    return source;
+}
+int ReadConditionalAwaitFallback() {
+    AsyncAwaitProbe.Steps += 100;
+    return 7;
+}
+async Task<int> AwaitConditionalExpression(
+    bool chooseAwait, Task<int> source) {
+    return ChooseNestedAwaitBranch(chooseAwait)
+        ? await SelectConditionalAwaitSource(source)
+        : ReadConditionalAwaitFallback();
+}
+bool ReadShortCircuitAwaitLeft(bool value) {
+    AsyncAwaitProbe.Steps += 1;
+    return value;
+}
+Task<bool> SelectShortCircuitAwaitSource(Task<bool> source) {
+    AsyncAwaitProbe.Steps += 10;
+    return source;
+}
+async Task<bool> AwaitShortCircuitAnd(bool left, Task<bool> source) {
+    return ReadShortCircuitAwaitLeft(left) &&
+        await SelectShortCircuitAwaitSource(source);
+}
+async Task<bool> AwaitShortCircuitOr(bool left, Task<bool> source) {
+    return ReadShortCircuitAwaitLeft(left) ||
+        await SelectShortCircuitAwaitSource(source);
+}
+string ReadNullCoalesceValue(bool present) {
+    AsyncAwaitProbe.Steps += 1;
+    return present ? "left" : null;
+}
+Task<string> SelectNullCoalesceFallback(Task<string> source) {
+    AsyncAwaitProbe.Steps += 10;
+    return source;
+}
+async Task<string> AwaitNullCoalesce(bool present, Task<string> source) {
+    string value = ReadNullCoalesceValue(present);
+    return value ?? await SelectNullCoalesceFallback(source);
+}
+async Task AwaitIfElseVoid(Task first, Task second, bool chooseFirst) {
+    if (ChooseAwaitBranch(chooseFirst)) await first;
+    else await second;
+}
+async Task<int> AwaitWithOffset(Task<int> pending) {
+    int offset = 9;
+    var value = await pending;
+    return value + offset;
+}
+async Task<int> AwaitTwice(Task<int> first, Task<int> second) {
+    int baseline = 2;
+    var left = await first;
+    int adjusted = left + baseline;
+    var right = await second;
+    return adjusted + right;
+}
+async Task<T> AwaitGenericLocal<T>(Task<T> pending) {
+    var result = await pending;
+    return result;
+}
+async Task<T> AwaitPendingGenericTask<T>(Task<T> pending) {
+    return await pending;
+}
+async Task AwaitPendingVoidTask(Task pending) {
+    await pending;
+}
+public static class AsyncAwaitProbe {
+    public static int Steps;
+    public static int ReturnEvaluations;
+    public static int EvaluateReturn(bool fail) {
+        ReturnEvaluations += 1;
+        if (fail) throw new Exception("return expression failed");
+        return 73;
+    }
+    public static int Advance(int index) {
+        if (index == 0) {
+            Steps = 1;
+            return 1;
+        }
+        Steps = 2;
+        return 2;
+    }
+}
+async Task AwaitProtectedBody(Task pending) {
+    try { await pending; }
+    finally { AsyncAwaitProbe.Steps += 1; }
+}
+async Task AwaitVoidTwice(Task first, Task second) {
+    AsyncAwaitProbe.Steps = 0;
+    await first;
+    AsyncAwaitProbe.Steps += 1;
+    await second;
+    AsyncAwaitProbe.Steps += 1;
+}
+async Task AwaitVoidConditionalReturn(Task pending, bool finishEarly) {
+    AsyncAwaitProbe.Steps = 0;
+    await pending;
+    if (finishEarly) return;
+    AsyncAwaitProbe.Steps += 10;
+    return;
+}
+async Task AwaitCleanupAfterTry(Task cleanup, bool failBeforeCleanup) {
+    try {
+        if (failBeforeCleanup) throw new Exception("try failed before cleanup");
+    } finally {
+        await cleanup;
+    }
+}
+async Task AwaitCleanupTwice(Task first, Task second) {
+    try { }
+    finally { await first; await second; }
+}
+async Task AwaitReturnThroughCleanup(Task cleanup) {
+    try { return; }
+    finally { await cleanup; }
+}
+async Task<int> AwaitResultReturnThroughCleanup(Task cleanup) {
+    try { return AsyncAwaitProbe.EvaluateReturn(false); }
+    finally { await cleanup; }
+}
+async Task<int> AwaitFaultingResultReturnThroughCleanup(Task cleanup) {
+    try { return AsyncAwaitProbe.EvaluateReturn(true); }
+    finally { await cleanup; }
+}
+async Task<int> AwaitNestedResultReturnThroughCleanup(
+    Task innerCleanup, Task outerCleanup) {
+    try {
+        try { return AsyncAwaitProbe.EvaluateReturn(false); }
+        finally { await innerCleanup; }
+    }
+    finally { await outerCleanup; }
+}
+async Task AwaitBreakThroughCleanup(Task cleanup) {
+    for (int index = 0; index < 2; index++) {
+        try { break; }
+        finally { await cleanup; }
+    }
+}
+async Task AwaitContinueThroughCleanup(Task cleanup) {
+    for (int index = 0; index < 2; index = AsyncAwaitProbe.Advance(index)) {
+        try { continue; }
+        finally { await cleanup; }
+    }
+}
+async Task<int> AwaitResultBreakThroughCleanup(Task cleanup) {
+    for (int index = 0; index < 2; index = AsyncAwaitProbe.Advance(index)) {
+        try { break; }
+        finally { await cleanup; }
+    }
+    return 74;
+}
+async Task<int> AwaitResultContinueThroughCleanup(Task cleanup) {
+    for (int index = 0; index < 1; index = AsyncAwaitProbe.Advance(index)) {
+        try { continue; }
+        finally { await cleanup; }
+    }
+    return 75;
+}
+async Task AwaitCleanupTwiceAfterNestedFinally(Task first, Task second) {
+    try {
+        try { AsyncAwaitProbe.Steps = 1; }
+        finally { AsyncAwaitProbe.Steps = 12; }
+    } finally { await first; await second; }
+}
+async Task AwaitNestedCleanupRegions(Task innerCleanup, Task outerCleanup) {
+    try {
+        try { AsyncAwaitProbe.Steps = 1; }
+        finally { await innerCleanup; }
+    } finally { await outerCleanup; }
+}
+async Task AwaitTaskDelay() {
+    await Task.Delay(1u);
+}
+async Task<int> AwaitCompletedTask(int value) {
+    Task<int> task = CompletedTask(value);
+    int first = await task;
+    int second = await task;
+    return first == second ? first * 2 : -1;
+}
 public int Run() {
     if (RunDynamicInvoke() != 42) return 231;
+    Task<int> crossModuleCreatedTask = Math.CrossModuleCoroutineProbe.CreateTask(73);
+    if (!crossModuleCreatedTask.IsCompleted || crossModuleCreatedTask.GetResult() != 73)
+        return 500;
+    TaskCompletionSource<int> crossModuleTaskSource = new TaskCompletionSource<int>();
+    Task<int> crossModuleAwaitedTask =
+        Math.CrossModuleCoroutineProbe.ForwardTask(crossModuleTaskSource.Task);
+    if (crossModuleAwaitedTask.IsCompleted) return 501;
+    ForceCollection();
+    crossModuleTaskSource.SetResult(74);
+    TaskScheduler.Run();
+    if (!crossModuleAwaitedTask.IsCompleted || crossModuleAwaitedTask.GetResult() != 74)
+        return 502;
+    Task<int> crossModuleSpecializedAwait =
+        Math.CrossModuleCoroutineProbe.EchoAfterAwait(
+            Math.CrossModuleCoroutineProbe.CreateTask(77));
+    if (!crossModuleSpecializedAwait.IsCompleted ||
+        crossModuleSpecializedAwait.GetResult() != 77) return 507;
+    Math.IValueBox<int> crossModuleBox = new Math.ValueBox<int>(75);
+    if (crossModuleBox.GetValue() != 75) return 503;
+    Math.AbiReflectionTarget crossModuleReflectionTarget =
+        new Math.AbiReflectionTarget(76);
+    object crossModuleReflectionObject = crossModuleReflectionTarget;
+    TypeInfo crossModuleReflectionType = crossModuleReflectionObject.Type;
+    if (crossModuleReflectionType.Name != "AbiReflectionTarget" ||
+        (int)crossModuleReflectionType.Invoke(
+            crossModuleReflectionTarget, "ReadValue", null) != 76) return 504;
+    TaskCompletionSource<int> retainedReferenceSource = new TaskCompletionSource<int>();
+    IAsyncEnumerator<int> retainedReferenceEnumerator =
+        AsyncRetainReferenceAcrossAwait(retainedReferenceSource.Task)
+            .GetAsyncEnumerator(CancellationToken.None);
+    Task<bool> retainedReferenceMove = retainedReferenceEnumerator.MoveNextAsync();
+    if (retainedReferenceMove.IsCompleted) return 440;
+    ForceCollection();
+    retainedReferenceSource.SetResult(0);
+    TaskScheduler.Run();
+    if (!retainedReferenceMove.GetResult()) return 445;
+    if (retainedReferenceEnumerator.Current != 73) return 446;
+    retainedReferenceEnumerator.DisposeAsync().GetResult();
+    TaskCompletionSource closureAliasSource = new TaskCompletionSource();
+    IAsyncEnumerator<int> closureAliasEnumerator =
+        AsyncMutateCaptureAlias(closureAliasSource.Task)
+            .GetAsyncEnumerator(CancellationToken.None);
+    Task<bool> closureAliasMove = closureAliasEnumerator.MoveNextAsync();
+    if (closureAliasMove.IsCompleted) return 442;
+    ForceCollection();
+    closureAliasSource.SetResult();
+    TaskScheduler.Run();
+    if (!closureAliasMove.GetResult()) return 447;
+    if (closureAliasEnumerator.Current != 52) return 448;
+    closureAliasEnumerator.DisposeAsync().GetResult();
+    closureAliasEnumerator = null;
+    ForceCollection();
+    CapturedIteratorValue escapedClosureAlias = IteratorCaptureProbe.Value;
+    if (escapedClosureAlias() != 52) return 444;
+    IAsyncEnumerator<int> escapedClosureEnumerator =
+        AsyncYieldCapturedValue().GetAsyncEnumerator(CancellationToken.None);
+    if (!escapedClosureEnumerator.MoveNextAsync().GetResult() ||
+        escapedClosureEnumerator.Current != 1) return 438;
+    escapedClosureEnumerator.DisposeAsync().GetResult();
+    escapedClosureEnumerator = null;
+    ForceCollection();
+    CapturedIteratorValue escapedIteratorClosure = IteratorCaptureProbe.Value;
+    if (escapedIteratorClosure() != 52) return 439;
+    IAsyncEnumerable<int> asyncValues = AsyncValues(2);
+    if (AsyncIteratorProbe.Starts != 0) return 370;
+    IAsyncEnumerator<int> firstAsyncEnumerator =
+        asyncValues.GetAsyncEnumerator(CancellationToken.None);
+    if (AsyncIteratorProbe.Starts != 0) return 371;
+    bool rejectedAsyncCurrent = false;
+    try { int invalid = firstAsyncEnumerator.Current; }
+    catch (Exception) { rejectedAsyncCurrent = true; }
+    if (!rejectedAsyncCurrent) return 670;
+    Task<bool> firstAsyncMove = firstAsyncEnumerator.MoveNextAsync();
+    if (!firstAsyncMove.IsCompleted || !firstAsyncMove.GetResult() ||
+        firstAsyncEnumerator.Current != 0 || AsyncIteratorProbe.Starts != 1)
+        return 372;
+    IAsyncEnumerator<int> secondAsyncEnumerator =
+        asyncValues.GetAsyncEnumerator(CancellationToken.None);
+    if (!secondAsyncEnumerator.MoveNextAsync().GetResult() ||
+        secondAsyncEnumerator.Current != 0 || AsyncIteratorProbe.Starts != 2)
+        return 373;
+    if (!firstAsyncEnumerator.MoveNextAsync().GetResult() ||
+        firstAsyncEnumerator.Current != 1) return 374;
+    if (firstAsyncEnumerator.MoveNextAsync().GetResult() ||
+        firstAsyncEnumerator.MoveNextAsync().GetResult()) return 375;
+    rejectedAsyncCurrent = false;
+    try { int invalid = firstAsyncEnumerator.Current; }
+    catch (Exception) { rejectedAsyncCurrent = true; }
+    if (!rejectedAsyncCurrent) return 671;
+    firstAsyncEnumerator.DisposeAsync().GetResult();
+    secondAsyncEnumerator.DisposeAsync().GetResult();
+    AsyncIteratorProbe.Reads = 0;
+    IAsyncEnumerator<int> demandEnumerator =
+        AsyncCountingValues(2).GetAsyncEnumerator(CancellationToken.None);
+    if (AsyncIteratorProbe.Reads != 0) return 672;
+    if (!demandEnumerator.MoveNextAsync().GetResult() ||
+        demandEnumerator.Current != 0 || AsyncIteratorProbe.Reads != 1) return 673;
+    if (AsyncIteratorProbe.Reads != 1) return 674;
+    if (!demandEnumerator.MoveNextAsync().GetResult() ||
+        demandEnumerator.Current != 1 || AsyncIteratorProbe.Reads != 2) return 675;
+    if (demandEnumerator.MoveNextAsync().GetResult() ||
+        AsyncIteratorProbe.Reads != 2) return 676;
+    demandEnumerator.DisposeAsync().GetResult();
+    IAsyncEnumerator<int> forwardedAsyncEnumerator =
+        AsyncForward(asyncValues).GetAsyncEnumerator(CancellationToken.None);
+    if (!forwardedAsyncEnumerator.MoveNextAsync().GetResult() ||
+        forwardedAsyncEnumerator.Current != 0) return 397;
+    if (!forwardedAsyncEnumerator.MoveNextAsync().GetResult() ||
+        forwardedAsyncEnumerator.Current != 1) return 398;
+    if (forwardedAsyncEnumerator.MoveNextAsync().GetResult()) return 399;
+    forwardedAsyncEnumerator.DisposeAsync().GetResult();
+    AsyncIteratorProbe.Disposals = 0;
+    IAsyncEnumerator<int> nestedAsyncEnumerator =
+        AsyncNestedForward(AsyncFinallyValues(2)).GetAsyncEnumerator(CancellationToken.None);
+    if (!nestedAsyncEnumerator.MoveNextAsync().GetResult() ||
+        nestedAsyncEnumerator.Current != 0) return 665;
+    if (!nestedAsyncEnumerator.MoveNextAsync().GetResult() ||
+        nestedAsyncEnumerator.Current != -1) return 666;
+    if (!nestedAsyncEnumerator.MoveNextAsync().GetResult() ||
+        nestedAsyncEnumerator.Current != 100) return 667;
+    if (!nestedAsyncEnumerator.MoveNextAsync().GetResult() ||
+        nestedAsyncEnumerator.Current != 99) return 668;
+    if (nestedAsyncEnumerator.MoveNextAsync().GetResult() ||
+        AsyncIteratorProbe.Disposals != 3) return 669;
+    nestedAsyncEnumerator.DisposeAsync().GetResult();
+    int finalizersBeforeAsyncForeachBreak = AsyncIteratorProbe.Finalizers;
+    IAsyncEnumerator<int> breakForwardedAsyncEnumerator =
+        AsyncBreakForward(AsyncFinally()).GetAsyncEnumerator(CancellationToken.None);
+    if (!breakForwardedAsyncEnumerator.MoveNextAsync().GetResult() ||
+        breakForwardedAsyncEnumerator.Current != 7) return 400;
+    if (breakForwardedAsyncEnumerator.MoveNextAsync().GetResult()) return 401;
+    if (AsyncIteratorProbe.Finalizers != finalizersBeforeAsyncForeachBreak + 1)
+        return 402;
+    breakForwardedAsyncEnumerator.DisposeAsync().GetResult();
+    PendingAsyncDisposeProbe.Completion = new TaskCompletionSource();
+    PendingAsyncDisposeProbe.DisposeCount = 0;
+    IAsyncEnumerator<int> pendingDisposeForwardedAsyncEnumerator =
+        AsyncBreakForward(new PendingDisposeSequence()).GetAsyncEnumerator(
+            CancellationToken.None);
+    Task<bool> pendingDisposeFirstMove =
+        pendingDisposeForwardedAsyncEnumerator.MoveNextAsync();
+    if (!pendingDisposeFirstMove.IsCompleted ||
+        !pendingDisposeFirstMove.GetResult() ||
+        pendingDisposeForwardedAsyncEnumerator.Current != 17) return 413;
+    Task<bool> pendingDisposeSecondMove =
+        pendingDisposeForwardedAsyncEnumerator.MoveNextAsync();
+    if (pendingDisposeSecondMove.IsCompleted ||
+        PendingAsyncDisposeProbe.DisposeCount != 1) return 414;
+    PendingAsyncDisposeProbe.CompleteDisposal();
+    if (TaskScheduler.Run() != 2u || !pendingDisposeSecondMove.IsCompleted ||
+        pendingDisposeSecondMove.GetResult() ||
+        PendingAsyncDisposeProbe.DisposeCount != 1) return 415;
+    pendingDisposeForwardedAsyncEnumerator.DisposeAsync().GetResult();
+    PendingAsyncDisposeProbe.Completion = new TaskCompletionSourceVoid();
+    PendingAsyncDisposeProbe.DisposeCount = 0;
+    Exception innerDisposalException = new Exception("inner disposal failure");
+    PendingAsyncDisposeProbe.DisposalException = innerDisposalException;
+    IAsyncEnumerator<int> disposalFaultEnumerator =
+        AsyncBreakForward(new PendingDisposeSequence()).GetAsyncEnumerator(
+            CancellationToken.None);
+    if (!disposalFaultEnumerator.MoveNextAsync().GetResult()) return 670;
+    Task<bool> disposalFaultMove = disposalFaultEnumerator.MoveNextAsync();
+    if (!disposalFaultMove.IsCompleted ||
+        PendingAsyncDisposeProbe.DisposeCount != 1) return 672;
+    bool observedInnerDisposalException = false;
+    try { disposalFaultMove.GetResult(); }
+    catch (Exception exception) {
+        observedInnerDisposalException = exception == innerDisposalException;
+    }
+    if (!observedInnerDisposalException) return 673;
+    PendingAsyncDisposeProbe.Completion = new TaskCompletionSourceVoid();
+    PendingAsyncDisposeProbe.DisposeCount = 0;
+    PendingAsyncDisposeProbe.DisposalException = null;
+    PendingAsyncDisposeProbe.CancelDisposal = true;
+    IAsyncEnumerator<int> disposalCancelEnumerator =
+        AsyncBreakForward(new PendingDisposeSequence()).GetAsyncEnumerator(
+            CancellationToken.None);
+    if (!disposalCancelEnumerator.MoveNextAsync().GetResult()) return 674;
+    Task<bool> disposalCancelMove = disposalCancelEnumerator.MoveNextAsync();
+    if (!disposalCancelMove.IsCanceled ||
+        PendingAsyncDisposeProbe.DisposeCount != 1) return 676;
+    bool observedInnerDisposalCancellation = false;
+    try { disposalCancelMove.GetResult(); }
+    catch (OperationCanceledException) { observedInnerDisposalCancellation = true; }
+    if (!observedInnerDisposalCancellation) return 677;
+    PendingAsyncDisposeProbe.CancelDisposal = false;
+    PendingAsyncDisposeProbe.Completion = new TaskCompletionSourceVoid();
+    PendingAsyncDisposeProbe.DisposeCount = 0;
+    PendingAsyncDisposeProbe.CurrentException =
+        new Exception("async current failure");
+    IAsyncEnumerator<int> currentFaultEnumerator =
+        AsyncForward(new CurrentFaultDisposeSequence()).GetAsyncEnumerator(
+            CancellationToken.None);
+    Task<bool> currentFaultMove = currentFaultEnumerator.MoveNextAsync();
+    TaskScheduler.Run();
+    if (currentFaultMove.IsCompleted || PendingAsyncDisposeProbe.DisposeCount != 1)
+        return 680;
+    PendingAsyncDisposeProbe.CompleteDisposal();
+    if (TaskScheduler.Run() != 2u || !currentFaultMove.IsCompleted ||
+        PendingAsyncDisposeProbe.DisposeCount != 1) return 681;
+    bool observedCurrentFault = false;
+    try { currentFaultMove.GetResult(); }
+    catch (Exception exception) {
+        observedCurrentFault = exception == PendingAsyncDisposeProbe.CurrentException;
+    }
+    if (!observedCurrentFault) return 682;
+    Exception cleanupOverridesCurrentException =
+        new Exception("current cleanup overrides source");
+    PendingAsyncDisposeProbe.CurrentException =
+        new Exception("original current failure");
+    PendingAsyncDisposeProbe.DisposalException = cleanupOverridesCurrentException;
+    PendingAsyncDisposeProbe.DisposeCount = 0;
+    IAsyncEnumerator<int> currentAndCleanupFaultEnumerator =
+        AsyncForward(new CurrentFaultDisposeSequence()).GetAsyncEnumerator(
+            CancellationToken.None);
+    Task<bool> currentAndCleanupFaultMove =
+        currentAndCleanupFaultEnumerator.MoveNextAsync();
+    TaskScheduler.Run();
+    if (!currentAndCleanupFaultMove.IsCompleted ||
+        PendingAsyncDisposeProbe.DisposeCount != 1) return 683;
+    bool observedCurrentCleanupOverride = false;
+    try { currentAndCleanupFaultMove.GetResult(); }
+    catch (Exception exception) {
+        observedCurrentCleanupOverride = exception == cleanupOverridesCurrentException;
+    }
+    if (!observedCurrentCleanupOverride) return 684;
+    PendingAsyncDisposeProbe.DisposalException = null;
+    PendingAsyncDisposeProbe.CurrentException = null;
+    int finalizersBeforeDisposeBeforeMove = AsyncIteratorProbe.Finalizers;
+    IAsyncEnumerator<int> disposedBeforeFirstMove =
+        AsyncFinally().GetAsyncEnumerator(CancellationToken.None);
+    disposedBeforeFirstMove.DisposeAsync().GetResult();
+    disposedBeforeFirstMove.DisposeAsync().GetResult();
+    if (AsyncIteratorProbe.Finalizers != finalizersBeforeDisposeBeforeMove)
+        return 678;
+    int finalizersBeforeAsyncDispose = AsyncIteratorProbe.Finalizers;
+    IAsyncEnumerator<int> asyncFinallyEnumerator =
+        AsyncFinally().GetAsyncEnumerator(CancellationToken.None);
+    if (!asyncFinallyEnumerator.MoveNextAsync().GetResult() ||
+        asyncFinallyEnumerator.Current != 7) return 376;
+    asyncFinallyEnumerator.DisposeAsync().GetResult();
+    asyncFinallyEnumerator.DisposeAsync().GetResult();
+    if (AsyncIteratorProbe.Finalizers != finalizersBeforeAsyncDispose + 1)
+        return 377;
+    IAsyncEnumerator<int> asyncFaultEnumerator =
+        AsyncFault().GetAsyncEnumerator(CancellationToken.None);
+    if (!asyncFaultEnumerator.MoveNextAsync().GetResult() ||
+        asyncFaultEnumerator.Current != 9) return 378;
+    bool observedAsyncIteratorFault = false;
+    try { asyncFaultEnumerator.MoveNextAsync().GetResult(); }
+    catch (Exception exception) {
+        if (exception.Message != "async iterator failure") return 379;
+        observedAsyncIteratorFault = true;
+    }
+    if (!observedAsyncIteratorFault) return 380;
+    int finalizersBeforeAsyncForeachFault = AsyncIteratorProbe.Finalizers;
+    IAsyncEnumerator<int> faultForwardedAsyncEnumerator =
+        AsyncFaultForward(AsyncFault()).GetAsyncEnumerator(CancellationToken.None);
+    if (!faultForwardedAsyncEnumerator.MoveNextAsync().GetResult() ||
+        faultForwardedAsyncEnumerator.Current != 9) return 403;
+    Task<bool> forwardedFaultMove =
+        faultForwardedAsyncEnumerator.MoveNextAsync();
+    TaskScheduler.Run();
+    if (!forwardedFaultMove.IsCompleted) return 404;
+    bool observedForwardedAsyncIteratorFault = false;
+    try { forwardedFaultMove.GetResult(); }
+    catch (Exception exception) {
+        if (exception.Message != "async iterator failure") return 405;
+        observedForwardedAsyncIteratorFault = true;
+    }
+    if (!observedForwardedAsyncIteratorFault ||
+        AsyncIteratorProbe.Finalizers != finalizersBeforeAsyncForeachFault + 1)
+        return 406;
+    int finalizersBeforeAsyncForeachBodyFault = AsyncIteratorProbe.Finalizers;
+    IAsyncEnumerator<int> throwingForwardedAsyncEnumerator =
+        AsyncThrowForward(AsyncFinally()).GetAsyncEnumerator(CancellationToken.None);
+    Task<bool> throwingForwardedMove =
+        throwingForwardedAsyncEnumerator.MoveNextAsync();
+    TaskScheduler.Run();
+    if (!throwingForwardedMove.IsCompleted) return 407;
+    bool observedAsyncConsumerFault = false;
+    try { throwingForwardedMove.GetResult(); }
+    catch (Exception exception) {
+        if (exception.Message != "async consumer failure") return 408;
+        observedAsyncConsumerFault = true;
+    }
+    if (!observedAsyncConsumerFault ||
+        AsyncIteratorProbe.Finalizers != finalizersBeforeAsyncForeachBodyFault + 1)
+        return 409;
+    int finalizersBeforeAsyncForeachFilterFault = AsyncIteratorProbe.Finalizers;
+    IAsyncEnumerator<int> filterFaultForwardedAsyncEnumerator =
+        AsyncFilterForward(AsyncFinally()).GetAsyncEnumerator(CancellationToken.None);
+    Task<bool> filterFaultForwardedMove =
+        filterFaultForwardedAsyncEnumerator.MoveNextAsync();
+    TaskScheduler.Run();
+    if (!filterFaultForwardedMove.IsCompleted) return 410;
+    bool observedAsyncSwitchFilterFault = false;
+    try { filterFaultForwardedMove.GetResult(); }
+    catch (Exception exception) {
+        if (exception.Message != "async switch filter failure") return 411;
+        observedAsyncSwitchFilterFault = true;
+    }
+    if (!observedAsyncSwitchFilterFault ||
+        AsyncIteratorProbe.Finalizers != finalizersBeforeAsyncForeachFilterFault + 1)
+        return 412;
+    CancellationTokenSource faultCleanupCancellation = new CancellationTokenSource();
+    PendingAsyncDisposeProbe.Completion = new TaskCompletionSourceVoid();
+    PendingAsyncDisposeProbe.FaultedMove = new TaskCompletionSource<bool>();
+    PendingAsyncDisposeProbe.DisposeCount = 0;
+    PendingAsyncDisposeProbe.FailMove(
+        new Exception("fault-cleanup producer failure"));
+    IAsyncEnumerator<int> faultCleanupEnumerator =
+        AsyncFaultForward(new PendingFaultDisposeSequence()).GetAsyncEnumerator(
+            faultCleanupCancellation.Token);
+    Task<bool> faultCleanupMove = faultCleanupEnumerator.MoveNextAsync();
+    if (faultCleanupMove.IsCompleted || TaskScheduler.Run() != 1u ||
+        faultCleanupMove.IsCompleted || PendingAsyncDisposeProbe.DisposeCount != 1)
+        return 416;
+    faultCleanupCancellation.Cancel();
+    if (faultCleanupMove.IsCompleted) return 417;
+    PendingAsyncDisposeProbe.CompleteDisposal();
+    if (TaskScheduler.Run() != 2u || !faultCleanupMove.IsCompleted) return 418;
+    bool observedFaultAfterCanceledCleanup = false;
+    try { faultCleanupMove.GetResult(); }
+    catch (Exception exception) {
+        if (exception.Message != "fault-cleanup producer failure") return 419;
+        observedFaultAfterCanceledCleanup = true;
+    }
+    if (!observedFaultAfterCanceledCleanup) return 420;
+    if (faultCleanupMove.IsCanceled) return 421;
+    if (PendingAsyncDisposeProbe.DisposeCount != 1) return 422;
+    CancellationTokenSource asyncIteratorCancellation =
+        new CancellationTokenSource();
+    IAsyncEnumerator<int> canceledAsyncEnumerator =
+        asyncValues.GetAsyncEnumerator(asyncIteratorCancellation.Token);
+    asyncIteratorCancellation.Cancel();
+    Task<bool> canceledAsyncMove = canceledAsyncEnumerator.MoveNextAsync();
+    if (!canceledAsyncMove.IsCompleted || !canceledAsyncMove.IsCanceled) return 381;
+    bool observedAsyncIteratorCancellation = false;
+    try { canceledAsyncMove.GetResult(); }
+    catch (OperationCanceledException) {
+        observedAsyncIteratorCancellation = true;
+    }
+    if (!observedAsyncIteratorCancellation) return 382;
+    canceledAsyncEnumerator.DisposeAsync().GetResult();
+    AsyncIteratorProbe.AwaitPrefixStarts = 0;
+    TaskCompletionSource<int> prefixAsyncIteratorSource =
+        new TaskCompletionSource<int>();
+    IAsyncEnumerator<int> prefixAsyncEnumerator =
+        AsyncAwaitWithObservablePrefix(prefixAsyncIteratorSource.Task)
+            .GetAsyncEnumerator(CancellationToken.None);
+    Task<bool> prefixAsyncMove = prefixAsyncEnumerator.MoveNextAsync();
+    if (prefixAsyncMove.IsCompleted || AsyncIteratorProbe.AwaitPrefixStarts != 1)
+        return 666;
+    ForceCollection();
+    prefixAsyncIteratorSource.SetResult(43);
+    if (TaskScheduler.Run() != 2u || !prefixAsyncMove.IsCompleted ||
+        !prefixAsyncMove.GetResult() || prefixAsyncEnumerator.Current != 43 ||
+        AsyncIteratorProbe.AwaitPrefixStarts != 1) return 667;
+    prefixAsyncEnumerator.DisposeAsync().GetResult();
+    TaskCompletionSource<int> asyncIteratorSource =
+        new TaskCompletionSource<int>();
+    IAsyncEnumerator<int> awaitingAsyncEnumerator =
+        AsyncAwaitValue(asyncIteratorSource.Task).GetAsyncEnumerator(
+            CancellationToken.None);
+    Task<bool> awaitingAsyncMove = awaitingAsyncEnumerator.MoveNextAsync();
+    if (awaitingAsyncMove.IsCompleted) return 383;
+    Task<bool> concurrentAsyncMove = awaitingAsyncEnumerator.MoveNextAsync();
+    if (!concurrentAsyncMove.IsCompleted || concurrentAsyncMove.IsCanceled)
+        return 423;
+    bool observedConcurrentAsyncMoveFault = false;
+    try { concurrentAsyncMove.GetResult(); }
+    catch (Exception) { observedConcurrentAsyncMoveFault = true; }
+    if (!observedConcurrentAsyncMoveFault || awaitingAsyncMove.IsCompleted)
+        return 424;
+    asyncIteratorSource.SetResult(42);
+    if (TaskScheduler.Run() != 2u) return 384;
+    if (!awaitingAsyncMove.IsCompleted) return 385;
+    if (!awaitingAsyncMove.GetResult()) return 386;
+    if (awaitingAsyncEnumerator.Current != 42) return 387;
+    awaitingAsyncEnumerator.DisposeAsync().GetResult();
+    TaskCompletionSource<int> collectedAsyncIteratorSource =
+        new TaskCompletionSource<int>();
+    AsyncIteratorProbe.LastAwaitedValue = 0;
+    Task<bool> collectedAsyncIteratorMove =
+        StartPendingAsyncIteratorMove(collectedAsyncIteratorSource.Task);
+    if (collectedAsyncIteratorMove.IsCompleted) return 425;
+    ForceCollection();
+    collectedAsyncIteratorSource.SetResult(44);
+    if (TaskScheduler.Run() != 2u ||
+        !collectedAsyncIteratorMove.IsCompleted ||
+        !collectedAsyncIteratorMove.GetResult() ||
+        AsyncIteratorProbe.LastAwaitedValue != 44) return 426;
+    TaskCompletionSource<int> collectedClosureSource =
+        new TaskCompletionSource<int>();
+    AsyncIteratorProbe.LastAwaitedValue = 0;
+    Task<bool> collectedClosureMove =
+        StartPendingAsyncIteratorClosure(collectedClosureSource.Task);
+    if (collectedClosureMove.IsCompleted) return 436;
+    ForceCollection();
+    collectedClosureSource.SetResult(1);
+    if (TaskScheduler.Run() != 2u || !collectedClosureMove.IsCompleted ||
+        !collectedClosureMove.GetResult() ||
+        AsyncIteratorProbe.LastAwaitedValue != 49) return 437;
+    TaskCompletionSource<int> faultedAsyncIteratorSource =
+        new TaskCompletionSource<int>();
+    IAsyncEnumerator<int> faultedAwaitEnumerator =
+        AsyncAwaitValue(faultedAsyncIteratorSource.Task).GetAsyncEnumerator(
+            CancellationToken.None);
+    Task<bool> faultedAwaitMove = faultedAwaitEnumerator.MoveNextAsync();
+    faultedAsyncIteratorSource.SetException(
+        new Exception("async iterator await failure"));
+    if (TaskScheduler.Run() != 2u || !faultedAwaitMove.IsCompleted ||
+        faultedAwaitMove.IsCanceled) return 388;
+    bool observedAsyncIteratorAwaitFault = false;
+    try { faultedAwaitMove.GetResult(); }
+    catch (Exception exception) {
+        if (exception.Message != "async iterator await failure") return 389;
+        observedAsyncIteratorAwaitFault = true;
+    }
+    if (!observedAsyncIteratorAwaitFault) return 390;
+    faultedAwaitEnumerator.DisposeAsync().GetResult();
+    TaskCompletionSource<int> collectedAsyncIteratorFaultSource =
+        new TaskCompletionSource<int>();
+    IAsyncEnumerator<int> collectedFaultAwaitEnumerator =
+        AsyncAwaitValue(collectedAsyncIteratorFaultSource.Task).GetAsyncEnumerator(
+            CancellationToken.None);
+    Task<bool> collectedFaultAwaitMove =
+        collectedFaultAwaitEnumerator.MoveNextAsync();
+    collectedAsyncIteratorFaultSource.SetException(
+        new Exception("collected async iterator failure"));
+    ForceCollection();
+    if (TaskScheduler.Run() != 2u || !collectedFaultAwaitMove.IsCompleted ||
+        collectedFaultAwaitMove.IsCanceled) return 430;
+    bool observedCollectedAsyncIteratorFault = false;
+    try { collectedFaultAwaitMove.GetResult(); }
+    catch (Exception exception) {
+        if (exception.Message != "collected async iterator failure") return 431;
+        observedCollectedAsyncIteratorFault = true;
+    }
+    if (!observedCollectedAsyncIteratorFault) return 432;
+    collectedFaultAwaitEnumerator.DisposeAsync().GetResult();
+    TaskCompletionSource<int> interleavedIteratorFaultSource =
+        new TaskCompletionSource<int>();
+    TaskCompletionSource<int> interleavedIteratorSuccessSource =
+        new TaskCompletionSource<int>();
+    IAsyncEnumerator<int> interleavedFaultEnumerator =
+        AsyncAwaitValue(interleavedIteratorFaultSource.Task).GetAsyncEnumerator(
+            CancellationToken.None);
+    IAsyncEnumerator<int> interleavedSuccessEnumerator =
+        AsyncAwaitValue(interleavedIteratorSuccessSource.Task).GetAsyncEnumerator(
+            CancellationToken.None);
+    Task<bool> interleavedFaultMove = interleavedFaultEnumerator.MoveNextAsync();
+    Task<bool> interleavedSuccessMove = interleavedSuccessEnumerator.MoveNextAsync();
+    interleavedIteratorFaultSource.SetException(
+        new Exception("interleaved iterator failure"));
+    interleavedIteratorSuccessSource.SetResult(48);
+    if (TaskScheduler.Run() != 4u || !interleavedFaultMove.IsCompleted ||
+        !interleavedSuccessMove.IsCompleted || interleavedFaultMove.IsCanceled ||
+        interleavedSuccessMove.IsCanceled || !interleavedSuccessMove.GetResult() ||
+        interleavedSuccessEnumerator.Current != 48) return 433;
+    bool observedInterleavedIteratorFault = false;
+    try { interleavedFaultMove.GetResult(); }
+    catch (Exception exception) {
+        if (exception.Message != "interleaved iterator failure") return 434;
+        observedInterleavedIteratorFault = true;
+    }
+    if (!observedInterleavedIteratorFault) return 435;
+    interleavedFaultEnumerator.DisposeAsync().GetResult();
+    interleavedSuccessEnumerator.DisposeAsync().GetResult();
+    TaskCompletionSource canceledAsyncIteratorSource = new TaskCompletionSource();
+    IAsyncEnumerator<int> canceledAwaitEnumerator =
+        AsyncAwaitVoid(canceledAsyncIteratorSource.Task).GetAsyncEnumerator(
+            CancellationToken.None);
+    Task<bool> canceledAwaitMove = canceledAwaitEnumerator.MoveNextAsync();
+    canceledAsyncIteratorSource.SetCanceled();
+    if (TaskScheduler.Run() != 2u || !canceledAwaitMove.IsCompleted ||
+        !canceledAwaitMove.IsCanceled) return 391;
+    bool observedAsyncIteratorAwaitCancellation = false;
+    try { canceledAwaitMove.GetResult(); }
+    catch (OperationCanceledException) {
+        observedAsyncIteratorAwaitCancellation = true;
+    }
+    if (!observedAsyncIteratorAwaitCancellation) return 392;
+    canceledAwaitEnumerator.DisposeAsync().GetResult();
+    TaskCompletionSource<int> tokenCanceledAsyncIteratorSource =
+        new TaskCompletionSource<int>();
+    CancellationTokenSource tokenCanceledAsyncIteratorCancellation =
+        new CancellationTokenSource();
+    IAsyncEnumerator<int> tokenCanceledAwaitEnumerator =
+        AsyncAwaitValue(tokenCanceledAsyncIteratorSource.Task).GetAsyncEnumerator(
+            tokenCanceledAsyncIteratorCancellation.Token);
+    Task<bool> tokenCanceledAwaitMove = tokenCanceledAwaitEnumerator.MoveNextAsync();
+    tokenCanceledAsyncIteratorCancellation.Cancel();
+    TaskScheduler.Run();
+    if (!tokenCanceledAwaitMove.IsCompleted || !tokenCanceledAwaitMove.IsCanceled)
+        return 393;
+    tokenCanceledAwaitEnumerator.DisposeAsync().GetResult();
+    tokenCanceledAsyncIteratorSource.SetResult(44);
+    if (TaskScheduler.Run() != 1u || !tokenCanceledAwaitMove.IsCanceled) return 394;
+    TaskCompletionSource<int> reentrantCancellationSource =
+        new TaskCompletionSource<int>();
+    CancellationTokenSource reentrantCancellationTokenSource =
+        new CancellationTokenSource();
+    AsyncIteratorProbe.CancelDuringAwait = reentrantCancellationTokenSource;
+    IAsyncEnumerator<int> reentrantCancellationEnumerator =
+        AsyncCancelDuringAwait(reentrantCancellationSource.Task).GetAsyncEnumerator(
+            reentrantCancellationTokenSource.Token);
+    Task<bool> reentrantCancellationMove =
+        reentrantCancellationEnumerator.MoveNextAsync();
+    if (!reentrantCancellationTokenSource.IsCancellationRequested ||
+        !reentrantCancellationMove.IsCompleted ||
+        !reentrantCancellationMove.IsCanceled) return 441;
+    reentrantCancellationSource.SetResult(50);
+    if (TaskScheduler.Run() != 1u || !reentrantCancellationMove.IsCanceled)
+        return 442;
+    reentrantCancellationEnumerator.DisposeAsync().GetResult();
+    TaskCompletionSource<int> sourceCompletedBeforeCancellation =
+        new TaskCompletionSource<int>();
+    CancellationTokenSource sourceCompletedCancellation =
+        new CancellationTokenSource();
+    IAsyncEnumerator<int> sourceCompletedAwaitEnumerator =
+        AsyncAwaitValue(sourceCompletedBeforeCancellation.Task).GetAsyncEnumerator(
+            sourceCompletedCancellation.Token);
+    Task<bool> sourceCompletedAwaitMove =
+        sourceCompletedAwaitEnumerator.MoveNextAsync();
+    sourceCompletedBeforeCancellation.SetResult(46);
+    sourceCompletedCancellation.Cancel();
+    TaskScheduler.Run();
+    if (!sourceCompletedAwaitMove.IsCompleted ||
+        !sourceCompletedAwaitMove.IsCanceled) return 427;
+    sourceCompletedAwaitEnumerator.DisposeAsync().GetResult();
+    TaskCompletionSource<int> callbackReentrySource =
+        new TaskCompletionSource<int>();
+    CancellationTokenSource callbackReentryCancellation =
+        new CancellationTokenSource();
+    int callbackReentryCount = 0;
+    callbackReentrySource.Task.OnCompleted(() => {
+        callbackReentryCount += 1;
+        callbackReentryCancellation.Cancel();
+    });
+    AsyncIteratorProbe.LastAwaitedValue = 0;
+    IAsyncEnumerator<int> callbackReentryEnumerator =
+        AsyncAwaitValue(callbackReentrySource.Task).GetAsyncEnumerator(
+            callbackReentryCancellation.Token);
+    Task<bool> callbackReentryMove = callbackReentryEnumerator.MoveNextAsync();
+    if (callbackReentryMove.IsCompleted) return 443;
+    callbackReentrySource.SetResult(58);
+    if (callbackReentryMove.IsCompleted) return 444;
+    uint callbackReentryContinuations = TaskScheduler.Run();
+    if (callbackReentryContinuations != 3u || callbackReentryCount != 1 ||
+        !callbackReentryMove.IsCompleted || !callbackReentryMove.IsCanceled ||
+        AsyncIteratorProbe.LastAwaitedValue != 0) return 445;
+    callbackReentryEnumerator.DisposeAsync().GetResult();
+    TaskCompletionSource<int> cancellationAfterResumeSource =
+        new TaskCompletionSource<int>();
+    CancellationTokenSource cancellationAfterResumeTokenSource =
+        new CancellationTokenSource();
+    IAsyncEnumerator<int> cancellationAfterResumeEnumerator =
+        AsyncAwaitValue(cancellationAfterResumeSource.Task).GetAsyncEnumerator(
+            cancellationAfterResumeTokenSource.Token);
+    Task<bool> cancellationAfterResumeMove =
+        cancellationAfterResumeEnumerator.MoveNextAsync();
+    cancellationAfterResumeSource.SetResult(47);
+    if (TaskScheduler.Run() != 2u || !cancellationAfterResumeMove.IsCompleted ||
+        cancellationAfterResumeMove.IsCanceled ||
+        !cancellationAfterResumeMove.GetResult() ||
+        cancellationAfterResumeEnumerator.Current != 47) return 428;
+    cancellationAfterResumeTokenSource.Cancel();
+    if (!cancellationAfterResumeMove.GetResult() ||
+        cancellationAfterResumeEnumerator.Current != 47) return 429;
+    cancellationAfterResumeEnumerator.DisposeAsync().GetResult();
+    TaskCompletionSource<int> disposedAsyncIteratorSource =
+        new TaskCompletionSource<int>();
+    IAsyncEnumerator<int> disposedAwaitEnumerator =
+        AsyncAwaitValue(disposedAsyncIteratorSource.Task).GetAsyncEnumerator(
+            CancellationToken.None);
+    Task<bool> disposedAwaitMove = disposedAwaitEnumerator.MoveNextAsync();
+    disposedAwaitEnumerator.DisposeAsync().GetResult();
+    TaskScheduler.Run();
+    if (!disposedAwaitMove.IsCompleted || !disposedAwaitMove.IsCanceled) return 395;
+    disposedAsyncIteratorSource.SetResult(45);
+    if (TaskScheduler.Run() != 1u || !disposedAwaitMove.IsCanceled) return 396;
+    Task voidTask = AwaitVoidTask();
+    if (!voidTask.IsCompleted) return 304;
+    voidTask.GetResult();
+    Task faulted = FailTask();
+    if (!faulted.IsCompleted) return 305;
+    bool observedFault = false;
+    try {
+        faulted.GetResult();
+    } catch (Exception exception) {
+        if (exception.Message != "async failure") return 307;
+        observedFault = true;
+    }
+    if (!observedFault) return 306;
+    Task<int> genericFaulted = FailGenericTask();
+    if (!genericFaulted.IsCompleted) return 308;
+    bool observedGenericFault = false;
+    try {
+        genericFaulted.GetResult();
+    } catch (Exception exception) {
+        if (exception.Message != "generic async failure") return 309;
+        observedGenericFault = true;
+    }
+    if (!observedGenericFault) return 310;
     if (Math.StaticArrays.Values.Length != 2u ||
         Math.StaticArrays.Names.Length != 0u) return 275;
     Math.StaticArrays.Values[1] = 73;
@@ -5007,6 +6686,1529 @@ public int Run() {
     if (ForwardReferencedIdentity(11L) != 211L) return 272;
     if (ForwardReferencedIdentityInferred(7) != 107) return 273;
     if (ForwardReferencedIdentityInferred(12L) != 212L) return 274;
+    Task<int> completedAwait = AwaitCompletedTask(41);
+    if (!completedAwait.IsCompleted || completedAwait.GetResult() != 82) return 302;
+    Task<int> temporaryAwait = AwaitTemporaryTask(41);
+    if (!temporaryAwait.IsCompleted || temporaryAwait.GetResult() != 41) return 303;
+    Task<int> completedPending = CompletePendingTask(64);
+    if (!completedPending.IsCompleted || completedPending.GetResult() != 64) return 311;
+    int scheduledValue = 0;
+    TaskScheduler.Post(() => { scheduledValue += 1; });
+    TaskScheduler.Post(() => { scheduledValue += 10; });
+    if (!TaskScheduler.RunOne() || scheduledValue != 1) return 312;
+    if (TaskScheduler.Run() != 1u || scheduledValue != 11) return 313;
+    if (TaskScheduler.RunOne()) return 314;
+    delegate() => void delayedCallback = () => { scheduledValue += 100; };
+    TaskScheduler.PostAfter(1u, delayedCallback);
+    if (!TaskScheduler.RunOne() || scheduledValue != 111) return 328;
+    if (TaskScheduler.RunOne()) return 329;
+    TaskCompletionSource<int> continuationSource = new TaskCompletionSource<int>();
+    int continuationValue = 0;
+    continuationSource.Task.OnCompleted(() => { continuationValue += 23; });
+    continuationSource.Task.OnCompleted(() => { continuationValue += 46; });
+    if (TaskScheduler.RunOne()) return 315;
+    continuationSource.SetResult(23);
+    if (continuationValue != 0) return 316;
+    if (!TaskScheduler.RunOne() || continuationValue != 23) return 317;
+    continuationSource.Task.OnCompleted(() => { continuationValue += 1; });
+    if (continuationValue != 23 || TaskScheduler.Run() != 2u ||
+        continuationValue != 70) return 318;
+    TaskCompletionSource<int> faultContinuationSource =
+        new TaskCompletionSource<int>();
+    int faultContinuationValue = 0;
+    faultContinuationSource.Task.OnCompleted(() => { faultContinuationValue += 1; });
+    faultContinuationSource.SetException(new Exception("scheduled task fault"));
+    if (faultContinuationValue != 0 || TaskScheduler.Run() != 1u ||
+        faultContinuationValue != 1) return 319;
+    TaskCompletionSource pendingVoidSource = new TaskCompletionSource();
+    Task pendingVoidAwait = AwaitPendingVoidTask(pendingVoidSource.Task);
+    if (pendingVoidAwait.IsCompleted) return 330;
+    pendingVoidSource.SetResult();
+    if (pendingVoidAwait.IsCompleted || TaskScheduler.Run() != 1u ||
+        !pendingVoidAwait.IsCompleted) return 331;
+    pendingVoidAwait.GetResult();
+    CancellationTokenSource cancellationSource = new CancellationTokenSource();
+    CancellationToken cancellationToken = cancellationSource.Token;
+    CancellationToken noneToken = CancellationToken.None;
+    if (cancellationToken.IsCancellationRequested ||
+        noneToken.IsCancellationRequested) return 370;
+    cancellationSource.Cancel();
+    cancellationSource.Cancel();
+    if (!cancellationSource.IsCancellationRequested ||
+        !cancellationToken.IsCancellationRequested) return 371;
+    CancellationTokenSource callbackSource = new CancellationTokenSource();
+    CancellationToken callbackToken = callbackSource.Token;
+    bool firstCancellationCallbackRan = false;
+    bool secondCancellationCallbackRan = false;
+    callbackToken.Register(() => { firstCancellationCallbackRan = true; });
+    callbackToken.Register(() => { secondCancellationCallbackRan = true; });
+    callbackSource.Cancel();
+    if (!firstCancellationCallbackRan || !secondCancellationCallbackRan ||
+        !callbackToken.IsCancellationRequested) return 381;
+    CancellationTokenSource unregisteredCallbackSource =
+        new CancellationTokenSource();
+    CancellationToken unregisteredCallbackToken =
+        unregisteredCallbackSource.Token;
+    bool disposedCancellationCallbackRan = false;
+    CancellationTokenRegistration disposedRegistration =
+        unregisteredCallbackToken.Register(() => {
+            disposedCancellationCallbackRan = true;
+        });
+    disposedRegistration.Dispose();
+    unregisteredCallbackSource.Cancel();
+    if (disposedCancellationCallbackRan) return 390;
+    bool lateCancellationCallbackRan = false;
+    callbackToken.Register(() => { lateCancellationCallbackRan = true; });
+    if (!lateCancellationCallbackRan) return 382;
+    bool observedTokenCancellation = false;
+    try {
+        cancellationToken.ThrowIfCancellationRequested();
+    } catch (OperationCanceledException exception) {
+        CancellationToken exceptionToken = exception.CancellationToken;
+        if (!exceptionToken.IsCancellationRequested) return 372;
+        observedTokenCancellation = true;
+    }
+    if (!observedTokenCancellation) return 373;
+    TaskCompletionSource<int> canceledResultSource =
+        new TaskCompletionSource<int>();
+    CancellationTokenSource canceledResultTokenSource =
+        new CancellationTokenSource();
+    CancellationToken canceledResultToken = canceledResultTokenSource.Token;
+    canceledResultToken.Register(() => canceledResultSource.SetCanceled());
+    Task<int> canceledResultAwait = AwaitThenTransformCanceled(
+        canceledResultSource.Task);
+    if (canceledResultAwait.IsCompleted) return 374;
+    canceledResultTokenSource.Cancel();
+    if (TaskScheduler.Run() != 1u || !canceledResultAwait.IsCompleted ||
+        !canceledResultAwait.IsCanceled) return 375;
+    bool observedCanceledResult = false;
+    try {
+        canceledResultAwait.GetResult();
+    } catch (OperationCanceledException exception) {
+        observedCanceledResult = true;
+    }
+    if (!observedCanceledResult) return 377;
+    TaskCompletionSource canceledVoidSource = new TaskCompletionSource();
+    CancellationTokenSource canceledVoidTokenSource =
+        new CancellationTokenSource();
+    CancellationToken canceledVoidToken = canceledVoidTokenSource.Token;
+    canceledVoidToken.Register(() => canceledVoidSource.SetCanceled());
+    Task canceledVoidAwait = AwaitVoidTwice(new Task(), canceledVoidSource.Task);
+    if (canceledVoidAwait.IsCompleted || AsyncAwaitProbe.Steps != 1) return 378;
+    canceledVoidTokenSource.Cancel();
+    if (TaskScheduler.Run() != 1u || !canceledVoidAwait.IsCompleted ||
+        !canceledVoidAwait.IsCanceled || AsyncAwaitProbe.Steps != 1) return 379;
+    bool observedCanceledVoid = false;
+    try {
+        canceledVoidAwait.GetResult();
+    } catch (OperationCanceledException) {
+        observedCanceledVoid = true;
+    }
+    if (!observedCanceledVoid) return 380;
+    Task delayedTask = Task.Delay(1u);
+    if (delayedTask.IsCompleted || TaskScheduler.Run() != 1u ||
+        !delayedTask.IsCompleted) return 332;
+    delayedTask.GetResult();
+    TaskCompletionSource<int> ownedResultSource =
+        new TaskCompletionSource<int>();
+    Task<int> ownedResultTask = ownedResultSource.Task;
+    TaskScheduler.Post(() => ownedResultSource.SetResult(91));
+    TaskScheduler.RunUntil(ownedResultTask);
+    if (ownedResultTask.GetResult() != 91) return 677;
+    TaskScheduler.RunUntil(ownedResultTask);
+    if (ownedResultTask.GetResult() != 91) return 681;
+    TaskCompletionSource ownedVoidSource = new TaskCompletionSource();
+    Task ownedVoidTask = ownedVoidSource.Task;
+    TaskScheduler.Post(() => ownedVoidSource.SetResult());
+    TaskScheduler.RunUntil(ownedVoidTask);
+    Exception ownedFault = new Exception("owned task failure");
+    TaskCompletionSource<int> ownedFaultSource =
+        new TaskCompletionSource<int>();
+    Task<int> ownedFaultTask = ownedFaultSource.Task;
+    TaskScheduler.Post(() => ownedFaultSource.SetException(ownedFault));
+    bool observedOwnedFault = false;
+    TaskScheduler.RunUntil(ownedFaultTask);
+    try { ownedFaultTask.GetResult(); }
+    catch (Exception exception) { observedOwnedFault = exception == ownedFault; }
+    if (!observedOwnedFault) return 678;
+    TaskCompletionSource<int> ownedCanceledSource =
+        new TaskCompletionSource<int>();
+    Task<int> ownedCanceledTask = ownedCanceledSource.Task;
+    TaskScheduler.Post(() => ownedCanceledSource.SetCanceled());
+    bool observedOwnedCancellation = false;
+    TaskScheduler.RunUntil(ownedCanceledTask);
+    try { ownedCanceledTask.GetResult(); }
+    catch (OperationCanceledException) { observedOwnedCancellation = true; }
+    if (!observedOwnedCancellation) return 679;
+    TaskCompletionSource<int> noCompletionSource =
+        new TaskCompletionSource<int>();
+    bool rejectedTaskWithoutCompletionPath = false;
+    try { TaskScheduler.RunUntil(noCompletionSource.Task); }
+    catch (Exception exception) {
+        rejectedTaskWithoutCompletionPath =
+            exception.Message == "RunUntil task has no completion path";
+    }
+    if (!rejectedTaskWithoutCompletionPath) return 680;
+    CancellationTokenSource delayedCancellationSource =
+        new CancellationTokenSource();
+    CancellationToken delayedCancellationToken = delayedCancellationSource.Token;
+    Task canceledDelay = Task.Delay(1u, delayedCancellationToken);
+    if (canceledDelay.IsCompleted) return 391;
+    delayedCancellationSource.Cancel();
+    if (!canceledDelay.IsCompleted || !canceledDelay.IsCanceled) return 392;
+    bool observedCanceledDelay = false;
+    try {
+        canceledDelay.GetResult();
+    } catch (OperationCanceledException) {
+        observedCanceledDelay = true;
+    }
+    if (!observedCanceledDelay || TaskScheduler.Run() != 1u) return 393;
+    CancellationTokenSource completedDelaySource = new CancellationTokenSource();
+    CancellationToken completedDelayToken = completedDelaySource.Token;
+    Task completedTokenDelay = Task.Delay(1u, completedDelayToken);
+    if (TaskScheduler.Run() != 1u || !completedTokenDelay.IsCompleted ||
+        completedTokenDelay.IsCanceled) return 394;
+    completedTokenDelay.GetResult();
+    completedDelaySource.Cancel();
+    Task awaitedDelay = AwaitTaskDelay();
+    if (awaitedDelay.IsCompleted || TaskScheduler.Run() != 2u ||
+        !awaitedDelay.IsCompleted) return 336;
+    awaitedDelay.GetResult();
+    TaskCompletionSource pendingVoidFaultSource = new TaskCompletionSource();
+    Task pendingVoidFault = AwaitPendingVoidTask(pendingVoidFaultSource.Task);
+    pendingVoidFaultSource.SetException(new Exception("pending void failure"));
+    if (TaskScheduler.Run() != 1u || !pendingVoidFault.IsCompleted) return 333;
+    bool observedPendingVoidFault = false;
+    try {
+        pendingVoidFault.GetResult();
+    } catch (Exception exception) {
+        if (exception.Message != "pending void failure") return 334;
+        observedPendingVoidFault = true;
+    }
+    if (!observedPendingVoidFault) return 335;
+    TaskCompletionSource protectedSuccessSource = new TaskCompletionSource();
+    AsyncAwaitProbe.Steps = 0;
+    Task protectedSuccess = AwaitProtectedBody(protectedSuccessSource.Task);
+    if (protectedSuccess.IsCompleted || AsyncAwaitProbe.Steps != 0) return 549;
+    ForceCollection();
+    protectedSuccessSource.SetResult();
+    if (TaskScheduler.Run() != 1u || !protectedSuccess.IsCompleted ||
+        AsyncAwaitProbe.Steps != 1) return 550;
+    protectedSuccess.GetResult();
+    TaskCompletionSource completedProtectedFaultSource =
+        new TaskCompletionSource();
+    completedProtectedFaultSource.SetException(
+        new Exception("protected body failed before suspension"));
+    AsyncAwaitProbe.Steps = 0;
+    Task completedProtectedFault = AwaitProtectedBody(
+        completedProtectedFaultSource.Task);
+    if (!completedProtectedFault.IsCompleted || AsyncAwaitProbe.Steps != 1)
+        return 551;
+    bool observedCompletedProtectedFault = false;
+    try { completedProtectedFault.GetResult(); }
+    catch (Exception exception) {
+        if (exception.Message != "protected body failed before suspension") return 552;
+        observedCompletedProtectedFault = true;
+    }
+    if (!observedCompletedProtectedFault) return 553;
+    TaskCompletionSource pendingProtectedFaultSource = new TaskCompletionSource();
+    AsyncAwaitProbe.Steps = 0;
+    Task pendingProtectedFault = AwaitProtectedBody(pendingProtectedFaultSource.Task);
+    if (pendingProtectedFault.IsCompleted || AsyncAwaitProbe.Steps != 0) return 554;
+    pendingProtectedFaultSource.SetException(
+        new Exception("protected body failed after suspension"));
+    if (TaskScheduler.Run() != 1u || !pendingProtectedFault.IsCompleted ||
+        AsyncAwaitProbe.Steps != 1) return 555;
+    bool observedPendingProtectedFault = false;
+    try { pendingProtectedFault.GetResult(); }
+    catch (Exception exception) {
+        if (exception.Message != "protected body failed after suspension") return 556;
+        observedPendingProtectedFault = true;
+    }
+    if (!observedPendingProtectedFault) return 557;
+    TaskCompletionSource protectedCanceledSource = new TaskCompletionSource();
+    AsyncAwaitProbe.Steps = 0;
+    Task protectedCanceled = AwaitProtectedBody(protectedCanceledSource.Task);
+    if (protectedCanceled.IsCompleted) return 558;
+    protectedCanceledSource.SetCanceled();
+    if (TaskScheduler.Run() != 1u || !protectedCanceled.IsCompleted ||
+        !protectedCanceled.IsCanceled || AsyncAwaitProbe.Steps != 1) return 559;
+    bool observedProtectedCancellation = false;
+    try { protectedCanceled.GetResult(); }
+    catch (OperationCanceledException) { observedProtectedCancellation = true; }
+    if (!observedProtectedCancellation) return 560;
+    TaskCompletionSource firstVoidAwaitSource = new TaskCompletionSource();
+    TaskCompletionSource secondVoidAwaitSource = new TaskCompletionSource();
+    Task voidTwiceAwait = AwaitVoidTwice(
+        firstVoidAwaitSource.Task, secondVoidAwaitSource.Task);
+    if (voidTwiceAwait.IsCompleted || AsyncAwaitProbe.Steps != 0) return 362;
+    firstVoidAwaitSource.SetResult();
+    if (TaskScheduler.Run() != 1u || voidTwiceAwait.IsCompleted ||
+        AsyncAwaitProbe.Steps != 1) return 363;
+    secondVoidAwaitSource.SetResult();
+    if (TaskScheduler.Run() != 1u || !voidTwiceAwait.IsCompleted ||
+        AsyncAwaitProbe.Steps != 2) return 364;
+    voidTwiceAwait.GetResult();
+    Task completedVoidTwiceAwait = AwaitVoidTwice(new Task(), new Task());
+    if (!completedVoidTwiceAwait.IsCompleted || AsyncAwaitProbe.Steps != 2)
+        return 365;
+    TaskCompletionSource earlyVoidReturnSource = new TaskCompletionSource();
+    Task earlyVoidReturn = AwaitVoidConditionalReturn(
+        earlyVoidReturnSource.Task, true);
+    earlyVoidReturnSource.SetResult();
+    if (TaskScheduler.Run() != 1u || !earlyVoidReturn.IsCompleted ||
+        AsyncAwaitProbe.Steps != 0) return 366;
+    earlyVoidReturn.GetResult();
+    TaskCompletionSource fallbackVoidReturnSource = new TaskCompletionSource();
+    Task fallbackVoidReturn = AwaitVoidConditionalReturn(
+        fallbackVoidReturnSource.Task, false);
+    fallbackVoidReturnSource.SetResult();
+    if (TaskScheduler.Run() != 1u || !fallbackVoidReturn.IsCompleted ||
+        AsyncAwaitProbe.Steps != 10) return 367;
+    fallbackVoidReturn.GetResult();
+    TaskCompletionSource pendingCleanupSource = new TaskCompletionSource();
+    Task pendingCleanup = AwaitCleanupAfterTry(pendingCleanupSource.Task, false);
+    if (pendingCleanup.IsCompleted) return 368;
+    pendingCleanupSource.SetResult();
+    if (TaskScheduler.Run() != 1u || !pendingCleanup.IsCompleted) return 369;
+    pendingCleanup.GetResult();
+    TaskCompletionSource tryFaultCleanupSource = new TaskCompletionSource();
+    Task tryFaultAfterCleanup = AwaitCleanupAfterTry(
+        tryFaultCleanupSource.Task, true);
+    if (tryFaultAfterCleanup.IsCompleted) return 370;
+    tryFaultCleanupSource.SetResult();
+    if (TaskScheduler.Run() != 1u || !tryFaultAfterCleanup.IsCompleted) return 371;
+    try {
+        tryFaultAfterCleanup.GetResult();
+        return 372;
+    } catch (Exception exception) {
+        if (exception.Message != "try failed before cleanup") return 373;
+    }
+    TaskCompletionSource cleanupFaultSource = new TaskCompletionSource();
+    Task cleanupFault = AwaitCleanupAfterTry(cleanupFaultSource.Task, true);
+    cleanupFaultSource.SetException(new Exception("cleanup failed"));
+    if (TaskScheduler.Run() != 1u || !cleanupFault.IsCompleted) return 374;
+    try {
+        cleanupFault.GetResult();
+        return 375;
+    } catch (Exception exception) {
+        if (exception.Message != "cleanup failed") return 376;
+    }
+    TaskCompletionSource cleanupCanceledSource = new TaskCompletionSource();
+    Task cleanupCanceled = AwaitCleanupAfterTry(
+        cleanupCanceledSource.Task, true);
+    cleanupCanceledSource.SetCanceled();
+    if (TaskScheduler.Run() != 1u || !cleanupCanceled.IsCanceled) return 377;
+    try {
+        cleanupCanceled.GetResult();
+        return 378;
+    } catch (OperationCanceledException) {
+    }
+    TaskCompletionSource firstCleanupAwaitSource = new TaskCompletionSource();
+    TaskCompletionSource secondCleanupAwaitSource = new TaskCompletionSource();
+    Task awaitedCleanupTwice = AwaitCleanupTwice(
+        firstCleanupAwaitSource.Task, secondCleanupAwaitSource.Task);
+    if (awaitedCleanupTwice.IsCompleted) return 561;
+    ForceCollection();
+    firstCleanupAwaitSource.SetResult();
+    if (TaskScheduler.Run() != 1u || awaitedCleanupTwice.IsCompleted) return 562;
+    ForceCollection();
+    secondCleanupAwaitSource.SetResult();
+    if (TaskScheduler.Run() != 1u || !awaitedCleanupTwice.IsCompleted) return 563;
+    awaitedCleanupTwice.GetResult();
+    Task completedAwaitedCleanupTwice = AwaitCleanupTwice(new Task(), new Task());
+    if (!completedAwaitedCleanupTwice.IsCompleted) return 564;
+    TaskCompletionSource firstCleanupFaultSource = new TaskCompletionSource();
+    TaskCompletionSource skippedCleanupSource = new TaskCompletionSource();
+    Task firstCleanupFault = AwaitCleanupTwice(
+        firstCleanupFaultSource.Task, skippedCleanupSource.Task);
+    firstCleanupFaultSource.SetException(new Exception("first cleanup failed"));
+    if (TaskScheduler.Run() != 1u || !firstCleanupFault.IsCompleted ||
+        skippedCleanupSource.Task.IsCompleted) return 565;
+    try { firstCleanupFault.GetResult(); return 566; }
+    catch (Exception exception) {
+        if (exception.Message != "first cleanup failed") return 567;
+    }
+    TaskCompletionSource completedFirstCleanupSource = new TaskCompletionSource();
+    TaskCompletionSource secondCleanupFaultSource = new TaskCompletionSource();
+    completedFirstCleanupSource.SetResult();
+    Task secondCleanupFault = AwaitCleanupTwice(
+        completedFirstCleanupSource.Task, secondCleanupFaultSource.Task);
+    if (secondCleanupFault.IsCompleted) return 568;
+    secondCleanupFaultSource.SetException(new Exception("second cleanup failed"));
+    if (TaskScheduler.Run() != 1u || !secondCleanupFault.IsCompleted) return 569;
+    try { secondCleanupFault.GetResult(); return 570; }
+    catch (Exception exception) {
+        if (exception.Message != "second cleanup failed") return 571;
+    }
+    TaskCompletionSource firstCanceledCleanupSource = new TaskCompletionSource();
+    TaskCompletionSource skippedAfterCanceledCleanupSource =
+        new TaskCompletionSource();
+    Task firstCanceledCleanup = AwaitCleanupTwice(
+        firstCanceledCleanupSource.Task, skippedAfterCanceledCleanupSource.Task);
+    if (firstCanceledCleanup.IsCompleted) return 575;
+    ForceCollection();
+    firstCanceledCleanupSource.SetCanceled();
+    if (TaskScheduler.Run() != 1u || !firstCanceledCleanup.IsCanceled ||
+        skippedAfterCanceledCleanupSource.Task.IsCompleted) return 576;
+    bool observedFirstCleanupCancellation = false;
+    try { firstCanceledCleanup.GetResult(); }
+    catch (OperationCanceledException) { observedFirstCleanupCancellation = true; }
+    if (!observedFirstCleanupCancellation) return 577;
+    TaskCompletionSource secondCanceledCleanupSource = new TaskCompletionSource();
+    Task secondCanceledCleanup = AwaitCleanupTwice(
+        new Task(), secondCanceledCleanupSource.Task);
+    if (secondCanceledCleanup.IsCompleted) return 578;
+    ForceCollection();
+    secondCanceledCleanupSource.SetCanceled();
+    if (TaskScheduler.Run() != 1u || !secondCanceledCleanup.IsCanceled) return 579;
+    bool observedSecondCleanupCancellation = false;
+    try { secondCanceledCleanup.GetResult(); }
+    catch (OperationCanceledException) { observedSecondCleanupCancellation = true; }
+    if (!observedSecondCleanupCancellation) return 580;
+    TaskCompletionSource returnCleanupSource = new TaskCompletionSource();
+    Task returnAfterCleanup = AwaitReturnThroughCleanup(returnCleanupSource.Task);
+    if (returnAfterCleanup.IsCompleted) return 599;
+    ForceCollection();
+    returnCleanupSource.SetResult();
+    if (TaskScheduler.Run() != 1u || !returnAfterCleanup.IsCompleted) return 600;
+    returnAfterCleanup.GetResult();
+    Task completedReturnAfterCleanup = AwaitReturnThroughCleanup(new Task());
+    if (!completedReturnAfterCleanup.IsCompleted) return 601;
+    completedReturnAfterCleanup.GetResult();
+    AsyncAwaitProbe.ReturnEvaluations = 0;
+    TaskCompletionSource resultReturnCleanupSource =
+        new TaskCompletionSource();
+    Task<int> resultReturnAfterCleanup = AwaitResultReturnThroughCleanup(
+        resultReturnCleanupSource.Task);
+    if (resultReturnAfterCleanup.IsCompleted ||
+        AsyncAwaitProbe.ReturnEvaluations != 1) return 602;
+    ForceCollection();
+    resultReturnCleanupSource.SetResult();
+    if (TaskScheduler.Run() != 1u || !resultReturnAfterCleanup.IsCompleted ||
+        resultReturnAfterCleanup.GetResult() != 73 ||
+        AsyncAwaitProbe.ReturnEvaluations != 1) return 603;
+    AsyncAwaitProbe.ReturnEvaluations = 0;
+    Task<int> completedResultReturnAfterCleanup =
+        AwaitResultReturnThroughCleanup(new Task());
+    if (!completedResultReturnAfterCleanup.IsCompleted ||
+        completedResultReturnAfterCleanup.GetResult() != 73 ||
+        AsyncAwaitProbe.ReturnEvaluations != 1) return 604;
+    AsyncAwaitProbe.ReturnEvaluations = 0;
+    TaskCompletionSource resultReturnFaultSource =
+        new TaskCompletionSource();
+    Task<int> resultReturnCleanupFault = AwaitResultReturnThroughCleanup(
+        resultReturnFaultSource.Task);
+    resultReturnFaultSource.SetException(new Exception("return cleanup failed"));
+    if (TaskScheduler.Run() != 1u || !resultReturnCleanupFault.IsCompleted ||
+        AsyncAwaitProbe.ReturnEvaluations != 1) return 605;
+    bool observedResultReturnCleanupFault = false;
+    try { resultReturnCleanupFault.GetResult(); }
+    catch (Exception exception) {
+        if (exception.Message != "return cleanup failed") return 606;
+        observedResultReturnCleanupFault = true;
+    }
+    if (!observedResultReturnCleanupFault) return 607;
+    AsyncAwaitProbe.ReturnEvaluations = 0;
+    TaskCompletionSource resultReturnCanceledSource =
+        new TaskCompletionSource();
+    Task<int> resultReturnCleanupCanceled = AwaitResultReturnThroughCleanup(
+        resultReturnCanceledSource.Task);
+    resultReturnCanceledSource.SetCanceled();
+    if (TaskScheduler.Run() != 1u || !resultReturnCleanupCanceled.IsCanceled ||
+        AsyncAwaitProbe.ReturnEvaluations != 1) return 608;
+    bool observedResultReturnCleanupCancellation = false;
+    try { resultReturnCleanupCanceled.GetResult(); }
+    catch (OperationCanceledException) {
+        observedResultReturnCleanupCancellation = true;
+    }
+    if (!observedResultReturnCleanupCancellation) return 609;
+    AsyncAwaitProbe.ReturnEvaluations = 0;
+    TaskCompletionSource faultingResultReturnCleanupSource =
+        new TaskCompletionSource();
+    Task<int> faultingResultReturn = AwaitFaultingResultReturnThroughCleanup(
+        faultingResultReturnCleanupSource.Task);
+    if (faultingResultReturn.IsCompleted ||
+        AsyncAwaitProbe.ReturnEvaluations != 1) return 610;
+    ForceCollection();
+    faultingResultReturnCleanupSource.SetResult();
+    if (TaskScheduler.Run() != 1u || !faultingResultReturn.IsCompleted ||
+        AsyncAwaitProbe.ReturnEvaluations != 1) return 611;
+    bool observedReturnExpressionFault = false;
+    try { faultingResultReturn.GetResult(); }
+    catch (Exception exception) {
+        if (exception.Message != "return expression failed") return 612;
+        observedReturnExpressionFault = true;
+    }
+    if (!observedReturnExpressionFault) return 613;
+    AsyncAwaitProbe.ReturnEvaluations = 0;
+    TaskCompletionSource bodyAndCleanupFaultSource = new TaskCompletionSource();
+    Task<int> cleanupFaultOverridesReturnFault =
+        AwaitFaultingResultReturnThroughCleanup(bodyAndCleanupFaultSource.Task);
+    bodyAndCleanupFaultSource.SetException(new Exception("cleanup overrides return fault"));
+    if (TaskScheduler.Run() != 1u || !cleanupFaultOverridesReturnFault.IsCompleted ||
+        AsyncAwaitProbe.ReturnEvaluations != 1) return 614;
+    bool observedCleanupOverride = false;
+    try { cleanupFaultOverridesReturnFault.GetResult(); }
+    catch (Exception exception) {
+        if (exception.Message != "cleanup overrides return fault") return 615;
+        observedCleanupOverride = true;
+    }
+    if (!observedCleanupOverride) return 616;
+    AsyncAwaitProbe.ReturnEvaluations = 0;
+    TaskCompletionSource bodyAndCleanupCancelSource = new TaskCompletionSource();
+    Task<int> cleanupCancellationOverridesReturnFault =
+        AwaitFaultingResultReturnThroughCleanup(bodyAndCleanupCancelSource.Task);
+    bodyAndCleanupCancelSource.SetCanceled();
+    if (TaskScheduler.Run() != 1u ||
+        !cleanupCancellationOverridesReturnFault.IsCanceled ||
+        AsyncAwaitProbe.ReturnEvaluations != 1) return 617;
+    bool observedCleanupCancellationOverride = false;
+    try { cleanupCancellationOverridesReturnFault.GetResult(); }
+    catch (OperationCanceledException) {
+        observedCleanupCancellationOverride = true;
+    }
+    if (!observedCleanupCancellationOverride) return 618;
+    AsyncAwaitProbe.ReturnEvaluations = 0;
+    TaskCompletionSource nestedResultInnerSource = new TaskCompletionSource();
+    TaskCompletionSource nestedResultOuterSource = new TaskCompletionSource();
+    Task<int> nestedResultReturn = AwaitNestedResultReturnThroughCleanup(
+        nestedResultInnerSource.Task, nestedResultOuterSource.Task);
+    if (nestedResultReturn.IsCompleted || AsyncAwaitProbe.ReturnEvaluations != 1)
+        return 619;
+    ForceCollection();
+    nestedResultInnerSource.SetResult();
+    if (TaskScheduler.Run() != 1u || nestedResultReturn.IsCompleted ||
+        AsyncAwaitProbe.ReturnEvaluations != 1) return 620;
+    ForceCollection();
+    nestedResultOuterSource.SetResult();
+    if (TaskScheduler.Run() != 1u || !nestedResultReturn.IsCompleted ||
+        nestedResultReturn.GetResult() != 73 ||
+        AsyncAwaitProbe.ReturnEvaluations != 1) return 621;
+    AsyncAwaitProbe.ReturnEvaluations = 0;
+    Task<int> completedNestedResultReturn = AwaitNestedResultReturnThroughCleanup(
+        new Task(), new Task());
+    if (!completedNestedResultReturn.IsCompleted ||
+        completedNestedResultReturn.GetResult() != 73 ||
+        AsyncAwaitProbe.ReturnEvaluations != 1) return 622;
+    AsyncAwaitProbe.ReturnEvaluations = 0;
+    TaskCompletionSource nestedResultInnerFaultSource = new TaskCompletionSource();
+    TaskCompletionSource nestedResultOuterFaultSource = new TaskCompletionSource();
+    Task<int> nestedCleanupFaultOverridesReturn = AwaitNestedResultReturnThroughCleanup(
+        nestedResultInnerFaultSource.Task, nestedResultOuterFaultSource.Task);
+    nestedResultInnerFaultSource.SetException(new Exception("inner cleanup failed"));
+    if (TaskScheduler.Run() != 1u || nestedCleanupFaultOverridesReturn.IsCompleted)
+        return 623;
+    ForceCollection();
+    nestedResultOuterFaultSource.SetException(new Exception("outer cleanup failed"));
+    if (TaskScheduler.Run() != 1u || !nestedCleanupFaultOverridesReturn.IsCompleted ||
+        AsyncAwaitProbe.ReturnEvaluations != 1) return 624;
+    bool observedOuterCleanupFault = false;
+    try { nestedCleanupFaultOverridesReturn.GetResult(); }
+    catch (Exception exception) {
+        if (exception.Message != "outer cleanup failed") return 625;
+        observedOuterCleanupFault = true;
+    }
+    if (!observedOuterCleanupFault) return 626;
+    AsyncAwaitProbe.ReturnEvaluations = 0;
+    TaskCompletionSource nestedResultRetainedInnerFaultSource =
+        new TaskCompletionSource();
+    TaskCompletionSource nestedResultSuccessfulOuterSource =
+        new TaskCompletionSource();
+    Task<int> retainedInnerCleanupFault = AwaitNestedResultReturnThroughCleanup(
+        nestedResultRetainedInnerFaultSource.Task,
+        nestedResultSuccessfulOuterSource.Task);
+    nestedResultRetainedInnerFaultSource.SetException(
+        new Exception("inner cleanup retained"));
+    if (TaskScheduler.Run() != 1u || retainedInnerCleanupFault.IsCompleted)
+        return 630;
+    ForceCollection();
+    nestedResultSuccessfulOuterSource.SetResult();
+    if (TaskScheduler.Run() != 1u || !retainedInnerCleanupFault.IsCompleted ||
+        AsyncAwaitProbe.ReturnEvaluations != 1) return 631;
+    bool observedRetainedInnerCleanupFault = false;
+    try { retainedInnerCleanupFault.GetResult(); }
+    catch (Exception exception) {
+        if (exception.Message != "inner cleanup retained") return 632;
+        observedRetainedInnerCleanupFault = true;
+    }
+    if (!observedRetainedInnerCleanupFault) return 633;
+    AsyncAwaitProbe.ReturnEvaluations = 0;
+    TaskCompletionSource nestedResultInnerCancelSource = new TaskCompletionSource();
+    TaskCompletionSource nestedResultOuterCancelSource = new TaskCompletionSource();
+    Task<int> nestedCleanupCancelOverridesReturn = AwaitNestedResultReturnThroughCleanup(
+        nestedResultInnerCancelSource.Task, nestedResultOuterCancelSource.Task);
+    nestedResultInnerCancelSource.SetCanceled();
+    if (TaskScheduler.Run() != 1u || nestedCleanupCancelOverridesReturn.IsCompleted)
+        return 627;
+    ForceCollection();
+    nestedResultOuterCancelSource.SetCanceled();
+    if (TaskScheduler.Run() != 1u || !nestedCleanupCancelOverridesReturn.IsCanceled ||
+        AsyncAwaitProbe.ReturnEvaluations != 1) return 628;
+    bool observedOuterCleanupCancellation = false;
+    try { nestedCleanupCancelOverridesReturn.GetResult(); }
+    catch (OperationCanceledException) {
+        observedOuterCleanupCancellation = true;
+    }
+    if (!observedOuterCleanupCancellation) return 629;
+    AsyncAwaitProbe.Steps = 0;
+    TaskCompletionSource breakCleanupSource = new TaskCompletionSource();
+    Task breakThroughCleanup = AwaitBreakThroughCleanup(breakCleanupSource.Task);
+    if (breakThroughCleanup.IsCompleted || AsyncAwaitProbe.Steps != 0) return 634;
+    ForceCollection();
+    breakCleanupSource.SetResult();
+    if (TaskScheduler.Run() != 1u || !breakThroughCleanup.IsCompleted ||
+        AsyncAwaitProbe.Steps != 0) return 635;
+    breakThroughCleanup.GetResult();
+    AsyncAwaitProbe.Steps = 0;
+    TaskCompletionSource continueCleanupSource = new TaskCompletionSource();
+    Task continueThroughCleanup = AwaitContinueThroughCleanup(continueCleanupSource.Task);
+    if (continueThroughCleanup.IsCompleted || AsyncAwaitProbe.Steps != 0) return 636;
+    ForceCollection();
+    continueCleanupSource.SetResult();
+    if (TaskScheduler.Run() != 1u || !continueThroughCleanup.IsCompleted ||
+        AsyncAwaitProbe.Steps != 2) return 637;
+    continueThroughCleanup.GetResult();
+    AsyncAwaitProbe.Steps = 0;
+    TaskCompletionSource resultBreakCleanupSource = new TaskCompletionSource();
+    Task<int> resultBreakThroughCleanup =
+        AwaitResultBreakThroughCleanup(resultBreakCleanupSource.Task);
+    if (resultBreakThroughCleanup.IsCompleted || AsyncAwaitProbe.Steps != 0)
+        return 638;
+    ForceCollection();
+    resultBreakCleanupSource.SetResult();
+    if (TaskScheduler.Run() != 1u || !resultBreakThroughCleanup.IsCompleted ||
+        resultBreakThroughCleanup.GetResult() != 74 || AsyncAwaitProbe.Steps != 0)
+        return 639;
+    AsyncAwaitProbe.Steps = 0;
+    Task<int> completedResultBreak = AwaitResultBreakThroughCleanup(new Task());
+    if (!completedResultBreak.IsCompleted || completedResultBreak.GetResult() != 74 ||
+        AsyncAwaitProbe.Steps != 0) return 640;
+    AsyncAwaitProbe.Steps = 0;
+    TaskCompletionSource resultContinueCleanupSource = new TaskCompletionSource();
+    Task<int> resultContinueThroughCleanup =
+        AwaitResultContinueThroughCleanup(resultContinueCleanupSource.Task);
+    if (resultContinueThroughCleanup.IsCompleted || AsyncAwaitProbe.Steps != 0)
+        return 641;
+    ForceCollection();
+    resultContinueCleanupSource.SetResult();
+    if (TaskScheduler.Run() != 1u || !resultContinueThroughCleanup.IsCompleted ||
+        resultContinueThroughCleanup.GetResult() != 75 || AsyncAwaitProbe.Steps != 1)
+        return 642;
+    AsyncAwaitProbe.Steps = 0;
+    Task<int> completedResultContinue =
+        AwaitResultContinueThroughCleanup(new Task());
+    if (!completedResultContinue.IsCompleted ||
+        completedResultContinue.GetResult() != 75 || AsyncAwaitProbe.Steps != 1)
+        return 643;
+    TaskCompletionSource resultBreakFaultSource = new TaskCompletionSource();
+    Task<int> resultBreakFault =
+        AwaitResultBreakThroughCleanup(resultBreakFaultSource.Task);
+    resultBreakFaultSource.SetException(new Exception("break cleanup failed"));
+    if (TaskScheduler.Run() != 1u || !resultBreakFault.IsCompleted) return 644;
+    try { resultBreakFault.GetResult(); return 645; }
+    catch (Exception exception) {
+        if (exception.Message != "break cleanup failed") return 646;
+    }
+    TaskCompletionSource resultContinueCancelSource = new TaskCompletionSource();
+    Task<int> resultContinueCanceled =
+        AwaitResultContinueThroughCleanup(resultContinueCancelSource.Task);
+    resultContinueCancelSource.SetCanceled();
+    if (TaskScheduler.Run() != 1u || !resultContinueCanceled.IsCanceled) return 647;
+    try { resultContinueCanceled.GetResult(); return 648; }
+    catch (OperationCanceledException) { }
+    TaskCompletionSource nestedCleanupFirstSource = new TaskCompletionSource();
+    TaskCompletionSource nestedCleanupSecondSource = new TaskCompletionSource();
+    AsyncAwaitProbe.Steps = 0;
+    Task nestedCleanup = AwaitCleanupTwiceAfterNestedFinally(
+        nestedCleanupFirstSource.Task, nestedCleanupSecondSource.Task);
+    if (nestedCleanup.IsCompleted || AsyncAwaitProbe.Steps != 12) return 572;
+    ForceCollection();
+    nestedCleanupFirstSource.SetResult();
+    if (TaskScheduler.Run() != 1u || nestedCleanup.IsCompleted ||
+        AsyncAwaitProbe.Steps != 12) return 573;
+    ForceCollection();
+    nestedCleanupSecondSource.SetResult();
+    if (TaskScheduler.Run() != 1u || !nestedCleanup.IsCompleted ||
+        AsyncAwaitProbe.Steps != 12) return 574;
+    nestedCleanup.GetResult();
+    TaskCompletionSource nestedInnerSource = new TaskCompletionSource();
+    TaskCompletionSource nestedOuterSource = new TaskCompletionSource();
+    AsyncAwaitProbe.Steps = 0;
+    Task nestedAwaitedRegions = AwaitNestedCleanupRegions(
+        nestedInnerSource.Task, nestedOuterSource.Task);
+    if (nestedAwaitedRegions.IsCompleted || AsyncAwaitProbe.Steps != 1) return 581;
+    ForceCollection();
+    nestedInnerSource.SetResult();
+    if (TaskScheduler.Run() != 1u || nestedAwaitedRegions.IsCompleted) return 582;
+    ForceCollection();
+    nestedOuterSource.SetResult();
+    if (TaskScheduler.Run() != 1u || !nestedAwaitedRegions.IsCompleted) return 583;
+    nestedAwaitedRegions.GetResult();
+    Task completedNestedAwaitedRegions = AwaitNestedCleanupRegions(new Task(), new Task());
+    if (!completedNestedAwaitedRegions.IsCompleted) return 584;
+    TaskCompletionSource nestedInnerFaultSource = new TaskCompletionSource();
+    TaskCompletionSource outerAfterInnerFaultSource = new TaskCompletionSource();
+    Task nestedInnerFault = AwaitNestedCleanupRegions(
+        nestedInnerFaultSource.Task, outerAfterInnerFaultSource.Task);
+    nestedInnerFaultSource.SetException(new Exception("inner cleanup failed"));
+    if (TaskScheduler.Run() != 1u || nestedInnerFault.IsCompleted) return 585;
+    ForceCollection();
+    outerAfterInnerFaultSource.SetResult();
+    if (TaskScheduler.Run() != 1u || !nestedInnerFault.IsCompleted) return 586;
+    try { nestedInnerFault.GetResult(); return 587; }
+    catch (Exception exception) {
+        if (exception.Message != "inner cleanup failed") return 588;
+    }
+    TaskCompletionSource nestedInnerCancelSource = new TaskCompletionSource();
+    TaskCompletionSource outerAfterInnerCancelSource = new TaskCompletionSource();
+    Task nestedInnerCanceled = AwaitNestedCleanupRegions(
+        nestedInnerCancelSource.Task, outerAfterInnerCancelSource.Task);
+    nestedInnerCancelSource.SetCanceled();
+    if (TaskScheduler.Run() != 1u || nestedInnerCanceled.IsCompleted) return 589;
+    outerAfterInnerCancelSource.SetResult();
+    if (TaskScheduler.Run() != 1u || !nestedInnerCanceled.IsCanceled) return 590;
+    try { nestedInnerCanceled.GetResult(); return 591; }
+    catch (OperationCanceledException) { }
+    TaskCompletionSource nestedPrecedenceInnerSource = new TaskCompletionSource();
+    TaskCompletionSource nestedPrecedenceOuterSource = new TaskCompletionSource();
+    Task nestedCleanupPrecedence = AwaitNestedCleanupRegions(
+        nestedPrecedenceInnerSource.Task, nestedPrecedenceOuterSource.Task);
+    nestedPrecedenceInnerSource.SetException(new Exception("inner failure"));
+    if (TaskScheduler.Run() != 1u || nestedCleanupPrecedence.IsCompleted) return 592;
+    nestedPrecedenceOuterSource.SetException(new Exception("outer failure"));
+    if (TaskScheduler.Run() != 1u || !nestedCleanupPrecedence.IsCompleted) return 593;
+    try { nestedCleanupPrecedence.GetResult(); return 594; }
+    catch (Exception exception) {
+        if (exception.Message != "outer failure") return 595;
+    }
+    TaskCompletionSource nestedCanceledPrecedenceInnerSource = new TaskCompletionSource();
+    TaskCompletionSource nestedCanceledPrecedenceOuterSource = new TaskCompletionSource();
+    Task nestedCanceledPrecedence = AwaitNestedCleanupRegions(
+        nestedCanceledPrecedenceInnerSource.Task,
+        nestedCanceledPrecedenceOuterSource.Task);
+    nestedCanceledPrecedenceInnerSource.SetException(new Exception("inner failure"));
+    if (TaskScheduler.Run() != 1u || nestedCanceledPrecedence.IsCompleted) return 596;
+    ForceCollection();
+    nestedCanceledPrecedenceOuterSource.SetCanceled();
+    if (TaskScheduler.Run() != 1u || !nestedCanceledPrecedence.IsCanceled) return 597;
+    try { nestedCanceledPrecedence.GetResult(); return 598; }
+    catch (OperationCanceledException) { }
+    TaskCompletionSource<int> pendingSource = new TaskCompletionSource<int>();
+    Task<int> pendingAwait = AwaitPendingTask(pendingSource.Task);
+    if (pendingAwait.IsCompleted) return 320;
+    pendingSource.SetResult(55);
+    if (pendingAwait.IsCompleted || TaskScheduler.Run() != 1u) return 321;
+    if (!pendingAwait.IsCompleted || pendingAwait.GetResult() != 55) return 322;
+    TaskCompletionSource<int> pendingLocalSource = new TaskCompletionSource<int>();
+    Task<int> pendingLocalAwait =
+        AwaitPendingTaskIntoLocal(pendingLocalSource.Task);
+    if (pendingLocalAwait.IsCompleted) return 337;
+    pendingLocalSource.SetResult(56);
+    if (pendingLocalAwait.IsCompleted || TaskScheduler.Run() != 1u) return 338;
+    if (!pendingLocalAwait.IsCompleted || pendingLocalAwait.GetResult() != 56)
+        return 339;
+    Task<int> completedLocalAwait =
+        AwaitPendingTaskIntoLocal(pendingLocalSource.Task);
+    if (!completedLocalAwait.IsCompleted || completedLocalAwait.GetResult() != 56)
+        return 340;
+    TaskCompletionSource<int> transformSource = new TaskCompletionSource<int>();
+    Task<int> transformedAwait = AwaitThenTransform(transformSource.Task);
+    if (transformedAwait.IsCompleted) return 341;
+    transformSource.SetResult(56);
+    if (transformedAwait.IsCompleted || TaskScheduler.Run() != 1u) return 342;
+    if (!transformedAwait.IsCompleted || transformedAwait.GetResult() != 174)
+        return 343;
+    TaskCompletionSource<int> completedTransformSource =
+        new TaskCompletionSource<int>();
+    completedTransformSource.SetResult(7);
+    Task<int> completedTransformedAwait =
+        AwaitThenTransform(completedTransformSource.Task);
+    if (!completedTransformedAwait.IsCompleted ||
+        completedTransformedAwait.GetResult() != 27) return 344;
+    AsyncAwaitProbe.Steps = 0;
+    TaskCompletionSource<int> ifElseFirstSource = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> ifElseSecondSource = new TaskCompletionSource<int>();
+    Task<int> ifElseFirstAwait = AwaitIfElse(
+        ifElseFirstSource.Task, ifElseSecondSource.Task, true);
+    if (ifElseFirstAwait.IsCompleted || AsyncAwaitProbe.Steps != 1) return 449;
+    ifElseSecondSource.SetResult(900);
+    TaskScheduler.Run();
+    if (ifElseFirstAwait.IsCompleted || AsyncAwaitProbe.Steps != 1) return 450;
+    ifElseFirstSource.SetResult(63);
+    TaskScheduler.Run();
+    if (!ifElseFirstAwait.IsCompleted || ifElseFirstAwait.GetResult() != 63 ||
+        AsyncAwaitProbe.Steps != 1) return 451;
+    AsyncAwaitProbe.Steps = 0;
+    TaskCompletionSource<int> ifElseFalseFirstSource =
+        new TaskCompletionSource<int>();
+    TaskCompletionSource<int> ifElseFalseSecondSource =
+        new TaskCompletionSource<int>();
+    Task<int> ifElseFalseAwait = AwaitIfElse(
+        ifElseFalseFirstSource.Task, ifElseFalseSecondSource.Task, false);
+    if (ifElseFalseAwait.IsCompleted || AsyncAwaitProbe.Steps != 1) return 452;
+    ifElseFalseFirstSource.SetResult(901);
+    TaskScheduler.Run();
+    if (ifElseFalseAwait.IsCompleted || AsyncAwaitProbe.Steps != 1) return 453;
+    ifElseFalseSecondSource.SetResult(64);
+    TaskScheduler.Run();
+    if (!ifElseFalseAwait.IsCompleted || ifElseFalseAwait.GetResult() != 64 ||
+        AsyncAwaitProbe.Steps != 1) return 454;
+    AsyncAwaitProbe.Steps = 0;
+    TaskCompletionSource<int> completedIfElseSource =
+        new TaskCompletionSource<int>();
+    TaskCompletionSource<int> pendingIfElseSource =
+        new TaskCompletionSource<int>();
+    completedIfElseSource.SetResult(65);
+    Task<int> completedIfElseAwait = AwaitIfElse(
+        pendingIfElseSource.Task, completedIfElseSource.Task, false);
+    if (!completedIfElseAwait.IsCompleted ||
+        completedIfElseAwait.GetResult() != 65 || AsyncAwaitProbe.Steps != 1)
+        return 455;
+    AsyncAwaitProbe.Steps = 0;
+    TaskCompletionSource<int> branchTransformFirstSource =
+        new TaskCompletionSource<int>();
+    TaskCompletionSource<int> branchTransformSecondSource =
+        new TaskCompletionSource<int>();
+    Task<int> branchTransformAwait = AwaitBranchThenTransform(
+        branchTransformFirstSource.Task, branchTransformSecondSource.Task, true);
+    if (branchTransformAwait.IsCompleted || AsyncAwaitProbe.Steps != 1)
+        return 460;
+    ForceCollection();
+    branchTransformSecondSource.SetResult(900);
+    TaskScheduler.Run();
+    if (branchTransformAwait.IsCompleted || AsyncAwaitProbe.Steps != 1)
+        return 461;
+    branchTransformFirstSource.SetResult(33);
+    TaskScheduler.Run();
+    if (!branchTransformAwait.IsCompleted ||
+        branchTransformAwait.GetResult() != 320 || AsyncAwaitProbe.Steps != 1)
+        return 462;
+    AsyncAwaitProbe.Steps = 0;
+    TaskCompletionSource<int> branchTwiceFirstA = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> branchTwiceFirstB = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> branchTwiceSecondA = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> branchTwiceSecondB = new TaskCompletionSource<int>();
+    Task<int> branchTwiceAwait = AwaitBranchTwice(
+        branchTwiceFirstA.Task, branchTwiceFirstB.Task,
+        branchTwiceSecondA.Task, branchTwiceSecondB.Task, true);
+    if (branchTwiceAwait.IsCompleted || AsyncAwaitProbe.Steps != 1) return 463;
+    ForceCollection();
+    branchTwiceSecondA.SetResult(90);
+    branchTwiceSecondB.SetResult(40);
+    TaskScheduler.Run();
+    if (branchTwiceAwait.IsCompleted || AsyncAwaitProbe.Steps != 1) return 464;
+    branchTwiceFirstA.SetResult(3);
+    TaskScheduler.Run();
+    if (branchTwiceAwait.IsCompleted || AsyncAwaitProbe.Steps != 1) return 465;
+    branchTwiceFirstB.SetResult(4);
+    TaskScheduler.Run();
+    if (!branchTwiceAwait.IsCompleted || branchTwiceAwait.GetResult() != 26 ||
+        AsyncAwaitProbe.Steps != 1) return 466;
+    TaskCompletionSource<int> zeroIterationFirst = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> zeroIterationSecond = new TaskCompletionSource<int>();
+    Task<int> zeroIterationAwait = AwaitWhileCount(
+        zeroIterationFirst.Task, zeroIterationSecond.Task, 0);
+    if (!zeroIterationAwait.IsCompleted || zeroIterationAwait.GetResult() != 0)
+        return 467;
+    TaskCompletionSource<int> oneIterationFirst = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> oneIterationSecond = new TaskCompletionSource<int>();
+    Task<int> oneIterationAwait = AwaitWhileCount(
+        oneIterationFirst.Task, oneIterationSecond.Task, 1);
+    if (oneIterationAwait.IsCompleted) return 468;
+    oneIterationFirst.SetResult(5);
+    TaskScheduler.Run();
+    if (!oneIterationAwait.IsCompleted || oneIterationAwait.GetResult() != 5)
+        return 469;
+    TaskCompletionSource<int> twoIterationFirst = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> twoIterationSecond = new TaskCompletionSource<int>();
+    Task<int> twoIterationAwait = AwaitWhileCount(
+        twoIterationFirst.Task, twoIterationSecond.Task, 2);
+    if (twoIterationAwait.IsCompleted) return 470;
+    ForceCollection();
+    twoIterationFirst.SetResult(11);
+    TaskScheduler.Run();
+    if (twoIterationAwait.IsCompleted) return 471;
+    twoIterationSecond.SetResult(22);
+    TaskScheduler.Run();
+    if (!twoIterationAwait.IsCompleted || twoIterationAwait.GetResult() != 22)
+        return 472;
+    TaskCompletionSource<int> inlineFirstSource = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> inlineSecondSource = new TaskCompletionSource<int>();
+    inlineFirstSource.SetResult(31);
+    inlineSecondSource.SetResult(32);
+    Task<int> inlineWhileAwait = AwaitWhileCount(
+        inlineFirstSource.Task, inlineSecondSource.Task, 2);
+    if (!inlineWhileAwait.IsCompleted || inlineWhileAwait.GetResult() != 32)
+        return 473;
+    Task<int> deepInlineWhileAwait = AwaitWhileCompletedDepth(4096);
+    if (!deepInlineWhileAwait.IsCompleted || deepInlineWhileAwait.GetResult() != 4096)
+        return 480;
+    TaskCompletionSource voidZeroFirst = new TaskCompletionSource();
+    TaskCompletionSource voidZeroNext = new TaskCompletionSource();
+    Task voidZeroWhile = AwaitVoidWhile(
+        voidZeroFirst.Task, voidZeroNext.Task, 0);
+    if (!voidZeroWhile.IsCompleted) return 509;
+    voidZeroWhile.GetResult();
+    TaskCompletionSource voidWhileFirst = new TaskCompletionSource();
+    TaskCompletionSource voidWhileNext = new TaskCompletionSource();
+    Task voidTwoWhile = AwaitVoidWhile(
+        voidWhileFirst.Task, voidWhileNext.Task, 2);
+    if (voidTwoWhile.IsCompleted) return 510;
+    voidWhileFirst.SetResult();
+    TaskScheduler.Run();
+    if (voidTwoWhile.IsCompleted) return 511;
+    ForceCollection();
+    voidWhileNext.SetResult();
+    TaskScheduler.Run();
+    if (!voidTwoWhile.IsCompleted) return 512;
+    voidTwoWhile.GetResult();
+    TaskCompletionSource voidInlineFirst = new TaskCompletionSource();
+    TaskCompletionSource voidInlineNext = new TaskCompletionSource();
+    voidInlineFirst.SetResult();
+    voidInlineNext.SetResult();
+    Task voidInlineWhile = AwaitVoidWhile(
+        voidInlineFirst.Task, voidInlineNext.Task, 2);
+    if (!voidInlineWhile.IsCompleted) return 513;
+    voidInlineWhile.GetResult();
+    TaskCompletionSource voidBreakSource = new TaskCompletionSource();
+    Task voidBreakAwait = AwaitVoidWhileControl(voidBreakSource.Task, 3, 1);
+    if (voidBreakAwait.IsCompleted) return 514;
+    voidBreakSource.SetResult();
+    TaskScheduler.Run();
+    if (!voidBreakAwait.IsCompleted) return 515;
+    voidBreakAwait.GetResult();
+    TaskCompletionSource voidContinueSource = new TaskCompletionSource();
+    Task voidContinueAwait = AwaitVoidWhileControl(voidContinueSource.Task, 1, 2);
+    if (voidContinueAwait.IsCompleted) return 516;
+    voidContinueSource.SetResult();
+    TaskScheduler.Run();
+    if (!voidContinueAwait.IsCompleted) return 517;
+    voidContinueAwait.GetResult();
+    TaskCompletionSource voidReturnSource = new TaskCompletionSource();
+    Task voidReturnAwait = AwaitVoidWhileControl(voidReturnSource.Task, 3, 3);
+    if (voidReturnAwait.IsCompleted) return 518;
+    voidReturnSource.SetResult();
+    TaskScheduler.Run();
+    if (!voidReturnAwait.IsCompleted) return 519;
+    voidReturnAwait.GetResult();
+    Task voidDoZeroLimit = AwaitVoidDoWhile(
+        voidInlineFirst.Task, voidInlineNext.Task, 0);
+    if (!voidDoZeroLimit.IsCompleted) return 520;
+    voidDoZeroLimit.GetResult();
+    TaskCompletionSource voidDoFirst = new TaskCompletionSource();
+    TaskCompletionSource voidDoNext = new TaskCompletionSource();
+    Task voidDoTwo = AwaitVoidDoWhile(
+        voidDoFirst.Task, voidDoNext.Task, 2);
+    if (voidDoTwo.IsCompleted) return 521;
+    voidDoFirst.SetResult();
+    TaskScheduler.Run();
+    if (voidDoTwo.IsCompleted) return 522;
+    ForceCollection();
+    voidDoNext.SetResult();
+    TaskScheduler.Run();
+    if (!voidDoTwo.IsCompleted) return 523;
+    voidDoTwo.GetResult();
+    Task voidForZero = AwaitVoidFor(
+        voidInlineFirst.Task, voidInlineNext.Task, 0);
+    if (!voidForZero.IsCompleted) return 524;
+    voidForZero.GetResult();
+    TaskCompletionSource voidForFirst = new TaskCompletionSource();
+    TaskCompletionSource voidForNext = new TaskCompletionSource();
+    Task voidForTwo = AwaitVoidFor(
+        voidForFirst.Task, voidForNext.Task, 2);
+    if (voidForTwo.IsCompleted) return 525;
+    voidForFirst.SetResult();
+    TaskScheduler.Run();
+    if (voidForTwo.IsCompleted) return 526;
+    ForceCollection();
+    voidForNext.SetResult();
+    TaskScheduler.Run();
+    if (!voidForTwo.IsCompleted) return 527;
+    voidForTwo.GetResult();
+    TaskCompletionSource voidDepthSource = new TaskCompletionSource();
+    voidDepthSource.SetResult();
+    Task voidDeepInline = AwaitVoidWhileCompletedDepth(voidDepthSource.Task, 4096);
+    if (!voidDeepInline.IsCompleted) return 528;
+    voidDeepInline.GetResult();
+    TaskCompletionSource voidDoBreakSource = new TaskCompletionSource();
+    Task voidDoBreak = AwaitVoidDoWhileControl(voidDoBreakSource.Task, 3, 1);
+    if (voidDoBreak.IsCompleted) return 529;
+    voidDoBreakSource.SetResult();
+    TaskScheduler.Run();
+    if (!voidDoBreak.IsCompleted) return 530;
+    voidDoBreak.GetResult();
+    TaskCompletionSource voidDoContinueSource = new TaskCompletionSource();
+    Task voidDoContinue = AwaitVoidDoWhileControl(voidDoContinueSource.Task, 1, 2);
+    if (voidDoContinue.IsCompleted) return 531;
+    voidDoContinueSource.SetResult();
+    TaskScheduler.Run();
+    if (!voidDoContinue.IsCompleted) return 532;
+    voidDoContinue.GetResult();
+    TaskCompletionSource voidDoReturnSource = new TaskCompletionSource();
+    Task voidDoReturn = AwaitVoidDoWhileControl(voidDoReturnSource.Task, 3, 3);
+    if (voidDoReturn.IsCompleted) return 533;
+    voidDoReturnSource.SetResult();
+    TaskScheduler.Run();
+    if (!voidDoReturn.IsCompleted) return 534;
+    voidDoReturn.GetResult();
+    TaskCompletionSource voidForBreakSource = new TaskCompletionSource();
+    Task voidForBreak = AwaitVoidForControl(voidForBreakSource.Task, 3, 1);
+    if (voidForBreak.IsCompleted) return 535;
+    voidForBreakSource.SetResult();
+    TaskScheduler.Run();
+    if (!voidForBreak.IsCompleted) return 536;
+    voidForBreak.GetResult();
+    TaskCompletionSource voidForContinueSource = new TaskCompletionSource();
+    Task voidForContinue = AwaitVoidForControl(voidForContinueSource.Task, 1, 2);
+    if (voidForContinue.IsCompleted) return 537;
+    voidForContinueSource.SetResult();
+    TaskScheduler.Run();
+    if (!voidForContinue.IsCompleted) return 538;
+    voidForContinue.GetResult();
+    TaskCompletionSource voidForReturnSource = new TaskCompletionSource();
+    Task voidForReturn = AwaitVoidForControl(voidForReturnSource.Task, 3, 3);
+    if (voidForReturn.IsCompleted) return 539;
+    voidForReturnSource.SetResult();
+    TaskScheduler.Run();
+    if (!voidForReturn.IsCompleted) return 540;
+    voidForReturn.GetResult();
+    TaskCompletionSource<int> doWhileFirst = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> doWhileNext = new TaskCompletionSource<int>();
+    Task<int> doWhileAwait = AwaitDoWhileCount(
+        doWhileFirst.Task, doWhileNext.Task, 2);
+    if (doWhileAwait.IsCompleted) return 481;
+    doWhileFirst.SetResult(12);
+    TaskScheduler.Run();
+    if (doWhileAwait.IsCompleted) return 482;
+    ForceCollection();
+    doWhileNext.SetResult(24);
+    TaskScheduler.Run();
+    if (!doWhileAwait.IsCompleted || doWhileAwait.GetResult() != 24) return 483;
+    TaskCompletionSource<int> doWhileSingle = new TaskCompletionSource<int>();
+    Task<int> doWhileSingleAwait = AwaitDoWhileCount(
+        doWhileSingle.Task, doWhileSingle.Task, 1);
+    if (doWhileSingleAwait.IsCompleted) return 484;
+    doWhileSingle.SetResult(17);
+    TaskScheduler.Run();
+    if (!doWhileSingleAwait.IsCompleted || doWhileSingleAwait.GetResult() != 17)
+        return 485;
+    Task<int> doWhileInlineAwait = AwaitDoWhileCount(
+        CompletedTask(31), CompletedTask(32), 2);
+    if (!doWhileInlineAwait.IsCompleted || doWhileInlineAwait.GetResult() != 32)
+        return 486;
+    Task<int> doWhileZeroLimitAwait = AwaitDoWhileCount(
+        CompletedTask(13), CompletedTask(14), 0);
+    if (!doWhileZeroLimitAwait.IsCompleted || doWhileZeroLimitAwait.GetResult() != 13)
+        return 493;
+    Task<int> forZeroIterationAwait = AwaitForCount(
+        CompletedTask(15), CompletedTask(16), 0);
+    if (!forZeroIterationAwait.IsCompleted || forZeroIterationAwait.GetResult() != 0)
+        return 494;
+    TaskCompletionSource<int> forFirstSource = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> forNextSource = new TaskCompletionSource<int>();
+    Task<int> forAwait = AwaitForCount(
+        forFirstSource.Task, forNextSource.Task, 2);
+    if (forAwait.IsCompleted) return 495;
+    forFirstSource.SetResult(18);
+    TaskScheduler.Run();
+    if (forAwait.IsCompleted) return 496;
+    ForceCollection();
+    forNextSource.SetResult(27);
+    TaskScheduler.Run();
+    if (!forAwait.IsCompleted || forAwait.GetResult() != 27) return 497;
+    Task<int> forInlineAwait = AwaitForCount(
+        CompletedTask(33), CompletedTask(34), 2);
+    if (!forInlineAwait.IsCompleted || forInlineAwait.GetResult() != 34)
+        return 498;
+    TaskCompletionSource<int> forBreakSource = new TaskCompletionSource<int>();
+    Task<int> forBreakAwait = AwaitForControl(forBreakSource.Task, 3);
+    if (forBreakAwait.IsCompleted) return 499;
+    forBreakSource.SetResult(99);
+    TaskScheduler.Run();
+    if (!forBreakAwait.IsCompleted || forBreakAwait.GetResult() != 0) return 500;
+    TaskCompletionSource<int> forContinueSource = new TaskCompletionSource<int>();
+    Task<int> forContinueAwait = AwaitForControl(forContinueSource.Task, 1);
+    if (forContinueAwait.IsCompleted) return 501;
+    forContinueSource.SetResult(0);
+    TaskScheduler.Run();
+    if (!forContinueAwait.IsCompleted || forContinueAwait.GetResult() != 0)
+        return 502;
+    TaskCompletionSource<int> forReturnSource = new TaskCompletionSource<int>();
+    Task<int> forReturnAwait = AwaitForControl(forReturnSource.Task, 3);
+    if (forReturnAwait.IsCompleted) return 503;
+    forReturnSource.SetResult(42);
+    TaskScheduler.Run();
+    if (!forReturnAwait.IsCompleted || forReturnAwait.GetResult() != 42) return 504;
+    AsyncAwaitProbe.Steps = 0;
+    TaskCompletionSource<int> switchFirstSource = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> switchFallbackSource = new TaskCompletionSource<int>();
+    Task<int> switchAwait = AwaitSwitchCase(
+        switchFirstSource.Task, switchFallbackSource.Task, 2);
+    if (switchAwait.IsCompleted || AsyncAwaitProbe.Steps != 1) return 505;
+    switchFallbackSource.SetResult(81);
+    TaskScheduler.Run();
+    if (switchAwait.IsCompleted || AsyncAwaitProbe.Steps != 1) return 506;
+    ForceCollection();
+    switchFirstSource.SetResult(72);
+    TaskScheduler.Run();
+    if (!switchAwait.IsCompleted || switchAwait.GetResult() != 72 ||
+        AsyncAwaitProbe.Steps != 1) return 507;
+    TaskCompletionSource<int> completedSwitchFirst = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> completedSwitchFallback = new TaskCompletionSource<int>();
+    completedSwitchFirst.SetResult(91);
+    completedSwitchFallback.SetResult(92);
+    AsyncAwaitProbe.Steps = 0;
+    Task<int> completedSwitchAwait = AwaitSwitchCase(
+        completedSwitchFirst.Task, completedSwitchFallback.Task, 9);
+    if (!completedSwitchAwait.IsCompleted || completedSwitchAwait.GetResult() != 92 ||
+        AsyncAwaitProbe.Steps != 1) return 508;
+    TaskCompletionSource<int> switchContinuationFirst = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> switchContinuationFallback = new TaskCompletionSource<int>();
+    AsyncAwaitProbe.Steps = 0;
+    Task<int> switchContinuation = AwaitSwitchContinuation(
+        switchContinuationFirst.Task, switchContinuationFallback.Task, 2);
+    if (switchContinuation.IsCompleted || AsyncAwaitProbe.Steps != 1) return 511;
+    switchContinuationFallback.SetResult(80);
+    TaskScheduler.Run();
+    if (switchContinuation.IsCompleted || AsyncAwaitProbe.Steps != 1) return 512;
+    ForceCollection();
+    switchContinuationFirst.SetResult(72);
+    TaskScheduler.Run();
+    if (!switchContinuation.IsCompleted || switchContinuation.GetResult() != 719 ||
+        AsyncAwaitProbe.Steps != 1) return 513;
+    TaskCompletionSource<int> completedContinuationFirst = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> completedContinuationFallback = new TaskCompletionSource<int>();
+    completedContinuationFirst.SetResult(90);
+    completedContinuationFallback.SetResult(91);
+    AsyncAwaitProbe.Steps = 0;
+    Task<int> completedContinuation = AwaitSwitchContinuation(
+        completedContinuationFirst.Task, completedContinuationFallback.Task, 9);
+    if (!completedContinuation.IsCompleted ||
+        completedContinuation.GetResult() != 908 || AsyncAwaitProbe.Steps != 1)
+        return 514;
+    TaskCompletionSource voidSwitchFirst = new TaskCompletionSource();
+    TaskCompletionSource voidSwitchFallback = new TaskCompletionSource();
+    AsyncAwaitProbe.Steps = 0;
+    Task voidSwitch = AwaitVoidSwitchContinuation(
+        voidSwitchFirst.Task, voidSwitchFallback.Task, 1);
+    if (voidSwitch.IsCompleted || AsyncAwaitProbe.Steps != 1) return 515;
+    voidSwitchFallback.SetResult();
+    TaskScheduler.Run();
+    if (voidSwitch.IsCompleted || AsyncAwaitProbe.Steps != 1) return 516;
+    ForceCollection();
+    voidSwitchFirst.SetResult();
+    TaskScheduler.Run();
+    if (!voidSwitch.IsCompleted || AsyncAwaitProbe.Steps != 11) return 517;
+    TaskCompletionSource completedVoidSwitchFirst = new TaskCompletionSource();
+    TaskCompletionSource completedVoidSwitchFallback = new TaskCompletionSource();
+    completedVoidSwitchFirst.SetResult();
+    completedVoidSwitchFallback.SetResult();
+    AsyncAwaitProbe.Steps = 0;
+    Task completedVoidSwitch = AwaitVoidSwitchContinuation(
+        completedVoidSwitchFirst.Task, completedVoidSwitchFallback.Task, 9);
+    if (!completedVoidSwitch.IsCompleted || AsyncAwaitProbe.Steps != 21)
+        return 518;
+    TaskCompletionSource<int> nestedAwaitSource = new TaskCompletionSource<int>();
+    AsyncAwaitProbe.Steps = 0;
+    Task<int> nestedAwaitCall = AwaitNestedCallArgument(nestedAwaitSource.Task);
+    if (nestedAwaitCall.IsCompleted || AsyncAwaitProbe.Steps != 1) return 519;
+    ForceCollection();
+    nestedAwaitSource.SetResult(72);
+    TaskScheduler.Run();
+    if (!nestedAwaitCall.IsCompleted || nestedAwaitCall.GetResult() != 719 ||
+        AsyncAwaitProbe.Steps != 11) return 520;
+    TaskCompletionSource<int> completedNestedAwaitSource =
+        new TaskCompletionSource<int>();
+    completedNestedAwaitSource.SetResult(90);
+    AsyncAwaitProbe.Steps = 0;
+    Task<int> completedNestedAwaitCall = AwaitNestedCallArgument(
+        completedNestedAwaitSource.Task);
+    if (!completedNestedAwaitCall.IsCompleted ||
+        completedNestedAwaitCall.GetResult() != 899 || AsyncAwaitProbe.Steps != 11)
+        return 521;
+    TaskCompletionSource<int> nestedBinarySource = new TaskCompletionSource<int>();
+    AsyncAwaitProbe.Steps = 0;
+    Task<int> nestedBinary = AwaitNestedBinaryOperand(nestedBinarySource.Task);
+    if (nestedBinary.IsCompleted || AsyncAwaitProbe.Steps != -102) return 522;
+    ForceCollection();
+    nestedBinarySource.SetResult(72);
+    TaskScheduler.Run();
+    if (!nestedBinary.IsCompleted || nestedBinary.GetResult() != -2 ||
+        AsyncAwaitProbe.Steps != -102) return 523;
+    TaskCompletionSource<int> completedNestedBinarySource =
+        new TaskCompletionSource<int>();
+    completedNestedBinarySource.SetResult(90);
+    AsyncAwaitProbe.Steps = 0;
+    Task<int> completedNestedBinary = AwaitNestedBinaryOperand(
+        completedNestedBinarySource.Task);
+    if (!completedNestedBinary.IsCompleted ||
+        completedNestedBinary.GetResult() != -20 || AsyncAwaitProbe.Steps != -102)
+        return 524;
+    TaskCompletionSource<int> multipleArgumentSource = new TaskCompletionSource<int>();
+    AsyncAwaitProbe.Steps = 0;
+    Task<int> multipleArguments = AwaitMultipleCallArguments(
+        multipleArgumentSource.Task);
+    if (multipleArguments.IsCompleted || AsyncAwaitProbe.Steps != -12) return 525;
+    ForceCollection();
+    multipleArgumentSource.SetResult(72);
+    TaskScheduler.Run();
+    if (!multipleArguments.IsCompleted || multipleArguments.GetResult() != 72 ||
+        AsyncAwaitProbe.Steps != -123) return 526;
+    TaskCompletionSource<int> completedMultipleArgumentSource =
+        new TaskCompletionSource<int>();
+    completedMultipleArgumentSource.SetResult(90);
+    AsyncAwaitProbe.Steps = 0;
+    Task<int> completedMultipleArguments = AwaitMultipleCallArguments(
+        completedMultipleArgumentSource.Task);
+    if (!completedMultipleArguments.IsCompleted ||
+        completedMultipleArguments.GetResult() != 90 ||
+        AsyncAwaitProbe.Steps != -123) return 527;
+    TaskCompletionSource<int> conditionalAwaitSource =
+        new TaskCompletionSource<int>();
+    AsyncAwaitProbe.Steps = 0;
+    Task<int> conditionalAwait = AwaitConditionalExpression(
+        true, conditionalAwaitSource.Task);
+    if (conditionalAwait.IsCompleted || AsyncAwaitProbe.Steps != 11) return 528;
+    ForceCollection();
+    conditionalAwaitSource.SetResult(72);
+    TaskScheduler.Run();
+    if (!conditionalAwait.IsCompleted || conditionalAwait.GetResult() != 72 ||
+        AsyncAwaitProbe.Steps != 11) return 529;
+    TaskCompletionSource<int> skippedConditionalSource =
+        new TaskCompletionSource<int>();
+    AsyncAwaitProbe.Steps = 0;
+    Task<int> skippedConditional = AwaitConditionalExpression(
+        false, skippedConditionalSource.Task);
+    if (!skippedConditional.IsCompleted || skippedConditional.GetResult() != 7 ||
+        AsyncAwaitProbe.Steps != 101 || skippedConditionalSource.Task.IsCompleted)
+        return 530;
+    TaskCompletionSource<int> completedConditionalSource =
+        new TaskCompletionSource<int>();
+    completedConditionalSource.SetResult(90);
+    AsyncAwaitProbe.Steps = 0;
+    Task<int> completedConditional = AwaitConditionalExpression(
+        true, completedConditionalSource.Task);
+    if (!completedConditional.IsCompleted ||
+        completedConditional.GetResult() != 90 || AsyncAwaitProbe.Steps != 11)
+        return 531;
+    TaskCompletionSource<bool> skippedAndSource = new TaskCompletionSource<bool>();
+    AsyncAwaitProbe.Steps = 0;
+    Task<bool> skippedAnd = AwaitShortCircuitAnd(false, skippedAndSource.Task);
+    if (!skippedAnd.IsCompleted || skippedAnd.GetResult() ||
+        AsyncAwaitProbe.Steps != 1 || skippedAndSource.Task.IsCompleted) return 532;
+    TaskCompletionSource<bool> pendingAndSource = new TaskCompletionSource<bool>();
+    AsyncAwaitProbe.Steps = 0;
+    Task<bool> pendingAnd = AwaitShortCircuitAnd(true, pendingAndSource.Task);
+    if (pendingAnd.IsCompleted || AsyncAwaitProbe.Steps != 11) return 533;
+    ForceCollection();
+    pendingAndSource.SetResult(true);
+    TaskScheduler.Run();
+    if (!pendingAnd.IsCompleted || !pendingAnd.GetResult() ||
+        AsyncAwaitProbe.Steps != 11) return 534;
+    TaskCompletionSource<bool> skippedOrSource = new TaskCompletionSource<bool>();
+    AsyncAwaitProbe.Steps = 0;
+    Task<bool> skippedOr = AwaitShortCircuitOr(true, skippedOrSource.Task);
+    if (!skippedOr.IsCompleted || !skippedOr.GetResult() ||
+        AsyncAwaitProbe.Steps != 1 || skippedOrSource.Task.IsCompleted) return 535;
+    TaskCompletionSource<bool> pendingOrSource = new TaskCompletionSource<bool>();
+    AsyncAwaitProbe.Steps = 0;
+    Task<bool> pendingOr = AwaitShortCircuitOr(false, pendingOrSource.Task);
+    if (pendingOr.IsCompleted || AsyncAwaitProbe.Steps != 11) return 536;
+    ForceCollection();
+    pendingOrSource.SetResult(true);
+    TaskScheduler.Run();
+    if (!pendingOr.IsCompleted || !pendingOr.GetResult() ||
+        AsyncAwaitProbe.Steps != 11) return 537;
+    TaskCompletionSource<string> skippedCoalesceSource =
+        new TaskCompletionSource<string>();
+    AsyncAwaitProbe.Steps = 0;
+    Task<string> skippedCoalesce = AwaitNullCoalesce(
+        true, skippedCoalesceSource.Task);
+    if (!skippedCoalesce.IsCompleted || skippedCoalesce.GetResult() != "left" ||
+        AsyncAwaitProbe.Steps != 1 || skippedCoalesceSource.Task.IsCompleted)
+        return 538;
+    TaskCompletionSource<string> pendingCoalesceSource =
+        new TaskCompletionSource<string>();
+    AsyncAwaitProbe.Steps = 0;
+    Task<string> pendingCoalesce = AwaitNullCoalesce(
+        false, pendingCoalesceSource.Task);
+    if (pendingCoalesce.IsCompleted || AsyncAwaitProbe.Steps != 11) return 539;
+    ForceCollection();
+    pendingCoalesceSource.SetResult("fallback");
+    TaskScheduler.Run();
+    if (!pendingCoalesce.IsCompleted || pendingCoalesce.GetResult() != "fallback" ||
+        AsyncAwaitProbe.Steps != 11) return 540;
+    TaskCompletionSource<string> completedCoalesceSource =
+        new TaskCompletionSource<string>();
+    completedCoalesceSource.SetResult("completed");
+    AsyncAwaitProbe.Steps = 0;
+    Task<string> completedCoalesce = AwaitNullCoalesce(
+        false, completedCoalesceSource.Task);
+    if (!completedCoalesce.IsCompleted ||
+        completedCoalesce.GetResult() != "completed" || AsyncAwaitProbe.Steps != 11)
+        return 541;
+    TaskCompletionSource<int> doWhileBreakSource = new TaskCompletionSource<int>();
+    Task<int> doWhileBreakAwait = AwaitDoWhileControl(doWhileBreakSource.Task, 3);
+    if (doWhileBreakAwait.IsCompleted) return 487;
+    doWhileBreakSource.SetResult(99);
+    TaskScheduler.Run();
+    if (!doWhileBreakAwait.IsCompleted || doWhileBreakAwait.GetResult() != 0)
+        return 488;
+    TaskCompletionSource<int> doWhileContinueSource = new TaskCompletionSource<int>();
+    Task<int> doWhileContinueAwait = AwaitDoWhileControl(
+        doWhileContinueSource.Task, 1);
+    if (doWhileContinueAwait.IsCompleted) return 489;
+    doWhileContinueSource.SetResult(0);
+    TaskScheduler.Run();
+    if (!doWhileContinueAwait.IsCompleted || doWhileContinueAwait.GetResult() != 0)
+        return 490;
+    TaskCompletionSource<int> doWhileReturnSource = new TaskCompletionSource<int>();
+    Task<int> doWhileReturnAwait = AwaitDoWhileControl(doWhileReturnSource.Task, 3);
+    if (doWhileReturnAwait.IsCompleted) return 491;
+    doWhileReturnSource.SetResult(42);
+    TaskScheduler.Run();
+    if (!doWhileReturnAwait.IsCompleted || doWhileReturnAwait.GetResult() != 42)
+        return 492;
+    TaskCompletionSource<int> breakWhileSource = new TaskCompletionSource<int>();
+    Task<int> breakWhileAwait = AwaitWhileControl(breakWhileSource.Task, 3);
+    if (breakWhileAwait.IsCompleted) return 474;
+    breakWhileSource.SetResult(99);
+    TaskScheduler.Run();
+    if (!breakWhileAwait.IsCompleted || breakWhileAwait.GetResult() != 0)
+        return 475;
+    TaskCompletionSource<int> continueWhileSource = new TaskCompletionSource<int>();
+    Task<int> continueWhileAwait = AwaitWhileControl(continueWhileSource.Task, 2);
+    if (continueWhileAwait.IsCompleted) return 476;
+    continueWhileSource.SetResult(0);
+    TaskScheduler.Run();
+    if (!continueWhileAwait.IsCompleted || continueWhileAwait.GetResult() != 0)
+        return 477;
+    TaskCompletionSource<int> returnWhileSource = new TaskCompletionSource<int>();
+    Task<int> returnWhileAwait = AwaitWhileControl(returnWhileSource.Task, 3);
+    if (returnWhileAwait.IsCompleted) return 478;
+    returnWhileSource.SetResult(42);
+    TaskScheduler.Run();
+    if (!returnWhileAwait.IsCompleted || returnWhileAwait.GetResult() != 42)
+        return 479;
+    AsyncAwaitProbe.Steps = 0;
+    TaskCompletionSource ifElseVoidFirstSource = new TaskCompletionSource();
+    TaskCompletionSource ifElseVoidSecondSource = new TaskCompletionSource();
+    Task ifElseVoidAwait = AwaitIfElseVoid(
+        ifElseVoidFirstSource.Task, ifElseVoidSecondSource.Task, true);
+    if (ifElseVoidAwait.IsCompleted || AsyncAwaitProbe.Steps != 1) return 456;
+    ifElseVoidSecondSource.SetResult();
+    TaskScheduler.Run();
+    if (ifElseVoidAwait.IsCompleted || AsyncAwaitProbe.Steps != 1) return 457;
+    ifElseVoidFirstSource.SetResult();
+    TaskScheduler.Run();
+    if (!ifElseVoidAwait.IsCompleted || AsyncAwaitProbe.Steps != 1) return 458;
+    ifElseVoidAwait.GetResult();
+    AsyncAwaitProbe.Steps = 0;
+    TaskCompletionSource completedIfElseVoidSource = new TaskCompletionSource();
+    TaskCompletionSource pendingIfElseVoidSource = new TaskCompletionSource();
+    completedIfElseVoidSource.SetResult();
+    Task completedIfElseVoidAwait = AwaitIfElseVoid(
+        pendingIfElseVoidSource.Task, completedIfElseVoidSource.Task, false);
+    if (!completedIfElseVoidAwait.IsCompleted || AsyncAwaitProbe.Steps != 1)
+        return 459;
+    completedIfElseVoidAwait.GetResult();
+    TaskCompletionSource<int> conditionalReturnSource =
+        new TaskCompletionSource<int>();
+    Task<int> conditionalReturnAwait = AwaitConditionalReturn(
+        conditionalReturnSource.Task, true);
+    conditionalReturnSource.SetResult(61);
+    if (TaskScheduler.Run() != 1u || !conditionalReturnAwait.IsCompleted ||
+        conditionalReturnAwait.GetResult() != 61) return 368;
+    TaskCompletionSource<int> conditionalFallbackSource =
+        new TaskCompletionSource<int>();
+    Task<int> conditionalFallbackAwait = AwaitConditionalReturn(
+        conditionalFallbackSource.Task, false);
+    conditionalFallbackSource.SetResult(62);
+    if (TaskScheduler.Run() != 1u || !conditionalFallbackAwait.IsCompleted ||
+        conditionalFallbackAwait.GetResult() != 17) return 369;
+    TaskCompletionSource<int> offsetSource = new TaskCompletionSource<int>();
+    Task<int> offsetAwait = AwaitWithOffset(offsetSource.Task);
+    if (offsetAwait.IsCompleted) return 345;
+    offsetSource.SetResult(12);
+    if (offsetAwait.IsCompleted || TaskScheduler.Run() != 1u) return 346;
+    if (!offsetAwait.IsCompleted || offsetAwait.GetResult() != 111) return 347;
+    TaskCompletionSource<int> completedOffsetSource =
+        new TaskCompletionSource<int>();
+    completedOffsetSource.SetResult(14);
+    Task<int> completedOffsetAwait = AwaitWithOffset(completedOffsetSource.Task);
+    if (!completedOffsetAwait.IsCompleted ||
+        completedOffsetAwait.GetResult() != 131) return 348;
+    TaskCompletionSource<int> firstAwaitSource = new TaskCompletionSource<int>();
+    TaskCompletionSource<int> secondAwaitSource = new TaskCompletionSource<int>();
+    Task<int> twiceAwait = AwaitTwice(firstAwaitSource.Task, secondAwaitSource.Task);
+    if (twiceAwait.IsCompleted) return 349;
+    firstAwaitSource.SetResult(3);
+    if (TaskScheduler.Run() != 1u || twiceAwait.IsCompleted) return 350;
+    secondAwaitSource.SetResult(4);
+    if (TaskScheduler.Run() != 1u || !twiceAwait.IsCompleted ||
+        twiceAwait.GetResult() != 276) return 351;
+    TaskCompletionSource<int> completedFirstAwaitSource =
+        new TaskCompletionSource<int>();
+    TaskCompletionSource<int> completedSecondAwaitSource =
+        new TaskCompletionSource<int>();
+    completedFirstAwaitSource.SetResult(3);
+    completedSecondAwaitSource.SetResult(4);
+    Task<int> completedTwiceAwait = AwaitTwice(
+        completedFirstAwaitSource.Task, completedSecondAwaitSource.Task);
+    if (!completedTwiceAwait.IsCompleted || completedTwiceAwait.GetResult() != 276)
+        return 352;
+    TaskCompletionSource<int> firstAwaitFaultSource =
+        new TaskCompletionSource<int>();
+    TaskCompletionSource<int> skippedSecondAwaitSource =
+        new TaskCompletionSource<int>();
+    Task<int> firstAwaitFault = AwaitTwice(
+        firstAwaitFaultSource.Task, skippedSecondAwaitSource.Task);
+    firstAwaitFaultSource.SetException(new Exception("first await failure"));
+    if (TaskScheduler.Run() != 1u || !firstAwaitFault.IsCompleted) return 353;
+    bool observedFirstAwaitFault = false;
+    try {
+        firstAwaitFault.GetResult();
+    } catch (Exception exception) {
+        if (exception.Message != "first await failure") return 354;
+        observedFirstAwaitFault = true;
+    }
+    if (!observedFirstAwaitFault) return 355;
+    TaskCompletionSource<int> completedBeforeSecondFaultSource =
+        new TaskCompletionSource<int>();
+    TaskCompletionSource<int> secondAwaitFaultSource =
+        new TaskCompletionSource<int>();
+    completedBeforeSecondFaultSource.SetResult(3);
+    Task<int> secondAwaitFault = AwaitTwice(
+        completedBeforeSecondFaultSource.Task, secondAwaitFaultSource.Task);
+    if (secondAwaitFault.IsCompleted) return 356;
+    secondAwaitFaultSource.SetException(new Exception("second await failure"));
+    if (TaskScheduler.Run() != 1u || !secondAwaitFault.IsCompleted) return 357;
+    bool observedSecondAwaitFault = false;
+    try {
+        secondAwaitFault.GetResult();
+    } catch (Exception exception) {
+        if (exception.Message != "second await failure") return 358;
+        observedSecondAwaitFault = true;
+    }
+    if (!observedSecondAwaitFault) return 359;
+    Task<int> genericCompletedAwait = AwaitGenericLocal<int>(new Task<int>(38));
+    if (!genericCompletedAwait.IsCompleted || genericCompletedAwait.GetResult() != 38)
+        return 360;
+    TaskCompletionSource<int> genericPendingSource =
+        new TaskCompletionSource<int>();
+    Task<int> genericPendingAwait =
+        AwaitPendingGenericTask<int>(genericPendingSource.Task);
+    if (genericPendingAwait.IsCompleted) return 326;
+    genericPendingSource.SetResult(56);
+    if (TaskScheduler.Run() != 1u || !genericPendingAwait.IsCompleted ||
+        genericPendingAwait.GetResult() != 56) return 327;
+    TaskCompletionSource<int> pendingFaultSource =
+        new TaskCompletionSource<int>();
+    Task<int> pendingFault = AwaitPendingTask(pendingFaultSource.Task);
+    pendingFaultSource.SetException(new Exception("pending async failure"));
+    if (TaskScheduler.Run() != 1u || !pendingFault.IsCompleted) return 323;
+    bool observedPendingFault = false;
+    try {
+        pendingFault.GetResult();
+    } catch (Exception exception) {
+        if (exception.Message != "pending async failure") return 324;
+        observedPendingFault = true;
+    }
+    if (!observedPendingFault) return 325;
+    Exception rethrowOriginal = new Exception("rethrow original instance");
+    bool retainedRethrowInstance = false;
+    try {
+        try { RethrowException(rethrowOriginal); }
+        catch (Exception exception) {
+            retainedRethrowInstance = exception == rethrowOriginal &&
+                exception.Message == "rethrow original instance";
+        }
+    } catch (Exception) { return 649; }
+    if (!retainedRethrowInstance) return 650;
+    TaskCompletionSource<int> interleavedFaultSource =
+        new TaskCompletionSource<int>();
+    TaskCompletionSource<int> interleavedSuccessSource =
+        new TaskCompletionSource<int>();
+    Task<int> interleavedFaultTask = AwaitPendingTask(interleavedFaultSource.Task);
+    Task<int> interleavedSuccessTask = AwaitPendingTask(interleavedSuccessSource.Task);
+    Exception interleavedOriginalException = new Exception("isolated async failure");
+    interleavedFaultSource.SetException(interleavedOriginalException);
+    if (TaskScheduler.Run() != 1u || !interleavedFaultTask.IsCompleted ||
+        interleavedSuccessTask.IsCompleted) return 651;
+    interleavedSuccessSource.SetResult(52);
+    if (TaskScheduler.Run() != 1u || !interleavedSuccessTask.IsCompleted ||
+        interleavedSuccessTask.GetResult() != 52) return 652;
+    bool retainedInterleavedException = false;
+    try { interleavedFaultTask.GetResult(); }
+    catch (Exception exception) {
+        retainedInterleavedException = exception == interleavedOriginalException &&
+            exception.Message == "isolated async failure";
+    }
+    if (!retainedInterleavedException) return 653;
+    AsyncIteratorProbe.LastAwaitedValue = 0;
+    AsyncIteratorProbe.Finalizers = 0;
+    TaskCompletionSource<int> taskConsumerMoveSource =
+        new TaskCompletionSource<int>();
+    Task taskConsumerPendingMove = ConsumeAsyncSequence(
+        AsyncAwaitValue(taskConsumerMoveSource.Task));
+    if (taskConsumerPendingMove.IsCompleted ||
+        AsyncIteratorProbe.LastAwaitedValue != 0) return 654;
+    ForceCollection();
+    taskConsumerMoveSource.SetResult(57);
+    TaskScheduler.Run();
+    if (!taskConsumerPendingMove.IsCompleted ||
+        AsyncIteratorProbe.LastAwaitedValue != 57 ||
+        AsyncIteratorProbe.Finalizers != 0) return 655;
+    taskConsumerPendingMove.GetResult();
+    Task<int> taskConsumerResult = ConsumeAndReturnLastAsyncSequenceValue(
+        AsyncValues(3));
+    if (!taskConsumerResult.IsCompleted) TaskScheduler.Run();
+    if (!taskConsumerResult.IsCompleted || taskConsumerResult.GetResult() != 2)
+        return 660;
+    PendingAsyncDisposeProbe.Completion = new TaskCompletionSourceVoid();
+    PendingAsyncDisposeProbe.FaultedMove = new TaskCompletionSource<bool>();
+    PendingAsyncDisposeProbe.DisposeCount = 0;
+    Task taskConsumerCanceledMove = ConsumeAsyncSequence(
+        new PendingFaultDisposeSequence());
+    PendingAsyncDisposeProbe.FailMove(new OperationCanceledException());
+    TaskScheduler.Run();
+    if (taskConsumerCanceledMove.IsCompleted ||
+        PendingAsyncDisposeProbe.DisposeCount != 1) return 661;
+    PendingAsyncDisposeProbe.CompleteDisposal();
+    TaskScheduler.Run();
+    if (!taskConsumerCanceledMove.IsCanceled ||
+        PendingAsyncDisposeProbe.DisposeCount != 1) return 662;
+    bool observedTaskConsumerCancellation = false;
+    try { taskConsumerCanceledMove.GetResult(); }
+    catch (OperationCanceledException) { observedTaskConsumerCancellation = true; }
+    if (!observedTaskConsumerCancellation) return 663;
+    AsyncIteratorProbe.Finalizers = 0;
+    Task taskConsumerReturn = ConsumeAndReturnFromAsyncSequence(AsyncFinally());
+    if (!taskConsumerReturn.IsCompleted) TaskScheduler.Run();
+    if (!taskConsumerReturn.IsCompleted || AsyncIteratorProbe.Finalizers != (0 + 1))
+        return 664;
+    taskConsumerReturn.GetResult();
+    AsyncIteratorProbe.Finalizers = 0;
+    Task taskConsumerBreak = ConsumeOneAsyncSequenceValue(AsyncFinally());
+    if (!taskConsumerBreak.IsCompleted) TaskScheduler.Run();
+    // This fixture overloads int + as this * 10 - other, so one increment from
+    // zero is 0 + 1 (=-1), matching the iterator's finally expression.
+    if (!taskConsumerBreak.IsCompleted || AsyncIteratorProbe.Finalizers != (0 + 1))
+        return 656;
+    taskConsumerBreak.GetResult();
+    AsyncIteratorProbe.Finalizers = 0;
+    Task taskConsumerFault = ConsumeAndThrowFromAsyncSequence(AsyncFinally());
+    if (!taskConsumerFault.IsCompleted) TaskScheduler.Run();
+    if (!taskConsumerFault.IsCompleted || AsyncIteratorProbe.Finalizers != (0 + 1))
+        return 657;
+    bool observedTaskConsumerFault = false;
+    try { taskConsumerFault.GetResult(); }
+    catch (Exception exception) {
+        if (exception.Message != "async task consumer failure") return 658;
+        observedTaskConsumerFault = true;
+    }
+    if (!observedTaskConsumerFault) return 659;
     Math.GenericVirtualOwnerBase<string> genericOwnerVirtual =
         new GenericVirtualOwnerDerived<string>();
     if (genericOwnerVirtual.Transform(2) != 92) return 300;
@@ -5428,7 +8630,9 @@ public int Run() {
 '@, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $appDirectory 'main.c'), @'
 #include "app.h"
-int main(void) { return CX_ID_3(app, App, Run)() == 42 ? 0 : 1; }
+#include "cxruntime.h"
+void app_App_ForceCollection(void) { cx_gc_collect(); }
+int main(void) { return app_App_Run() == 42 ? 0 : 1; }
 '@, [Text.UTF8Encoding]::new($false))
 
     $projectArguments = @(
@@ -5480,6 +8684,9 @@ int main(void) { return CX_ID_3(app, App, Run)() == 42 ? 0 : 1; }
     Write-Output 'PASS closed generic owners: constructed generic value arrays use closed element strides'
     Write-Output 'PASS generic void forwarding: exact specialization and primary fallback'
     Write-Output 'PASS native cross-module generic specializations through a referenced CX library (static and DLL)'
+    Write-Output 'PASS task completion and continuations, ready-queue timers, pending Task/Task<T> awaits, Task.Delay, project references, awaited finally cleanup, and fault precedence'
+    Write-Output 'PASS async iterators: escaped closure capture survives disposal and forced GC'
+    Write-Output 'PASS lazy async iterators: pull advancement, independent enumerations, single-flight advancement, forced GC for suspended frames/closures and before fault resumption, interleaved fault/success isolation, awaited result/fault/canceled sources, reentrant cancellation during await setup, cancellation/completion ordering, token cancellation and disposal during pending advancement, awaited and exactly-once async foreach disposal, producer/consumer/filter fault cleanup, cancellation during fault cleanup, and producer fault propagation'
     $completed = $true
 }
 finally {

@@ -2,11 +2,11 @@
 
 #include "cross_file_library.h"
 
-struct CX_ID_4(cxcore, System, Reflection, TypeInfo) CX_ID_4(cxcore, System, Int, __typeinfo);
-union cx_vtable_entry CX_ID_4(cxcore, System, String, __vtable)[1];
+struct cxcore_System_Reflection_TypeInfo cxcore_System_Int___typeinfo;
+union cx_vtable_entry cxcore_System_String___vtable[1];
 
 int main(void) {
-    struct CX_ID_3(cross_file_library, Lib, Token) token = {37};
-    assert(CX_ID_3(cross_file_library, App, Run)(token) == 37);
+    struct cross_file_library_Lib_Token token = {37};
+    assert(cross_file_library_App_Run(token) == 37);
     return 0;
 }

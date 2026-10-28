@@ -1,0 +1,89 @@
+public interface IValue { int Read() const; }
+public interface IOther { }
+public class Base { }
+public class Value : Base, IValue {
+    public int Number;
+    public int Read() const { return Number; }
+}
+public class Missing { }
+public class DecimalHolder {
+    public decimal Amount { get; set; }
+    public static decimal Initial = 0.1m;
+    public static decimal Integral = 2;
+}
+public class Box<T> { }
+public class State { public static int Evaluations; }
+Value Create() { State.Evaluations++; return new Value(); }
+System.Reflection.TypeInfo Describe<T>() { return typeof(T); }
+T Try<T>(object value) where T : class { return value as T; }
+T? TryValue<T>(object value) where T : struct { return value as T?; }
+
+public int Main(string[] args) {
+    decimal sum = 0.1m + 0.2m;
+    if (sum != 0.3m) return 1;
+    sum += 2;
+    decimal old = sum++;
+    if (old != 2.3m || sum != 3.3m) return 2;
+    sum *= 10m;
+    if ((int)sum != 33 || sum % 10m != 3m) return 3;
+    if (1m / 3m != 0.3333333333333333333333333333m) return 4;
+    if (-sum >= 0m || -sum != -33m) return 5;
+    decimal converted = (decimal)0.1;
+    if (converted != 0.1m || (double)converted != 0.1) return 6;
+    DecimalHolder holder = new DecimalHolder();
+    holder.Amount = 0.1m;
+    holder.Amount += 0.2m;
+    old = holder.Amount++;
+    if (old != 0.3m || holder.Amount != 1.3m) return 7;
+    if (DecimalHolder.Initial != 0.1m) return 8;
+    if (DecimalHolder.Integral != 2m) return 30;
+    decimal[] amounts = new decimal[2];
+    amounts[0] = 0.1m;
+    amounts[0] += 0.2m;
+    if (amounts[0] != 0.3m) return 9;
+    object arrayObject = amounts;
+    if (arrayObject as decimal[] == null || arrayObject as int[] != null) return 25;
+    decimal? lifted = sum as decimal?;
+    if ((lifted ?? 0m) != sum) return 26;
+
+    object instance = new Value();
+    Value value = instance as Value;
+    if (value == null || instance as Missing != null) return 10;
+    if (Try<Value>(instance) == null || Try<Missing>(instance) != null) return 11;
+    IValue readable = instance as IValue;
+    if (readable == null || readable as Value == null || readable as Missing != null) return 12;
+    if (readable as IOther != null) return 13;
+    object empty = null;
+    if (empty as Value != null || empty as IValue != null) return 14;
+    object boxed = sum;
+    decimal? unboxed = boxed as decimal?;
+    if (unboxed == null || (unboxed ?? 0m) != sum || (boxed as int?) != null) return 15;
+    if ((empty as decimal?) != null) return 16;
+    decimal? genericValue = TryValue<decimal>(boxed);
+    if ((genericValue ?? 0m) != sum) return 31;
+    object safeBox = sum as object;
+    decimal? recovered = safeBox as decimal?;
+    if ((recovered ?? 0m) != sum) return 32;
+    State.Evaluations = 0;
+    value = Create() as Value;
+    if (State.Evaluations != 1 || value == null) return 17;
+    string name = nameof(Create().Number);
+    if (name != "Number" || State.Evaluations != 1) return 18;
+    if (nameof(holder) != "holder" || nameof(Value) != "Value") return 19;
+
+    System.Reflection.TypeInfo info = typeof(decimal);
+    if (info.Name != "Decimal" || info.Size != 16u) return 20;
+    info = Describe<int>();
+    if (info.Name != "Int" || info.Size != 4u) return 21;
+    info = Describe<decimal>();
+    if (info.Name != "Decimal") return 22;
+    info = typeof(Value);
+    if (info.Name != "Value") return 23;
+    info = typeof(Box<int>);
+    if (info.GenericArity != 1u) return 24;
+    if (typeof(int) != typeof(int) || typeof(int) == typeof(decimal)) return 27;
+    if (typeof(int[]) == typeof(decimal[]) || typeof(int?) == typeof(decimal?)) return 28;
+    info = typeof(int[][]);
+    if (info.Name != "Int[][]") return 29;
+    return 0;
+}

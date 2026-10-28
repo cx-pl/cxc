@@ -3,8 +3,8 @@
 #include "generic_explicit_call.h"
 
 int main(void) {
-    assert(CX_ID_2(generic_explicit_call, RunInt)() == 23);
-    assert(CX_ID_2(generic_explicit_call, RunIntInferred)() == 29);
-    assert(CX_ID_2(generic_explicit_call, RunLong)() == 41L);
+    assert(generic_explicit_call_RunInt() == 23);
+    assert(generic_explicit_call_RunIntInferred() == 29);
+    assert(generic_explicit_call_RunLong() == 41L);
     return 0;
 }

@@ -8,6 +8,7 @@ public class FunctionParameter : DeclarationBase
     public TypeBase ParameterType { get; internal set; }
     public string? DefaultValueText { get; }
     public bool DefaultValueIsIdentifier { get; }
+    public NameOfExpression? DefaultNameOfExpression { get; internal set; }
     public LocalVariableSymbol? LocalSymbol { get; private set; }
 
     public FunctionParameter(

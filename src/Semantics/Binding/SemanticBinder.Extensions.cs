@@ -136,7 +136,7 @@ public sealed partial class SemanticBinder
     private static bool IsPrimitiveExtensionTarget(TypeBase type)
     {
         type = UnwrapConst(type);
-        return type is BoolType or CharType or IntTypeBase or FloatTypeBase or PtrType or StringType ||
+        return type is BoolType or CharType or IntTypeBase or FloatTypeBase or DecimalType or PtrType or StringType ||
             type is NamedType { ClassType: ClassType.Enum };
     }
 
@@ -306,14 +306,14 @@ public sealed partial class SemanticBinder
         foreach (var extension in context.DeclarationScope.Declarations
             .OfType<ExtensionDeclaration>())
         {
-            if (context.IsProjectReference && extension.Visibility != Visibility.Public)
+            if (IsExternalReference(context) && extension.Visibility != Visibility.Public)
             {
                 continue;
             }
             var target = GetMemberClassDeclaration(extension.TargetType)!;
             foreach (var property in extension.Members.MemberDeclarations.Declarations
                 .OfType<PropertyDeclaration>()
-                .Where(property => !context.IsProjectReference ||
+                .Where(property => !IsExternalReference(context) ||
                     property.MemberModifiers.Contains(MemberModifier.Public)))
             {
                 var propertyTarget = property.ParentClassDeclaration ?? target;

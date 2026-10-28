@@ -81,7 +81,7 @@ public sealed class NativeTypeTests
         Assert.Contains("sizeof(fixture_point) == 8", generated.Header);
         Assert.Contains("_Alignof(fixture_point) == 4", generated.Header);
         Assert.Contains("_Generic(&((fixture_point*)0)->x, cx_int*: 1", generated.Header);
-        Assert.DoesNotContain("CX_TYPE_DEF(CX_ID_2(interop, Point))", generated.Header);
+        Assert.DoesNotContain("CX_TYPE_DEF(interop_Point)", generated.Header);
     }
 
     [Theory]

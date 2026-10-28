@@ -98,8 +98,7 @@ public sealed partial class SemanticBinder
                 identifier.SourceSpan);
         }
 
-        var lexicalClass = function.ParentClassDeclaration ??
-            function.LambdaOwner?.EnclosingClassDeclaration;
+        var lexicalClass = GetLexicalClass(function);
         if (identifier.Identifier.Parts.Length == 1 && lexicalClass is { } parentClass)
         {
             var fieldMatch = FindField(
@@ -262,6 +261,21 @@ public sealed partial class SemanticBinder
         throw new CompilationErrorException($"Cannot resolve value '{identifier.Identifier}'.");
     }
 
+    private ClassDeclaration? GetLexicalClass(FunctionDeclaration function)
+    {
+        var lexicalClass = function.ParentClassDeclaration ??
+            function.LambdaOwner?.EnclosingClassDeclaration;
+        if (lexicalClass?.Name.StartsWith(
+                "__CxIterator_", StringComparison.Ordinal) == true &&
+            lexicalClass.MemberDeclarations.Declarations
+                .OfType<FieldDeclaration>()
+                .SingleOrDefault(field => field.Name == "__cx_receiver") is { } receiver)
+        {
+            return GetClassDeclaration(receiver.Type) ?? lexicalClass;
+        }
+        return lexicalClass;
+    }
+
     private TypeBase BindThis(ThisExpression expression, FunctionDeclaration function)
     {
         if (function.LambdaOwner is { ThisSymbol: { } thisSymbol } lambdaOwner)
@@ -280,8 +294,30 @@ public sealed partial class SemanticBinder
             return function.Const ? new ConstType(extensionTargetType) : extensionTargetType;
         }
 
-        var type = _types.Single(type =>
-            ReferenceEquals(type.Declaration, function.ParentClassDeclaration)).Type;
+        if (function.ParentClassDeclaration.Name.StartsWith(
+                "__CxIterator_", StringComparison.Ordinal) &&
+            expression.SourceSpan is not null &&
+            function.ParentClassDeclaration.MemberDeclarations.Declarations
+                .OfType<FieldDeclaration>()
+                .SingleOrDefault(field => field.Name == "__cx_receiver") is { } iteratorReceiver)
+        {
+            return iteratorReceiver.Type;
+        }
+
+        var type = function.ParentClassDeclaration.GenericTypeNames.Length == 0
+            ? _types.Single(type =>
+                ReferenceEquals(type.Declaration, function.ParentClassDeclaration)).Type
+            : NamedType.CreateWithTypeArguments(
+                function.ParentClassDeclaration.FullName.ToString(),
+                function.ParentClassDeclaration.GenericTypeNames.Select(name =>
+                    (TypeBase)new GenericType(name)).ToArray());
+        if (type is NamedType closedOwnerType)
+        {
+            closedOwnerType.SetResolvedType(
+                function.ParentClassDeclaration.FullName,
+                function.ParentClassDeclaration.ProjectName ?? _project!.Name,
+                function.ParentClassDeclaration.ClassType);
+        }
         if (function.ParentClassDeclaration is
             {
                 GenericTypeNames.Length: 1,
@@ -715,7 +751,8 @@ public sealed partial class SemanticBinder
         ExpressionBase expression,
         QualifiedIdentifier currentNamespace,
         IReadOnlyList<QualifiedIdentifier> imports,
-        LocalScope scope)
+        LocalScope scope,
+        int? genericArity = null)
     {
         if (!TryFlattenIdentifier(expression, out var sourceName) ||
             sourceName.IsEmpty ||
@@ -726,7 +763,9 @@ public sealed partial class SemanticBinder
 
         var candidateNames = GetCandidateNames(sourceName, currentNamespace, imports);
         var classCandidates = _types
-            .Where(candidate => candidateNames.Contains(candidate.Declaration.FullName))
+            .Where(candidate => candidateNames.Contains(candidate.Declaration.FullName) &&
+                (genericArity is null ||
+                 candidate.Declaration.GenericTypeNames.Length == genericArity))
             .ToArray();
         var enumCandidates = _enums
             .Where(candidate => candidateNames.Contains(candidate.Declaration.FullName))
@@ -735,7 +774,9 @@ public sealed partial class SemanticBinder
             .Where(candidate => candidateNames.Contains(candidate.Declaration.FullName))
             .ToArray();
         var aliasCandidates = _aliases
-            .Where(candidate => candidateNames.Contains(candidate.Declaration.FullName))
+            .Where(candidate => candidateNames.Contains(candidate.Declaration.FullName) &&
+                (genericArity is null ||
+                 candidate.Declaration.GenericTypeNames.Length == genericArity))
             .ToArray();
         if (classCandidates.Length + enumCandidates.Length + delegateCandidates.Length +
             aliasCandidates.Length > 1)
@@ -1066,7 +1107,12 @@ public sealed partial class SemanticBinder
         {
             return coreDeclaration;
         }
-        return _types.SingleOrDefault(candidate => IsType(candidate.Type, type))?.Declaration;
+        return _types.SingleOrDefault(candidate =>
+            (type is NamedType namedType &&
+             candidate.Declaration.GenericTypeNames.Length ==
+                 namedType.TypeArguments.Count &&
+             IsType(candidate.Type, type)) ||
+            MatchesConstructedDeclaration(candidate, type))?.Declaration;
     }
 
     private ClassDeclaration? GetClassDeclarationIncludingConstructed(TypeBase type)

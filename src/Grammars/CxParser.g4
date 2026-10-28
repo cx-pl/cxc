@@ -162,8 +162,19 @@ constructorOrBaseInvocation
     ;
 
 functionDeclaration
-    : annotations? modifiers = memberModifiers async = Async? returnType = typeNameOrVoid name = Identifier
+    : annotations? modifiers = memberModifiers async = Async? returnType = typeNameOrVoid
+        (name = Identifier | Operator operatorToken = overloadableOperator)
         functionGenericTypeList? LeftParen functionParameters? RightParen Const? conceptConstraintClause* genericConstraintClauses? functionBody
+    ;
+
+overloadableOperator
+    : Plus | Minus | Star | Div | Mod
+    | Not | Tilde | And | Or | Xor
+    | LeftShift | Greater Greater
+    | Equal | NotEqual | Less | LessEqual | Greater | GreaterEqual
+    | PlusPlus | MinusMinus
+    | PlusAssign | MinusAssign | StarAssign | DivAssign | ModAssign
+    | AndAssign | OrAssign | XorAssign | LeftShiftAssign | RightShiftAssign
     ;
 
 functionGenericTypeList
@@ -199,7 +210,7 @@ functionParameters
 
 functionParameter
     : annotations? Params? typeName name = Identifier
-        (defaultValue = Assign (literal | sign = (Plus | Minus) (IntegerLiteral | FloatingLiteral) | qualifiedIdentifier))?
+        (defaultValue = Assign (literal | nameOfExpression | sign = (Plus | Minus) (IntegerLiteral | FloatingLiteral) | qualifiedIdentifier))?
     ;
 
 functionBody
@@ -298,6 +309,7 @@ embeddedStatement
     | forStatement
     | foreachStatement
     | returnStatement
+    | yieldStatement
     | breakStatement
     | continueStatement
     | throwStatement
@@ -363,7 +375,7 @@ forIterator
     ;
 
 foreachStatement
-    : Foreach LeftParen typeName Identifier In expression RightParen embeddedStatement
+    : Await? Foreach LeftParen typeName Identifier In expression RightParen embeddedStatement
     ;
 
 returnStatement
@@ -495,7 +507,7 @@ equalityExpression
 relationalExpression
     : shiftExpression (
         (Less | LessEqual | Greater | GreaterEqual) shiftExpression
-        | Is typeName
+        | (Is | As) typeName
     )*
     ;
 
@@ -553,6 +565,8 @@ switchExpressionArm
 
 primaryExpressionStart
     : nativeTypeQuery
+    | nameOfExpression
+    | typeOfExpression
     | nativeStackAllocation
     | literal
     | Identifier
@@ -560,6 +574,14 @@ primaryExpressionStart
     | LeftParen expression RightParen
     | arrayCreationExpression
     | New typeName functionInvocation
+    ;
+
+nameOfExpression
+    : Nameof LeftParen (typeName | expression) RightParen
+    ;
+
+typeOfExpression
+    : Typeof LeftParen typeNameOrVoid RightParen
     ;
 
 nativeTypeQuery
@@ -709,7 +731,7 @@ integerType
 floatingType
     : Float
     | Double
-    // | Decimal
+    | Decimal
     | Float32
     | Float64
     ;
@@ -740,4 +762,8 @@ literal
 booleanLiteral
     : True
     | False
+    ;
+
+yieldStatement
+    : Yield (Return expression | Break) Semicolon
     ;

@@ -17,7 +17,7 @@ public sealed partial class SemanticBinder
             foreach (var declaration in context.DeclarationScope.Declarations
                 .OfType<ConceptDeclaration>())
             {
-                if (context.IsProjectReference && declaration.Visibility != Visibility.Public)
+                if (IsExternalReference(context) && declaration.Visibility != Visibility.Public)
                 {
                     continue;
                 }

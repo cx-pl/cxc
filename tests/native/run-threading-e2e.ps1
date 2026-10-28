@@ -13,7 +13,7 @@ $CxCoreDir = (Resolve-Path -LiteralPath $CxCoreDir).Path.Replace('\','/')
 $BuildRoot = [IO.Path]::GetFullPath($BuildRoot)
 $generated = Join-Path $BuildRoot 'generated'
 $native = Join-Path $BuildRoot "native-$Architecture-$StaticLink"
-& dotnet $CompilerDll --module-name threading_fixture -o $generated (Join-Path $PSScriptRoot 'fixtures/threading.cx')
+& dotnet $CompilerDll --module-name threadingFixture -o $generated (Join-Path $PSScriptRoot 'fixtures/threading.cx')
 if ($LASTEXITCODE -ne 0) { throw 'Threading fixture compilation failed' }
 $configure = @('-S', (Join-Path $PSScriptRoot 'fixtures/threading'), '-B', $native, '-G', $Generator,
     "-DCX_GENERATED_DIR=$generated", "-DCXCORE_SOURCE_DIR=$CxCoreDir",

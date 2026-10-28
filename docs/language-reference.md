@@ -13,9 +13,18 @@ declaration, and declarations. Namespaces and imports qualify type and function
 names. Identifiers use ASCII letters or `_` initially, followed by ASCII letters,
 digits, or `_`. Whitespace, `//` line comments, and `/* ... */` comments are ignored.
 
+Project names must not contain underscores. This applies to the `name` in a
+`.cxproj` file, referenced projects and packages, and names inferred from a CX
+source filename. For a source file such as `my_program.cx`, specify a valid name
+with `cxc --module-name MyProgram my_program.cx`. Module overrides must start
+with an ASCII letter and contain only ASCII letters and digits. Other CX
+identifiers may still contain underscores.
+
 Integer literals support decimal, octal (`0...`), hexadecimal (`0x...`), and
 binary (`0b...`) forms with optional `u` and `l` suffixes. Floating literals use
-a decimal point and optional exponent, with optional `f`, `d`, or `m` suffix.
+a decimal point or an exponent, with optional `f`, `d`, or `m` suffix.
+The `m`/`M` suffix selects decimal arithmetic and also accepts integer forms
+such as `12m`; `1e-28m` is a decimal literal.
 Character and string literals accept the escapes `\\`, `\'`, `\"`, `\n`, `\r`,
 `\t`, `\b`, and `\0`. String storage and character behavior are described in the
 runtime contracts.
@@ -23,13 +32,59 @@ runtime contracts.
 ## Types and declarations
 
 Built-in scalar types are `bool`, `char`, signed `sbyte`, `short`, `int`, `long`,
-unsigned `byte`, `ushort`, `uint`, `ulong`, `float`, and `double`. `string` and
+unsigned `byte`, `ushort`, `uint`, `ulong`, `float`, `double`, and `decimal`. `string` and
 `object` are reference types; `ptr` is an opaque pointer. `void` is a return type.
 Types can be nullable with `?` and arrays with `[]`. CX also supports enums,
 structs, classes, interfaces, properties, constructors, generic declarations,
 and generic methods. Generic implementations are specialized for closed types;
 only the supported generic body and layout patterns described by compiler
 diagnostics are accepted.
+
+### Decimal values
+
+`decimal` stores a signed 96-bit integer coefficient and a decimal scale from
+0 through 28 in 16 bytes. Its range is
+`-79228162514264337593543950335m` through `79228162514264337593543950335m`.
+Decimal arithmetic computes in base ten, so `0.1m + 0.2m == 0.3m` is true.
+When a result needs fewer digits to fit, rounding uses nearest with ties to even.
+
+Arithmetic `+`, `-`, `*`, `/`, `%`, comparisons, unary signs, increment/decrement,
+and compound assignments are supported, including fields, properties, and arrays.
+Integers convert implicitly to decimal; floating-point conversions in either
+direction require an explicit cast. Decimal and float/double operands cannot be
+mixed implicitly. Explicit integer conversions truncate toward zero and check
+the target range. Overflow and division by zero raise `System.Exception` with
+a descriptive message. Bitwise operations are not defined for decimal.
+
+### Safe casts and name/type queries
+
+`value as Type` has relational precedence, like `is`. It evaluates `value` once
+and returns a null reference when its runtime type does not match. Supported
+targets include classes, interfaces, arrays, nullable value types, and generic
+parameters constrained to reference types. `object as T?` is also supported when
+`T` has a `struct` constraint. Nullable unboxing requires the exact boxed value
+type; it does not perform numeric conversions. A non-nullable value type cannot
+be an `as` target. Ordinary explicit `(Type)value` casts keep their checked behavior.
+Array casts preserve the exact element type, including nested array shapes;
+array covariance is not introduced.
+
+`nameof(name)` returns a compile-time `string` containing the final identifier.
+It accepts variables, parameters, members (including overloaded method names),
+types, and namespaces. Names are checked, but no operand code runs:
+`nameof(Create().Field)` yields `"Field"` without calling `Create`.
+`nameof` can also supply a constant default argument.
+
+`typeof(Type)` returns the existing `System.Reflection.TypeInfo` value. It
+supports built-in types, classes, structs, enums, closed generic types, arrays,
+nullable types, `void`, and type parameters in specialized generic functions.
+`typeof(T)` closes to the selected argument's runtime metadata. TypeInfo values
+compare with `==` and `!=` by runtime type identity. Array and nullable queries
+retain their element/underlying type in `GenericParams`, so their identities
+remain distinct. Native pointer/function types and inferred `var` types are
+not runtime metadata queries.
+
+`out` and `ref` are ordinary identifiers. The former reserved tokens `?=>`,
+`|=>`, and `!=>` have no dedicated lexer rules or language constructs.
 
 Fixed-width numeric spellings are aliases for the existing built-in types:
 
@@ -571,10 +626,122 @@ implements `IEnumerator<T>`. The core generic collections expose their
 constructed `IEnumerable<T>` contracts, and their closed generic enumerators
 implement the matching `IEnumerator<T>` interface; both structural and
 interface-typed iteration are supported for arrays and the core collections.
+`IEnumerator<T>` extends `System.IDisposable`. If a structural enumerator has a
+zero-argument `void Dispose()` method, `foreach` calls it on normal completion,
+`break`, `return`, or exception through `finally`; enumerators without that
+method remain supported. The core collection enumerators clear retained object
+references when disposed.
 The core collection types implement `System.Collections.ICollection<T>`, which
 inherits `IEnumerable<T>` and adds a read-only `uint Count` property. Dictionary's
 collection element type is `KeyValuePair<TKey, TValue>`; built-in `T[]` shares
 `Array<T>`'s implementation.
+
+Synchronous iterator functions may return `System.Collections.IEnumerable<T>`
+and contain `yield return expression;` and `yield break;`. Calling a supported
+iterator function creates a lazy sequence; each enumeration starts a fresh
+state machine and runs its body on the first move. The current C backend supports
+top-level iterator bodies with expressions, explicit local declarations,
+nested blocks, `if`/`else` branches, and `while`/`do`/`while`/`for` loops that
+may contain yields; `break`, `continue`, and void returns are also supported.
+`switch` sections may contain yields and preserve selector evaluation and
+section dispatch. Yields nested in array, string, and structural-enumerator
+`foreach` loops are supported, including enumerator disposal on completion,
+early exit, faults, and disposal. A `try` with only a `finally` may contain
+yields; its cleanup runs on completion, `yield break`, fault, and disposal.
+Static and instance methods on non-generic classes can be iterators; instance
+frames retain their receiver across suspension and fresh enumeration. Methods on
+generic classes and instance iterator methods on structs receive an unsupported-
+shape diagnostic. Protected-body `break`/`continue`, catch clauses, yields inside `finally`,
+captured locals, and other cleanup forms across suspension remain unsupported.
+Iterator `Current` access outside a successful move raises `System.Exception`; the more
+specific `InvalidOperationException` type remains unimplemented. Async
+`Task<T>` and no-result `Task` functions start eagerly; completed awaits call
+`GetResult()` inline. The supported pending suspension shapes are an async
+function returning a closed `Task<T>` with exactly `return await task;`, or one
+or more top-level inferred or explicitly typed locals initialized by `await
+task`, surrounded by synchronous statements and one final return. Locals used
+after each await are
+retained by chained continuations. Pending sources resume through the
+continuation queue; already-completed sources run inline. The shorter
+`var result = await task; return result;` form uses a direct relay. Generic
+functions are supported after specialization. No-result async `Task` bodies
+may contain one or more top-level `await task;` statements surrounded by
+synchronous statements; an optional final bare return is allowed. Conditional
+return paths after an await are supported for `Task<T>` and `Task`, provided
+they do not cross enumerator-disposal or `finally` cleanup. Other awaits
+require an already-completed task. Multiple pending awaits in `Task<T>` are
+supported with inferred or explicitly typed awaited-result locals in the
+implemented top-level continuation forms; an explicit local must match the
+awaited result type. Awaits in nested expressions remain unsupported. Generic
+async functions support pending direct relays, including
+the direct inferred-local return form; chained pending awaits are not yet
+supported for generic functions. A bounded one-await path also supports a
+simple synchronous prefix followed by one inferred or explicitly typed local
+initialized from a ValueTask parameter, synchronous continuation statements,
+and a terminal result return. The explicit local type must match the awaited
+result type. It checks completion before creating relay state; prefix locals
+used after suspension are captured only in the pending branch. A terminal
+`if/else` is also supported when both branches return a result; the inline path
+constructs a Task only in the selected branch.
+Async functions returning `ValueTask<T>` or `ValueTask` currently support one
+direct await of a same-shaped ValueTask parameter, either directly or through
+one explicitly typed ValueTask local initialized in the synchronous prefix.
+This local form supports a nested call that returns the matching ValueTask
+shape. Separate methods compose this bounded form into nested call chains; a
+three-layer chain is covered by native tests. Inline success returns an inline
+ValueTask result without CX allocation; pending input is returned with its
+existing Task backing. Inline faults and cancellation are returned as
+task-backed ValueTasks. Other async ValueTask bodies receive a focused
+unsupported-form diagnostic until their lowering is implemented.
+Each logical `ValueTask<T>` or `ValueTask` result must be consumed once. Calling
+`AsTask()` converts it to a stable, shareable Task; copying a value task copies
+its consumption flag and does not coordinate consumption across copies.
+`TaskScheduler` exposes a single-thread cooperative ready queue through
+`Post`, `PostAfter`, `RunOne`, and `Run`; `PostAfter` schedules a one-shot
+callback using a monotonic clock on Windows and Linux. `RunOne` waits for the
+next timer when no callback is ready. `Task.Delay` returns a pending no-result
+task completed by `PostAfter`; pending `Task<T>` and `Task` completion posts
+registered continuations to the ready queue. `CancellationTokenSource` issues
+a token through `Token`; tokens expose `IsCancellationRequested`,
+`ThrowIfCancellationRequested()`, and `Register(callback)`. Registration
+returns a `CancellationTokenRegistration`; calling its `Dispose()` unregisters
+the callback if cancellation has not started. Calling `Cancel()` marks the
+token canceled and invokes remaining callbacks once; registrations made after
+cancellation run immediately. Cancellation is cooperative: code
+must check its token or register a callback. `Task`, `Task<T>`, and their
+completion sources support canceled completion, expose `IsCanceled`, and
+throw `OperationCanceledException` from `GetResult()` when canceled. Awaited
+cancellation propagates through the supported pending continuation shapes.
+`Task.Delay(milliseconds, token)` returns a canceled task when the token is
+already canceled and cancels a pending delay when its token is canceled.
+The `cxnet` library wraps an already-connected native stream socket and takes
+ownership of its handle. `ReadAsync` and `WriteAsync` each perform one
+nonblocking transfer and return `Task<uint>` with the transferred byte count;
+a write may be partial, and a zero-byte read signals EOF. Their buffers remain
+borrowed until a pending operation completes, and cancellation or socket
+disposal removes readiness and completes cleanup on the executor thread. The
+library does not provide connect, DNS, accept, or TLS APIs.
+
+Async iterator functions may return `IAsyncEnumerable<T>`. Their bodies are
+lazy and pull-driven: each `MoveNextAsync()` requests at most one value, and
+each returned `ValueTask<bool>` must be consumed before the next move. Pending
+awaits resume through the single-thread executor; async iterators support
+`await`, `yield return await`, and nested `await foreach` in the implemented
+forms. `await foreach` awaits disposal on completion, break, return, and fault.
+Cancellation of a pending move and `DisposeAsync()` run cleanup once; a late
+source completion is ignored. `Task` and `Task<T>` consumers support one
+top-level `await foreach` over an `IAsyncEnumerable<T>` parameter. General
+control flow, awaited `finally` protecting a yield, and unsupported nested
+await expressions receive focused diagnostics. Task faults retain their
+original exception, which `GetResult()` rethrows.
+
+`TaskScheduler.RunUntil(task)` explicitly joins a selected `Task` or `Task<T>`
+on the executor owner thread. It retains the selected task while pumping
+callbacks and throws if a pending task has no completion path. Tasks remain
+detached unless joined. Generated native entry points call
+`TaskScheduler.Shutdown()` after synchronous `Main`; shutdown cancels pending
+socket readiness, drops future timers, drains ready callbacks to quiescence,
+and reports the first unobserved task fault. It does not create worker threads.
 
 ## Initialization, dispatch, and errors
 
@@ -713,8 +880,14 @@ use the constrained self type inside an array parameter, with the concrete type
 substituted during specialization.
 Integer, character, boolean, and enum parameters can also be selected with a
 switch statement containing literal labels and mutation statements.
-The grammar accepts an `async` modifier, but it has no async semantics; `await`
-is not implemented.
+The compiler preserves the `async` modifier on function declarations and
+symbols. The eager completed-task slice supports `Task`, `Task<T>`, and inline
+`await`. An async function returning a closed `Task<T>` with a single
+`return await task;` supports pending completion through `TaskScheduler`,
+including generic functions after specialization. Broader suspension is not
+implemented.
+Pending `Task<T>` completion schedules registered continuations through the
+ready queue.
 Generic support is restricted to the body and layout
 patterns in [`generics-design.md`](generics-design.md), including selecting
 between matching generic values with a conditional expression, returning an

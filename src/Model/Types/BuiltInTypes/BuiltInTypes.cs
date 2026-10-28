@@ -24,6 +24,7 @@ public static class BuiltInSystemTypes
 
     public static readonly FloatType Float = new FloatType(SystemNamespace);
     public static readonly DoubleType Double = new DoubleType(SystemNamespace);
+    public static readonly DecimalType Decimal = new DecimalType(SystemNamespace);
 
     public static readonly ObjectType Object = new ObjectType(SystemNamespace);
     public static readonly StringType String = new StringType(SystemNamespace);

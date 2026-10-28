@@ -450,9 +450,20 @@ public sealed partial class SemanticBinder
             accessors));
     }
 
-    private ClassDeclaration? FindCoreClass(string fullName) =>
-        _project?.CompilationContexts
+    private ClassDeclaration? FindCoreClass(string fullName, int? genericArity = null)
+    {
+        var candidates = _project?.CompilationContexts
             .Where(context => (context.ProjectName ?? _project.Name) == "cxcore")
             .SelectMany(context => EnumerateClasses(context.DeclarationScope.Declarations))
-            .SingleOrDefault(declaration => declaration.FullName.ToString() == fullName);
+            .Where(declaration => declaration.FullName.ToString() == fullName)
+            .ToArray() ?? [];
+        if (genericArity is { } arity)
+        {
+            return candidates.SingleOrDefault(declaration =>
+                declaration.GenericTypeNames.Length == arity);
+        }
+        return candidates.FirstOrDefault(declaration =>
+            declaration.GenericTypeNames.Length == 0) ??
+            candidates.SingleOrDefault();
+    }
 }

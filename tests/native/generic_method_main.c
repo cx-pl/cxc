@@ -2,12 +2,12 @@
 
 #include "generic_method.h"
 
-struct CX_ID_4(cxcore, System, Reflection, TypeInfo) CX_ID_4(cxcore, System, Object, __typeinfo);
-union cx_vtable_entry CX_ID_4(cxcore, System, String, __vtable)[1];
+struct cxcore_System_Reflection_TypeInfo cxcore_System_Object___typeinfo;
+union cx_vtable_entry cxcore_System_String___vtable[1];
 
 int main(void) {
-    assert(CX_ID_2(generic_method, RunInt)() == 7);
-    assert(CX_ID_2(generic_method, RunLong)() == 9);
-    assert(CX_ID_2(generic_method, RunCopy)() == 13);
+    assert(generic_method_RunInt() == 7);
+    assert(generic_method_RunLong() == 9);
+    assert(generic_method_RunCopy() == 13);
     return 0;
 }

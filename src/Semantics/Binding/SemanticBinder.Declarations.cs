@@ -23,7 +23,10 @@ public sealed partial class SemanticBinder
     private void ValidateAliasNames()
     {
         var duplicateAlias = _aliases
-            .GroupBy(symbol => (symbol.ModuleName, symbol.Declaration.FullName))
+            .GroupBy(symbol => (
+                symbol.ModuleName,
+                symbol.Declaration.FullName,
+                GenericArity: symbol.Declaration.GenericTypeNames.Length))
             .FirstOrDefault(group => group.Count() > 1);
         if (duplicateAlias is not null)
         {
@@ -34,7 +37,9 @@ public sealed partial class SemanticBinder
         foreach (var alias in _aliases)
         {
             if (_types.Any(symbol => symbol.ModuleName == alias.ModuleName &&
-                    symbol.Declaration.FullName == alias.Declaration.FullName) ||
+                    symbol.Declaration.FullName == alias.Declaration.FullName &&
+                    symbol.Declaration.GenericTypeNames.Length ==
+                        alias.Declaration.GenericTypeNames.Length) ||
                 _enums.Any(symbol => symbol.ModuleName == alias.ModuleName &&
                     symbol.Declaration.FullName == alias.Declaration.FullName) ||
                 _delegates.Any(symbol => symbol.ModuleName == alias.ModuleName &&
@@ -56,7 +61,10 @@ public sealed partial class SemanticBinder
             var duplicateTypes = contexts
                 .SelectMany(context => EnumerateClasses(context.DeclarationScope.Declarations)
                     .Select(declaration => (Module: context.ProjectName, Declaration: declaration)))
-                .GroupBy(item => (item.Module, item.Declaration.FullName))
+                .GroupBy(item => (
+                    item.Module,
+                    item.Declaration.FullName,
+                    GenericArity: item.Declaration.GenericTypeNames.Length))
                 .Where(group => group.Count() > 1)
                 .ToArray();
             if (duplicateTypes.Length == 0)

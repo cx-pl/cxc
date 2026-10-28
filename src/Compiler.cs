@@ -21,7 +21,7 @@ public class Compiler
         Options:
           -D, --define SYMBOL       Define a conditional-compilation symbol
           -o, --output-dir DIR      Write generated files to DIR (default: <project>/.obj)
-          --module-name NAME        Override the generated module/target name
+          --module-name NAME        Override the module/target name (letters and digits only)
           --emit-only               Generate C and CMake files without building (default)
           --compile                 Build generated C with CMake
           --configuration NAME      Build configuration: Debug or Release (default: Release)
@@ -174,8 +174,8 @@ public class Compiler
             throw new CommandLineException($"Unknown diagnostics format '{diagnosticsFormat}'. Expected text or json.");
         if (configuration is not ("Debug" or "Release"))
             throw new CommandLineException($"Unknown build configuration '{configuration}'. Expected Debug or Release.");
-        if (moduleName is not null && !Regex.IsMatch(moduleName, "^[A-Za-z_][A-Za-z0-9_]*$"))
-            throw new CommandLineException("Module name must be a valid C identifier.");
+        if (moduleName is not null && !Regex.IsMatch(moduleName, "^[A-Za-z][A-Za-z0-9]*$"))
+            throw new CommandLineException("Module name must start with a letter and contain only letters and digits; underscores are not allowed.");
         if (outputDirectory is not null && string.IsNullOrWhiteSpace(outputDirectory))
             throw new CommandLineException("Output directory cannot be empty.");
         if (cxCoreDirectory is not null && string.IsNullOrWhiteSpace(cxCoreDirectory))
@@ -275,6 +275,7 @@ public class Compiler
             ".json" => ParseCxProjectFromJson(reader),
             _ => throw new CompilationErrorException($"Unsupported project file format: {Path.GetExtension(filePath)}"),
         };
+        ValidateProjectName(_project.Name);
         if (_moduleNameOverride is not null)
             _project.Name = _moduleNameOverride;
         if (Path.GetFileName(filePath) == "package.cxpm")
@@ -306,7 +307,8 @@ public class Compiler
         foreach (var sourceFile in projectDirectory.EnumerateFiles("*.cx", SearchOption.AllDirectories)
             .Where(file => !Path.GetRelativePath(projectDirectoryPath, file.FullName)
                 .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .Any(part => part is ".packages" or ".obj" or ".bin" or ".dist"))
+                .Any(part => part is ".packages" or ".obj" or ".bin" or ".dist" or
+                    "examples" or "samples" or "tests"))
             .OrderBy(file => file.FullName, StringComparer.Ordinal))
         {
             CompileCxSourceFile(sourceFile.FullName);
@@ -507,6 +509,7 @@ public class Compiler
             _projectPath = filePath;
             _project = CxProject.CreateDefaultApplicationProject(
                 name: _moduleNameOverride ?? Path.GetFileNameWithoutExtension(filePath));
+            ValidateProjectName(_project.Name);
         }
 
         var preprocessed = CxPreprocessor.Process(File.ReadAllText(filePath), filePath, _preprocessorSymbols);
@@ -522,7 +525,7 @@ public class Compiler
         var inputStream = new AntlrInputStream(preprocessed.Source) { name = filePath };
         var errorListener = new ParserErrorListener(filePath);
 
-        var lexer = new OperatorAwareCxLexer(inputStream);
+        var lexer = new CxLexer(inputStream);
         lexer.RemoveErrorListeners();
         lexer.AddErrorListener(errorListener);
         var tokenStream = new CommonTokenStream(lexer);
@@ -545,6 +548,13 @@ public class Compiler
         {
             _project.AddCompilationContext(compilationContext);
         }
+    }
+
+    private static void ValidateProjectName(string name)
+    {
+        if (name?.Contains('_') == true)
+            throw new CompilationErrorException(
+                $"Project name '{name}' must not contain underscores. Choose a name such as 'MyProject'; for a source file, use --module-name to specify its project name.");
     }
 
     private static CxProject ParseCxProjectFromYaml(StreamReader reader)

@@ -59,7 +59,6 @@ Null: 'null';
 Object: 'object';
 Offsetof: 'offsetof';
 Operator: 'operator';
-Out: 'out';
 Override: 'override';
 Params: 'params';
 Partial: 'partial';
@@ -67,7 +66,6 @@ Private: 'private';
 Protected: 'protected';
 Ptr: 'ptr';
 Public: 'public';
-Ref: 'ref';
 Return: 'return';
 Sbyte: 'sbyte';
 Set: 'set';
@@ -99,6 +97,7 @@ Wchar: 'wchar';
 When: 'when';
 Where: 'where';
 While: 'while';
+Yield: 'yield';
 
 // Operators
 
@@ -148,9 +147,6 @@ NotEqual: '!=';
 QuestionQuestion: '??';
 Arrow: '=>';
 Dot: '.';
-QuestionArrow: '?=>';
-PipeThen: '|=>';
-PipeError: '!=>';
 
 // $antlr-format allowShortRulesOnASingleLine false, alignSemicolons hanging
 
@@ -247,6 +243,8 @@ fragment IntegerSuffix
 
 FloatingLiteral
     : FloatingFractionalPart FloatingExponentPart? FloatingSuffix?
+    | DigitSequence FloatingExponentPart FloatingSuffix?
+    | DigitSequence DecimalSuffix
     ;
 fragment FloatingFractionalPart
     : DigitSequence? '.' DigitSequence

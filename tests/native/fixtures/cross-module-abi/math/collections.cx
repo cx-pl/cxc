@@ -1,0 +1,10 @@
+namespace System.Collections;
+
+public interface IEnumerable<T> {
+    IEnumerator<T> GetEnumerator() const;
+}
+
+public interface IEnumerator<T> : System.IDisposable {
+    T Current { const get; }
+    bool MoveNext();
+}

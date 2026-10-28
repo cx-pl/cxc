@@ -37,10 +37,6 @@ public static class OperatorNames
             [">>="] = "right_shift_assign",
         };
 
-    private static readonly IReadOnlyDictionary<string, string> TokensByName =
-        Encodings.ToDictionary(pair => $"__cx_operator_{pair.Value}", pair => pair.Key,
-            StringComparer.Ordinal);
-
     public static bool IsSupported(string token) => Encodings.ContainsKey(token);
 
     public static string GetDeclarationName(string token) =>
@@ -48,7 +44,4 @@ public static class OperatorNames
             ? $"__cx_operator_{name}"
             : throw new ArgumentOutOfRangeException(nameof(token), token,
                 "Unsupported operator token.");
-
-    public static string? GetToken(string declarationName) =>
-        TokensByName.GetValueOrDefault(declarationName);
 }

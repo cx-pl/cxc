@@ -267,7 +267,8 @@ public sealed partial class SemanticBinder
                 memberAccess.Target,
                 currentNamespace,
                 imports,
-                scope);
+                scope,
+                memberAccess.StaticContainingTypeArguments?.Count ?? 0);
             if (staticTarget?.Declaration is ClassDeclaration staticClass)
             {
                 if (memberAccess.StaticContainingTypeArguments is { } containingTypeArguments)

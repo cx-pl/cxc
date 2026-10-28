@@ -78,10 +78,12 @@ public sealed partial class SemanticBinder
         }
 
         var defaultScope = new LocalScope();
+        foreach (var parameter in function.Parameters)
+            defaultScope.TryDeclare(parameter.Name, parameter.ParameterType, out _);
         foreach (var parameter in function.Parameters.Where(parameter =>
             parameter.DefaultValueText is not null))
         {
-            var defaultExpression = CreateDefaultParameterExpression(parameter);
+            var defaultExpression = parameter.DefaultNameOfExpression ?? CreateDefaultParameterExpression(parameter);
             var actualType = BindExpression(
                 defaultExpression,
                 function,
@@ -102,6 +104,8 @@ public sealed partial class SemanticBinder
         {
             return;
         }
+
+        PrepareIteratorFunction(function);
 
         _loopDepth = 0;
         _breakableDepth = 0;
@@ -156,12 +160,163 @@ public sealed partial class SemanticBinder
                 function.SourceSpan);
         }
 
-        if (!IsType(function.ReturnType, BuiltInSystemTypes.Void) &&
+        if (!function.IsIterator &&
+            !IsType(function.ReturnType, BuiltInSystemTypes.Void) &&
             !AlwaysReturns(function.Body))
         {
             throw new CompilationErrorException(
                 $"Function '{function.FullName}' must return a value of type '{GetTypeName(function.ReturnType)}'.");
         }
+    }
+
+    private void PrepareIteratorFunction(FunctionDeclaration function)
+    {
+        var yielded = EnumerateIteratorStatements(function.Body ?? []).ToArray();
+        if (yielded.Length == 0)
+        {
+            return;
+        }
+
+        var returnType = function.ReturnType is ConstType constant
+            ? constant.UnderlyingType
+            : function.ReturnType;
+        if (returnType is not NamedType sequenceType ||
+            sequenceType.TypeArguments.Count != 1)
+        {
+            throw new CompilationErrorException(
+                function.IsAsync
+                    ? "An async iterator method must return System.Collections.IAsyncEnumerable<T>."
+                    : "An iterator method must return System.Collections.IEnumerable<T>.",
+                yielded[0].SourceSpan ?? function.SourceSpan);
+        }
+        var parts = sequenceType.ResolvedTypeFullName.Parts;
+        if (parts.Length < 3 ||
+            !parts[^1].Equals(function.IsAsync
+                ? "IAsyncEnumerable"
+                : "IEnumerable", StringComparison.Ordinal) ||
+            !parts[^2].Equals("Collections", StringComparison.Ordinal) ||
+            !parts[^3].Equals("System", StringComparison.Ordinal))
+        {
+            throw new CompilationErrorException(
+                function.IsAsync
+                    ? "An async iterator method must return System.Collections.IAsyncEnumerable<T>."
+                    : "An iterator method must return System.Collections.IEnumerable<T>.",
+                yielded[0].SourceSpan ?? function.SourceSpan);
+        }
+
+        if (function is ConstructorDeclaration || function.ParentClassDeclaration is
+            { ClassType: ClassType.Interface } || function.Name.StartsWith("get_", StringComparison.Ordinal) ||
+            function.Name.StartsWith("set_", StringComparison.Ordinal))
+        {
+            throw new CompilationErrorException(
+                "Yield is not valid in constructors, accessors, or interface declarations.",
+                yielded[0].SourceSpan);
+        }
+
+        foreach (var statement in yielded)
+        {
+            if (IsYieldInUnsupportedTryRegion(function.Body ?? [], statement))
+            {
+                throw new CompilationErrorException(
+                    "Yield is not allowed in a catch or finally block, or in a try block that has a catch clause.",
+                    statement.SourceSpan);
+            }
+        }
+
+        function.SetIteratorElementType(sequenceType.TypeArguments[0]);
+    }
+
+    private static IEnumerable<StatementBase> EnumerateIteratorStatements(
+        IEnumerable<StatementBase> statements)
+    {
+        foreach (var statement in statements)
+        {
+            if (statement is YieldReturnStatement or YieldBreakStatement)
+            {
+                yield return statement;
+            }
+
+            IEnumerable<StatementBase> children = statement switch
+            {
+                BlockStatement block => block.Statements,
+                IfStatement conditional => conditional.ElseStatement is null
+                    ? [conditional.ThenStatement]
+                    : [conditional.ThenStatement, conditional.ElseStatement],
+                WhileStatement loop => [loop.Body],
+                DoWhileStatement loop => [loop.Body],
+                ForStatement loop => [loop.Body],
+                ForeachStatement loop => [loop.Body],
+                SwitchStatement selection => selection.Sections.SelectMany(section => section.Statements),
+                TryStatement tryStatement => new[] { tryStatement.Body }
+                    .Concat(tryStatement.CatchClauses.Select(clause => clause.Body))
+                    .Concat(tryStatement.FinallyBody is null ? [] : [tryStatement.FinallyBody]),
+                _ => [],
+            };
+            foreach (var child in EnumerateIteratorStatements(children))
+            {
+                yield return child;
+            }
+        }
+    }
+
+    private static bool IsYieldInUnsupportedTryRegion(
+        IEnumerable<StatementBase> statements,
+        StatementBase target,
+        bool inCatchOrFinally = false,
+        bool inTryWithCatch = false)
+    {
+        foreach (var statement in statements)
+        {
+            if (ReferenceEquals(statement, target))
+            {
+                return inCatchOrFinally || inTryWithCatch;
+            }
+
+            if (statement is TryStatement tryStatement)
+            {
+                if (IsYieldInUnsupportedTryRegion(
+                        [tryStatement.Body], target, inCatchOrFinally,
+                        inTryWithCatch || tryStatement.CatchClauses.Count > 0))
+                {
+                    return true;
+                }
+                foreach (var clause in tryStatement.CatchClauses)
+                {
+                    if (IsYieldInUnsupportedTryRegion(
+                            [clause.Body], target, true, inTryWithCatch))
+                    {
+                        return true;
+                    }
+                }
+                if (tryStatement.FinallyBody is not null &&
+                    IsYieldInUnsupportedTryRegion(
+                        [tryStatement.FinallyBody], target, true, inTryWithCatch))
+                {
+                    return true;
+                }
+                continue;
+            }
+
+            IEnumerable<StatementBase> children = statement switch
+            {
+                BlockStatement block => block.Statements,
+                IfStatement conditional => conditional.ElseStatement is null
+                    ? [conditional.ThenStatement]
+                    : [conditional.ThenStatement, conditional.ElseStatement],
+                WhileStatement loop => [loop.Body],
+                DoWhileStatement loop => [loop.Body],
+                ForStatement loop => [loop.Body],
+                ForeachStatement loop => [loop.Body],
+                SwitchStatement selection => selection.Sections.SelectMany(section => section.Statements),
+                _ => [],
+            };
+            if (IsYieldInUnsupportedTryRegion(
+                    children, target, inCatchOrFinally, inTryWithCatch))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void BindConstructorInitializer(
@@ -308,9 +463,14 @@ public sealed partial class SemanticBinder
         }
 
         var propertyType = UnwrapConst(accessor.ParentPropertyDeclaration.Type);
-        var genericTypeNames =
-            accessor.ParentPropertyDeclaration.ParentClassDeclaration?.GenericTypeNames ?? [];
+        var parentClass = accessor.ParentPropertyDeclaration.ParentClassDeclaration;
+        var genericTypeNames = parentClass?.GenericTypeNames ?? [];
+        var isGeneratedIteratorCurrent =
+            parentClass?.Name.StartsWith("__CxIterator_", StringComparison.Ordinal) == true &&
+            accessor.Name == "get" &&
+            accessor.ParentPropertyDeclaration.Name == "Current";
         if (IsPropertyGenericTypePattern(propertyType, genericTypeNames) &&
+            !isGeneratedIteratorCurrent &&
             !IsGenericFieldGetter(accessor) &&
             !IsGenericArrayGetter(accessor) &&
             !IsGenericFieldLocalGetter(accessor) &&

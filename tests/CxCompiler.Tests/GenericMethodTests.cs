@@ -99,7 +99,7 @@ public sealed class GenericMethodTests
             var header = File.ReadAllText(Path.Combine(directory, "generic_instance_method.h"));
             var source = File.ReadAllText(Path.Combine(directory, "generic_instance_method.c"));
             Assert.Contains($"{instance.SpecializationName}(" +
-                "struct CX_ID_2(generic_instance_method, Utility)* __this, cx_int value)", header);
+                "struct generic_instance_method_Utility* __this, cx_int value)", header);
             Assert.Contains($"{instance.SpecializationName}(__this, 7)", source);
         }
         finally

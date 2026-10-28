@@ -60,7 +60,7 @@ public sealed class InterfaceDispatchTests
 
         Assert.DoesNotContain("_unknowntype_", source);
         Assert.Contains("cx_generic_", source);
-        Assert.Contains("System, String", source);
+        Assert.Contains("System_String", source);
     }
 
     [Fact]
@@ -121,10 +121,10 @@ public sealed class InterfaceDispatchTests
 
         var (header, source) = GenerateOutput(project);
 
-        Assert.Contains("CX_TYPE_DEF(CX_ID_2(unnamed, ICalc)) {", header);
+        Assert.Contains("CX_TYPE_DEF(unnamed_ICalc) {", header);
         Assert.Contains("CX_BEGIN_INTERFACE_VTABLE_DEF(", source);
-        Assert.Contains("CX_ID_5(unnamed, Calc, __iface, ICalc, __vtable)", source);
-        Assert.Contains("CX_ID_6(unnamed, Calc, __iface, ICalc, __vtable, slot_1)", source);
+        Assert.Contains("unnamed_Calc___iface_ICalc___vtable", source);
+        Assert.Contains("unnamed_Calc___iface_ICalc___vtable_slot_1", source);
         Assert.Contains(".instance", source);
         Assert.Contains(".vtable", source);
         Assert.Contains(".instance == CX_NULL", source);
@@ -177,10 +177,10 @@ public sealed class InterfaceDispatchTests
             Assert.NotNull(slot.Implementation));
 
         var (_, source) = GenerateOutput(project);
-        Assert.Contains("__iface, IValues, __vtable, slot_1", source);
-        Assert.Contains("__iface, IValues, __vtable, slot_4", source);
+        Assert.Contains("__iface_IValues___vtable_slot_1", source);
+        Assert.Contains("__iface_IValues___vtable_slot_4", source);
         Assert.Contains("struct cx_iface_ref __cx_iface_receiver_", source);
-        Assert.DoesNotContain("extern CX_EXPORT cx_int CX_ID_4(unnamed, IValues, Value", source);
+        Assert.DoesNotContain("extern CX_EXPORT cx_int unnamed_IValues_Value", source);
     }
 
     [Fact]
@@ -223,8 +223,8 @@ public sealed class InterfaceDispatchTests
         Assert.Contains("cx_iface_upcast(value, 5)", source);
         Assert.Contains("first ? left : cx_iface_upcast(combined, 4)", source);
         Assert.Contains("cx_iface_upcast(combined, 4)", source);
-        Assert.Contains("{ .data = CX_ID_5(unnamed, Service, __iface, ILeft, __vtable) }", source);
-        Assert.Contains("{ .data = CX_ID_5(unnamed, Service, __iface, IRight, __vtable) }", source);
+        Assert.Contains("{ .data = unnamed_Service___iface_ILeft___vtable }", source);
+        Assert.Contains("{ .data = unnamed_Service___iface_IRight___vtable }", source);
     }
 
     [Theory]

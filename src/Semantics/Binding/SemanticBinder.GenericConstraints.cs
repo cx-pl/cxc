@@ -285,6 +285,8 @@ public sealed partial class SemanticBinder
             .Where(candidate => new QualifiedIdentifier(
                 candidate.ModuleName, candidate.Declaration.FullName) ==
                 namedType.ResolvedTypeFullName)
+            .Where(candidate => candidate.Declaration.GenericTypeNames.Length ==
+                namedType.TypeArguments.Count)
             .Select(candidate => candidate.Declaration)
             .SingleOrDefault();
         if (declaration is not null && declaration.GenericConstraints.Count != 0)

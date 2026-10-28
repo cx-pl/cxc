@@ -208,6 +208,23 @@ public sealed partial class SemanticBinder
                     throw new CompilationErrorException("Opaque native types are legal through pointers only.", expression.SourceSpan);
                 break;
 
+            case NameOfExpression nameOf:
+                BindNameOf(nameOf, function, imports, scope);
+                type = BuiltInSystemTypes.String;
+                break;
+
+            case TypeOfExpression typeOf:
+                var parameters = function.GenericTypeNames.Concat(
+                    function.ParentClassDeclaration?.GenericTypeNames ?? []).ToHashSet(StringComparer.Ordinal);
+                typeOf.SetClosedType(ResolveGenericTypeParameters(typeOf.Type, parameters));
+                ResolveTypeReference(typeOf.Type, GetCurrentNamespace(function), imports);
+                if (UnwrapConst(typeOf.Type) is AutoType or PtrType or FunctionType or
+                    NamedType { NativeType: not null } or NamedType { IsDelegate: true })
+                    throw new CompilationErrorException("typeof requires a managed runtime type.");
+                type = new NamedType("System.Reflection.TypeInfo", []);
+                ResolveTypeReference(type, GetCurrentNamespace(function), imports);
+                break;
+
             case LiteralExpression literal:
                 type = BindLiteral(literal);
                 break;
@@ -263,6 +280,71 @@ public sealed partial class SemanticBinder
 
             case UnaryExpression unary:
                 type = BindUnary(unary, function, imports, scope, expectedType);
+                break;
+
+            case AwaitExpression awaitExpression:
+                if (!function.IsAsync)
+                {
+                    throw new CompilationErrorException(
+                        "The 'await' operator is only valid inside an async function.",
+                        awaitExpression.SourceSpan);
+                }
+                var awaitableType = BindExpression(
+                    awaitExpression.Operand, function, imports, scope);
+                if (UnwrapConst(awaitableType) is NamedType valueTaskType &&
+                    AsyncFunctionLowerer.IsValueTaskType(valueTaskType))
+                {
+                    if (valueTaskType.TypeArguments.Count > 1)
+                    {
+                        throw new CompilationErrorException(
+                            "ValueTask<T> supports exactly one type argument.",
+                            awaitExpression.SourceSpan);
+                    }
+
+                    // Async-iterator lowering keeps the value task in its frame
+                    // and registers directly with its source. Other async
+                    // functions still normalize through the stable Task backing.
+                    var functionReturnType = UnwrapConst(function.ReturnType);
+                    if (functionReturnType is not NamedType asyncEnumerableType ||
+                        !AsyncFunctionLowerer.IsAsyncEnumerableType(asyncEnumerableType))
+                    {
+                        awaitExpression.ReplaceOperand(new InvocationExpression(
+                            new MemberAccessExpression(awaitExpression.Operand, "AsTask"), []));
+                    }
+                    awaitableType = BindExpression(
+                        awaitExpression.Operand, function, imports, scope);
+                }
+
+                var isAsyncIteratorAwait = UnwrapConst(function.ReturnType) is
+                    NamedType asyncIteratorReturnType &&
+                    AsyncFunctionLowerer.IsAsyncEnumerableType(asyncIteratorReturnType);
+                if (UnwrapConst(awaitableType) is not NamedType taskType ||
+                    (!AsyncFunctionLowerer.IsTaskType(taskType) &&
+                     !AsyncFunctionLowerer.IsNonGenericTaskType(taskType) &&
+                     !(isAsyncIteratorAwait &&
+                       AsyncFunctionLowerer.IsValueTaskType(taskType))))
+                {
+                    throw new CompilationErrorException(
+                        "The initial await implementation supports Task, Task<T>, ValueTask, and ValueTask<T> only.",
+                        awaitExpression.SourceSpan);
+                }
+                var resultInvocation = new InvocationExpression(
+                    new MemberAccessExpression(awaitExpression.Operand, "GetResult"), []);
+                type = BindExpression(resultInvocation, function, imports, scope, expectedType);
+                if (taskType.TypeArguments.Count == 1 &&
+                    !IsType(type, taskType.TypeArguments[0]))
+                {
+                    throw new CompilationErrorException(
+                        "Task<T>.GetResult() must return the task's T type.",
+                        awaitExpression.SourceSpan);
+                }
+                if (taskType.TypeArguments.Count > 1)
+                {
+                    throw new CompilationErrorException(
+                        "Task<T> supports exactly one type argument.",
+                        awaitExpression.SourceSpan);
+                }
+                awaitExpression.BindLoweredExpression(resultInvocation);
                 break;
 
             case AssignmentExpression assignment:
@@ -457,6 +539,10 @@ public sealed partial class SemanticBinder
         LocalScope scope)
     {
         var currentNamespace = GetCurrentNamespace(function);
+        if (cast.IsSafe)
+            cast.SetClosedTargetType(ResolveGenericTypeParameters(cast.TargetType,
+                function.GenericTypeNames.Concat(function.ParentClassDeclaration?.GenericTypeNames ?? [])
+                    .ToHashSet(StringComparer.Ordinal)));
         ResolveTypeReference(cast.TargetType, currentNamespace, imports);
         if (GetFunctionSignature(cast.TargetType) is NativeFunctionType nativeSignature)
         {
@@ -479,6 +565,46 @@ public sealed partial class SemanticBinder
         var sourceType = BindExpression(cast.Operand, function, imports, scope);
         var unwrappedSource = UnwrapConst(sourceType);
         var unwrappedTarget = UnwrapConst(cast.TargetType);
+        if (cast.IsSafe)
+        {
+            var target = unwrappedTarget is NullableType nullable ? UnwrapConst(nullable.UnderlyingType) : unwrappedTarget;
+            var referenceTarget = IsReferenceType(target) || target is GenericType referenceParameter &&
+                function.GenericConstraints.Concat(function.ParentClassDeclaration?.GenericConstraints ?? [])
+                    .Any(constraint => constraint.ParameterName == referenceParameter.Name &&
+                        (constraint.Kind == GenericConstraintKind.ReferenceType ||
+                         constraint.Kind == GenericConstraintKind.Type && constraint.Types.Any(type =>
+                             UnwrapConst(type) is NamedType { ClassType: ClassType.Class })));
+            if (unwrappedTarget is not NullableType && !referenceTarget)
+                throw new CompilationErrorException(
+                    $"Cannot use 'as' with non-reference target '{GetTypeName(cast.TargetType)}'; " +
+                    "use a reference type or nullable value type.");
+            var nullableValue = unwrappedTarget is NullableType && (IsBoxableValueType(target) ||
+                target is GenericType valueParameter && function.GenericConstraints
+                    .Concat(function.ParentClassDeclaration?.GenericConstraints ?? [])
+                    .Any(constraint => constraint.ParameterName == valueParameter.Name &&
+                        constraint.Kind == GenericConstraintKind.ValueType));
+            if (ArrayType.TryGetElementType(target, out _) &&
+                (unwrappedSource is ObjectType or NullType ||
+                 GetClassDeclarationIncludingConstructed(unwrappedSource)?.ClassType == ClassType.Interface))
+                return cast.TargetType;
+            if (IsType(unwrappedSource, unwrappedTarget) || nullableValue && IsType(unwrappedSource, target))
+                return cast.TargetType;
+            var sourceValue = unwrappedSource is NullableType sourceNullable
+                ? UnwrapConst(sourceNullable.UnderlyingType) : unwrappedSource;
+            if ((sourceValue is GenericType || IsBoxableValueType(sourceValue) && CanAssign(target, sourceValue)) &&
+                (IsReferenceType(target) || GetClassDeclarationIncludingConstructed(target)?.ClassType == ClassType.Interface))
+                return cast.TargetType;
+            if (target is GenericType && IsConstrainedGenericReferenceType(target, function) &&
+                (unwrappedSource is ObjectType or NullType || IsReferenceType(unwrappedSource)))
+                return cast.TargetType;
+            if (nullableValue && (unwrappedSource is ObjectType or NullType ||
+                    GetClassDeclarationIncludingConstructed(unwrappedSource)?.ClassType == ClassType.Interface) ||
+                IsPossibleExplicitReferenceConversion(sourceType, target))
+                return cast.TargetType;
+            throw new CompilationErrorException(
+                $"Cannot use 'as' to convert '{GetTypeName(sourceType)}' to '{GetTypeName(cast.TargetType)}'; " +
+                "the target must be a compatible reference type or nullable value type.");
+        }
         if (unwrappedSource is PtrType && unwrappedTarget is NativeScalarType { CType: "intptr_t" or "uintptr_t" } ||
             unwrappedTarget is PtrType && unwrappedSource is NativeScalarType { CType: "intptr_t" or "uintptr_t" })
         {
@@ -493,8 +619,8 @@ public sealed partial class SemanticBinder
             RequireUnsafe(function, cast.SourceSpan);
             return cast.TargetType;
         }
-        if (unwrappedSource is IntTypeBase or FloatTypeBase or CharType &&
-            unwrappedTarget is IntTypeBase or FloatTypeBase or CharType)
+        if (unwrappedSource is IntTypeBase or FloatTypeBase or DecimalType or CharType &&
+            unwrappedTarget is IntTypeBase or FloatTypeBase or DecimalType or CharType)
         {
             if (unwrappedTarget is WCharType && TryGetNativeIntegerConstant(cast.Operand, out var number) &&
                 (number < 0 || number > 65535))
@@ -511,8 +637,17 @@ public sealed partial class SemanticBinder
             GetClassDeclarationIncludingConstructed(unwrappedTarget)?.ClassType ==
                 ClassType.Interface &&
             CanAssign(unwrappedTarget, unwrappedSource);
+        var genericObjectConversion =
+            unwrappedSource is GenericType && IsSystemObjectType(unwrappedTarget) ||
+            IsSystemObjectType(unwrappedSource) && unwrappedTarget is GenericType ||
+            unwrappedSource is NamedType genericNamedSource &&
+                IsGenericTypeParameterInScope(function, genericNamedSource.Name) &&
+                IsSystemObjectType(unwrappedTarget) ||
+            IsSystemObjectType(unwrappedSource) && unwrappedTarget is NamedType genericNamedTarget &&
+                IsGenericTypeParameterInScope(function, genericNamedTarget.Name);
         if (!(unwrappedSource is ObjectType && IsBoxableValueType(unwrappedTarget)) &&
             !boxesToImplementedInterface &&
+            !genericObjectConversion &&
             !IsPossibleExplicitReferenceConversion(sourceType, cast.TargetType))
         {
             throw new CompilationErrorException(
@@ -520,6 +655,13 @@ public sealed partial class SemanticBinder
                 $"'{GetTypeName(cast.TargetType)}'.");
         }
         return cast.TargetType;
+
+        static bool IsSystemObjectType(TypeBase type) => type is ObjectType ||
+            type is NamedType named && (
+                named.Name is "Object" or "object" ||
+                string.Join(".", named.ResolvedTypeFullName.Parts).EndsWith(
+                    ".System.Object",
+                    StringComparison.Ordinal));
     }
 
     private TypeBase BindTypeTest(
@@ -1051,6 +1193,14 @@ public sealed partial class SemanticBinder
 
     private static TypeBase BindLiteral(LiteralExpression literal)
     {
+        if (literal.SourceText.EndsWith('m') || literal.SourceText.EndsWith('M'))
+        {
+            if (!decimal.TryParse(literal.SourceText[..^1],
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out _))
+                throw new CompilationErrorException("Decimal literal is outside the supported range.", literal.SourceSpan);
+            return BuiltInSystemTypes.Decimal;
+        }
         if (literal.IsString)
         {
             return BuiltInSystemTypes.String;
@@ -1063,8 +1213,9 @@ public sealed partial class SemanticBinder
         {
             return BuiltInSystemTypes.Bool;
         }
-        if (literal.SourceText.Contains('.') ||
-            literal.SourceText.Contains('e', StringComparison.OrdinalIgnoreCase))
+        if (!literal.SourceText.StartsWith("0x", StringComparison.OrdinalIgnoreCase) &&
+            (literal.SourceText.Contains('.') ||
+             literal.SourceText.Contains('e', StringComparison.OrdinalIgnoreCase)))
         {
             return literal.SourceText.EndsWith("f", StringComparison.OrdinalIgnoreCase)
                 ? BuiltInSystemTypes.Float
@@ -1161,6 +1312,7 @@ public sealed partial class SemanticBinder
             IsType(type, BuiltInSystemTypes.Char) ||
             IsInteger(type) ||
             IsType(type, BuiltInSystemTypes.Float) ||
+            IsType(type, BuiltInSystemTypes.Decimal) ||
             IsType(type, BuiltInSystemTypes.Double);
     }
 

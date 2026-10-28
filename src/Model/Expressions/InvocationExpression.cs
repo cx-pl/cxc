@@ -1,6 +1,7 @@
 namespace CxCompiler.Model.Expressions;
 
 using CxCompiler.Semantics;
+using CxCompiler.Model.Types;
 
 public sealed class InvocationExpression : ExpressionBase
 {
@@ -33,6 +34,10 @@ public sealed class InvocationExpression : ExpressionBase
     public IReadOnlyList<CxCompiler.Model.Types.TypeBase> ConceptMethodTypeArguments { get; private set; } = [];
     public IReadOnlyCollection<GenericVirtualDispatchTarget> GenericVirtualDispatchTargets =>
         _genericVirtualDispatchTargets.Values;
+    public FunctionDeclaration? DirectGeneratedIteratorTarget { get; private set; }
+    public PropertyAccessorDeclaration? DirectGeneratedIteratorGetter { get; private set; }
+    public ClassDeclaration? DirectGeneratedIteratorOwner { get; private set; }
+    public ExpressionBase? DirectGeneratedIteratorReceiver { get; private set; }
 
     public InvocationExpression(
         ExpressionBase target,
@@ -59,6 +64,26 @@ public sealed class InvocationExpression : ExpressionBase
         ReceiverTemporaryName = receiverTemporaryName;
         DispatchInterfaceType = dispatchInterfaceType;
         OpenDispatchInterfaceType = dispatchInterfaceType;
+    }
+
+    public void BindDirectGeneratedIteratorCall(
+        FunctionDeclaration target,
+        ClassDeclaration owner,
+        ExpressionBase receiver)
+    {
+        DirectGeneratedIteratorTarget = target;
+        DirectGeneratedIteratorOwner = owner;
+        DirectGeneratedIteratorReceiver = receiver;
+    }
+
+    public void BindDirectGeneratedIteratorGetter(
+        PropertyAccessorDeclaration getter,
+        ClassDeclaration owner,
+        ExpressionBase receiver)
+    {
+        DirectGeneratedIteratorGetter = getter;
+        DirectGeneratedIteratorOwner = owner;
+        DirectGeneratedIteratorReceiver = receiver;
     }
 
     public void SetClosedDispatchInterfaceType(

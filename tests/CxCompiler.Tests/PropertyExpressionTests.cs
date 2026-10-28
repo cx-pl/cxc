@@ -119,13 +119,13 @@ public sealed class PropertyExpressionTests
         Assert.Single(assignment.PropertyIndexTemporaryNames);
 
         var source = GenerateSource(project);
-        var receiverSetup = source.IndexOf("__cx_property_receiver_0 = CX_ID_", StringComparison.Ordinal);
-        var indexSetup = source.IndexOf("__cx_property_index_0_0 = CX_ID_", StringComparison.Ordinal);
-        var valueSetup = source.IndexOf("__cx_property_value_0 = CX_ID_", StringComparison.Ordinal);
-        var setterCall = source.IndexOf("Item, __set)(__cx_property_receiver_", StringComparison.Ordinal);
+        var receiverSetup = source.IndexOf("__cx_property_receiver_0 = unnamed_", StringComparison.Ordinal);
+        var indexSetup = source.IndexOf("__cx_property_index_0_0 = unnamed_", StringComparison.Ordinal);
+        var valueSetup = source.IndexOf("__cx_property_value_0 = unnamed_", StringComparison.Ordinal);
+        var setterCall = source.IndexOf("Item___set(__cx_property_receiver_", StringComparison.Ordinal);
         Assert.True(receiverSetup >= 0 && receiverSetup < indexSetup, source);
         Assert.True(indexSetup < valueSetup && valueSetup < setterCall, source);
-        Assert.Contains("Item, __set)(__cx_property_receiver_0, __cx_property_index_0_0, __cx_property_value_0)", source);
+        Assert.Contains("Item___set(__cx_property_receiver_0, __cx_property_index_0_0, __cx_property_value_0)", source);
     }
 
     [Fact]
@@ -151,7 +151,7 @@ public sealed class PropertyExpressionTests
 
         var source = GenerateSource(project);
         Assert.Contains("__cx_property_receiver_0 = &(item)", source);
-        Assert.Contains("Current, __set)(&(*__cx_property_receiver_0), __cx_property_value_0)", source);
+        Assert.Contains("Current___set(&(*__cx_property_receiver_0), __cx_property_value_0)", source);
     }
 
     [Fact]
@@ -177,8 +177,8 @@ public sealed class PropertyExpressionTests
 
         var source = GenerateSource(project);
         Assert.Contains("__cx_property_receiver_0 = &(item)", source);
-        Assert.Contains("Current, __get)(&(*__cx_property_receiver_0))", source);
-        Assert.Contains("Current, __set)(&(*__cx_property_receiver_0), __cx_property_value_0)", source);
+        Assert.Contains("Current___get(&(*__cx_property_receiver_0))", source);
+        Assert.Contains("Current___set(&(*__cx_property_receiver_0), __cx_property_value_0)", source);
     }
 
     [Fact]
@@ -206,11 +206,11 @@ public sealed class PropertyExpressionTests
 
         var source = GenerateSource(project);
         var getter = source.IndexOf(
-            "CX_ID_4(unnamed, Counter, Value, __get)(__cx_property_receiver_0)",
+            "unnamed_Counter_Value___get(__cx_property_receiver_0)",
             StringComparison.Ordinal);
         var update = source.IndexOf("__cx_property_value_0 += amount", StringComparison.Ordinal);
         var setter = source.IndexOf(
-            "CX_ID_4(unnamed, Counter, Value, __set)(__cx_property_receiver_0, __cx_property_value_0)",
+            "unnamed_Counter_Value___set(__cx_property_receiver_0, __cx_property_value_0)",
             StringComparison.Ordinal);
         Assert.True(getter >= 0 && getter < update);
         Assert.True(update < setter, source);
@@ -236,8 +236,8 @@ public sealed class PropertyExpressionTests
         var receiverSetup = Assert.Single(source.Split(Environment.NewLine),
             line => line.Contains("__cx_property_receiver_0 =", StringComparison.Ordinal));
         Assert.True(CountOccurrences(receiverSetup, "GetCounter") == 1, receiverSetup);
-        Assert.Contains("Value, __get)(__cx_property_receiver_0)", source);
-        Assert.Contains("Value, __set)(__cx_property_receiver_0, __cx_property_value_0)", source);
+        Assert.Contains("Value___get(__cx_property_receiver_0)", source);
+        Assert.Contains("Value___set(__cx_property_receiver_0, __cx_property_value_0)", source);
     }
 
     [Fact]
@@ -264,8 +264,8 @@ public sealed class PropertyExpressionTests
 
         var source = GenerateSource(project);
         Assert.Contains("__cx_delegate_combine_CX_FN_", source);
-        Assert.Contains("Callback, __get)(__this)", source);
-        Assert.Contains("Callback, __set)(__this, __cx_property_value_0)", source);
+        Assert.Contains("Callback___get(__this)", source);
+        Assert.Contains("Callback___set(__this, __cx_property_value_0)", source);
     }
 
     [Fact]
@@ -318,9 +318,9 @@ public sealed class PropertyExpressionTests
         Assert.IsType<VoidType>(assignment.OperatorSymbol!.ReturnType);
 
         var source = GenerateSource(project);
-        Assert.Contains("__cx_property_value_0 = CX_ID_", source);
+        Assert.Contains("__cx_property_value_0 = unnamed_", source);
         Assert.Contains("(&(__cx_property_value_0), amount)", source);
-        Assert.Contains("Current, __set)(__this, __cx_property_value_0)", source);
+        Assert.Contains("Current___set(__this, __cx_property_value_0)", source);
     }
 
     [Fact]
@@ -358,8 +358,8 @@ public sealed class PropertyExpressionTests
         var indexSetup = Assert.Single(source.Split(Environment.NewLine),
             line => line.Contains("__cx_property_index_0_0 =", StringComparison.Ordinal));
         Assert.Equal(1, CountOccurrences(indexSetup, "NextIndex"));
-        Assert.Contains("Item, __get)(__this, __cx_property_index_0_0)", source);
-        Assert.Contains("Item, __set)(__this, __cx_property_index_0_0, __cx_property_value_0)", source);
+        Assert.Contains("Item___get(__this, __cx_property_index_0_0)", source);
+        Assert.Contains("Item___set(__this, __cx_property_index_0_0, __cx_property_value_0)", source);
     }
 
     [Fact]
@@ -376,8 +376,8 @@ public sealed class PropertyExpressionTests
         new SemanticBinder().Bind(project);
 
         var source = GenerateSource(project);
-        Assert.Contains("__cx_property_mutation_value_0 = CX_ID_4(unnamed, Counter, Value, __get)(__this)", source);
-        Assert.Contains("__cx_property_mutation_value_0++, CX_ID_4(unnamed, Counter, Value, __set)(__this, __cx_property_mutation_value_0), __cx_property_mutation_value_0)", source);
+        Assert.Contains("__cx_property_mutation_value_0 = unnamed_Counter_Value___get(__this)", source);
+        Assert.Contains("__cx_property_mutation_value_0++, unnamed_Counter_Value___set(__this, __cx_property_mutation_value_0), __cx_property_mutation_value_0)", source);
         Assert.Contains("__cx_property_mutation_old_", source);
         Assert.Contains("= __cx_property_mutation_value_", source);
     }
@@ -409,8 +409,8 @@ public sealed class PropertyExpressionTests
             line => line.Contains("__cx_property_mutation_index_0_0 =", StringComparison.Ordinal));
         Assert.Equal(1, CountOccurrences(receiverSetup, "GetValues"));
         Assert.Equal(1, CountOccurrences(indexSetup, "NextIndex"));
-        Assert.Contains("Item, __get)(__cx_property_mutation_receiver_0, __cx_property_mutation_index_0_0)", source);
-        Assert.Contains("Item, __set)(__cx_property_mutation_receiver_0, __cx_property_mutation_index_0_0, __cx_property_mutation_value_0)", source);
+        Assert.Contains("Item___get(__cx_property_mutation_receiver_0, __cx_property_mutation_index_0_0)", source);
+        Assert.Contains("Item___set(__cx_property_mutation_receiver_0, __cx_property_mutation_index_0_0, __cx_property_mutation_value_0)", source);
     }
 
     [Fact]
@@ -540,11 +540,11 @@ public sealed class PropertyExpressionTests
         var source = GenerateSource(project);
 
         Assert.Contains("cx_int __cx_property_value_0;", source);
-        Assert.Contains("CX_ID_4(unnamed, Values, Number, __get)(other)", source);
-        Assert.Contains("__cx_property_value_0 = CX_ID_4(unnamed, Values, Number, __get)(other)", source);
-        Assert.Contains("CX_ID_4(unnamed, Values, Number, __set)(__this, __cx_property_value_0)", source);
-        Assert.Contains("CX_ID_4(unnamed, Values, Item, __const_get)(__this, 0u)", source);
-        Assert.Contains("CX_ID_4(unnamed, Values, Count, __get)()", source);
+        Assert.Contains("unnamed_Values_Number___get(other)", source);
+        Assert.Contains("__cx_property_value_0 = unnamed_Values_Number___get(other)", source);
+        Assert.Contains("unnamed_Values_Number___set(__this, __cx_property_value_0)", source);
+        Assert.Contains("unnamed_Values_Item___const_get(__this, 0u)", source);
+        Assert.Contains("unnamed_Values_Count___get()", source);
     }
 
     [Fact]
@@ -563,8 +563,8 @@ public sealed class PropertyExpressionTests
 
         var source = GenerateSource(project);
 
-        Assert.Contains("CX_ID_4(unnamed, Value, Number, __const_get)(__this)", source);
-        Assert.DoesNotContain("CX_ID_4(unnamed, Value, Number, __const_get)(&(__this))", source);
+        Assert.Contains("unnamed_Value_Number___const_get(__this)", source);
+        Assert.DoesNotContain("unnamed_Value_Number___const_get(&(__this))", source);
     }
 
     private static CxProject CreateProject(string source)

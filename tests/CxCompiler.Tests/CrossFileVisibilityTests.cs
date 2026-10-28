@@ -58,9 +58,9 @@ public sealed class CrossFileVisibilityTests
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var header = File.ReadAllText(Path.Combine(directory, "cross_file_visibility.h"));
             var source = File.ReadAllText(Path.Combine(directory, "cross_file_visibility.c"));
-            Assert.Contains("extern CX_CROSS_FILE_VISIBILITY_API cx_int CX_ID_3(cross_file_visibility, Lib, Read)", header);
-            Assert.Contains("extern CX_CROSS_FILE_VISIBILITY_API cx_int CX_ID_3(cross_file_visibility, App, Run)", header);
-            Assert.Contains("CX_ID_3(cross_file_visibility, Lib, Read)(token)", source);
+            Assert.Contains("extern CX_CROSS_FILE_VISIBILITY_API cx_int cross_file_visibility_Lib_Read", header);
+            Assert.Contains("extern CX_CROSS_FILE_VISIBILITY_API cx_int cross_file_visibility_App_Run", header);
+            Assert.Contains("cross_file_visibility_Lib_Read(token)", source);
         }
         finally
         {

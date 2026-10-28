@@ -173,11 +173,11 @@ public sealed class GenericConstrainedMemberTests
             Directory.CreateDirectory(directory);
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var source = File.ReadAllText(Path.Combine(directory, "generic_constrained_member.c"));
-            Assert.Contains("(struct CX_ID_2(generic_constrained_member, BaseValue)*)", source);
-            Assert.Contains("CX_ID_3(generic_constrained_member, BaseValue, Read)", source);
-            Assert.Contains("CX_ID_4(generic_constrained_member, BaseValue, Current, __const_get)", source);
-            Assert.Contains("CX_ID_4(generic_constrained_member, BaseValue, Stored, __get)", source);
-            Assert.Contains("CX_ID_4(generic_constrained_member, BaseValue, Stored, __set)", source);
+            Assert.Contains("(struct generic_constrained_member_BaseValue*)", source);
+            Assert.Contains("generic_constrained_member_BaseValue_Read", source);
+            Assert.Contains("generic_constrained_member_BaseValue_Current___const_get", source);
+            Assert.Contains("generic_constrained_member_BaseValue_Stored___get", source);
+            Assert.Contains("generic_constrained_member_BaseValue_Stored___set", source);
             Assert.Contains("cx_checked_cast_object_to_interface", source);
             Assert.Contains(".vtable", source);
             Assert.Contains("->value", source);
@@ -428,7 +428,7 @@ public sealed class GenericConstrainedMemberTests
             Assert.Contains("struct cx_iface_ref", generated, StringComparison.Ordinal);
             Assert.Contains("Add", generated, StringComparison.Ordinal);
             Assert.Contains("Set", generated, StringComparison.Ordinal);
-            Assert.Contains("BaseCounter, Add", generated, StringComparison.Ordinal);
+            Assert.Contains("BaseCounter_Add", generated, StringComparison.Ordinal);
         }
         finally
         {
@@ -576,13 +576,13 @@ public sealed class GenericConstrainedMemberTests
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var source = File.ReadAllText(Path.Combine(directory, "generic_interface_generic_struct.c"));
             Assert.Contains("__iface", source);
-            Assert.Contains($"{closedStructIdentifier}, __iface", source);
+            Assert.Contains($"{closedStructIdentifier}___iface", source);
             Assert.Contains($".data = &CX_TYPEINFO_NAME({closedStructIdentifier})", source);
-            Assert.Contains($"CX_ID_2({closedStructIdentifier}, __interfaces)", source);
+            Assert.Contains($"{closedStructIdentifier}___interfaces", source);
             Assert.Contains(".interfaceCount = 3", source);
             Assert.Contains("ICountCell", source);
             Assert.Contains("IStoreCell", source);
-            Assert.Contains("Cell, Stored, __set", source);
+            Assert.Contains("Cell_Stored___set", source);
             Assert.DoesNotContain("_unknowntype_", source);
         }
         finally
