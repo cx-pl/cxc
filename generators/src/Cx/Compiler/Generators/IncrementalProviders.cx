@@ -1,0 +1,38 @@
+namespace Cx.Compiler.Generators;
+
+// Providers are values in a deferred graph. Implementations should retain the
+// transformation and evaluate it only when an input snapshot changes.
+public interface IGeneratorPredicate<T> {
+    bool Invoke(T value);
+}
+
+public interface IGeneratorTransform<T, TResult> {
+    TResult Invoke(T value);
+}
+
+public interface IGeneratorOutputAction<T> {
+    void Execute(GeneratorOutputContext context, T value);
+}
+
+public interface IIncrementalValueProvider<T> {
+    IIncrementalValueProvider<TResult> Select<TResult>(IGeneratorTransform<T, TResult> transform);
+    IIncrementalValueProvider<GeneratorPair<T, TOther>> Combine<TOther>(
+        IIncrementalValueProvider<TOther> other);
+}
+
+public interface IIncrementalValuesProvider<T> {
+    IIncrementalValuesProvider<T> Where(IGeneratorPredicate<T> predicate);
+    IIncrementalValuesProvider<TResult> Select<TResult>(IGeneratorTransform<T, TResult> transform);
+    IIncrementalValueProvider<T[]> Collect();
+}
+
+public struct GeneratorPair<T, TOther> {
+    private T _first;
+    private TOther _second;
+    public T First { const get => _first; }
+    public TOther Second { const get => _second; }
+    public constructor(T first, TOther second) {
+        _first = first;
+        _second = second;
+    }
+}

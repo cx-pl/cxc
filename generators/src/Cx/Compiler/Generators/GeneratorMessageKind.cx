@@ -1,0 +1,13 @@
+namespace Cx.Compiler.Generators;
+
+public enum GeneratorMessageKind {
+    Handshake = 1,
+    Snapshot = 2,
+    AdditionalFile = 3,
+    Generate = 4,
+    SourceOutput = 5,
+    Diagnostic = 6,
+    Cancellation = 7,
+    Complete = 8,
+    Failure = 9
+}

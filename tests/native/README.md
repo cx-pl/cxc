@@ -1,10 +1,89 @@
 # Native conformance checks
 
+`fixtures/memory-arena-async` is the CX consumer for the initial
+`Memory.WithArenaAsync` slice. It forces collection while a task is suspended,
+then verifies arena data remains readable after resumption and checks task
+fault/cancellation propagation, including a callback that throws before it
+returns a task. It also checks an async child stored in a local and then awaited,
+so joined-operation analysis and scheduler-context capture cover that source
+shape. Build the CX project to generate its C, then
+configure its CMake fixture with `CX_GENERATED_DIR` and `CXCORE_SOURCE_DIR`;
+Windows x86/x64 static/shared and Linux x64 static/shared have been exercised.
+The fixture also cancels an awaited operation after it acquires a `NativeBuffer`
+and forces collection while its cancellation callback is registered and again
+after cancellation queues the awaited continuation. It verifies the buffer is
+still live before cancellation, then the awaited `finally` disposes it exactly
+once before the arena scope completes; this case passes in all six Release
+cells. See
+`results/milestone22-async-cancellation-forced-gc-20261104.md`.
+The fixture also checks `WithArenaAsync<T>` scalar and durable-reference
+results, both capacity modes, generic fault/cancellation propagation, and
+faulting on a callback that returns a mismatched `Task<U>` result type.
+Those cases pass in all six Release cells. `fixtures/memory-arena-result-escape`
+is a separate expected-failure consumer: it returns a value whose reference is
+nested two structs deep through a durable result task and verifies the runtime
+store barrier rejects it. This nested-value case currently passes Windows x64
+static Release.
+The fixture also forces `List<T>`, `Dictionary<TKey,TValue>`, `Queue<T>`, and
+`Stack<T>` storage to grow while the opposite allocation context is active.
+It verifies list and dictionary values, plus FIFO/LIFO values and counts. Both
+durable owners under an arena and arena owners under a durable override pass in
+all six Release cells; see
+`results/milestone22-collection-owner-growth-20261104.md`.
+The same fixture creates collection enumerators for `Array<T>`,
+`Dictionary<TKey,TValue>`, and `LinkedList<T>` owners in both directions:
+durable collections inside an arena and arena collections inside
+`WithDurable`. It advances the scoped enumerators after the durable override
+has restored the arena context. All six Release cells pass; see
+`results/milestone22-collection-enumerator-owner-20261104.md`.
+
+Joined child tasks can also be created and awaited immediately within bounded
+`for` and `do while` loop bodies. The async arena fixture checks both forms in
+all six Windows x64/Win32 and Linux x64 static/shared Release cells. These tests
+do not establish support for arbitrary loop control flow, task graphs, or
+enclosing closure captures; see
+`results/milestone22-async-loop-joins-20261104.md`.
+
+`TaskHandle.WhenAll(TaskHandle[])` joins a variable-size child array. The
+compiler currently proves only fixed literal arrays populated from prior task
+locals immediately before the aggregate await; any intervening statement
+invalidates that proof. The forced-GC fixture covers three-child fault and
+cancellation joins, input-array mutation after the join starts, empty arrays,
+and rejection of null entries. This
+array-backed path passes all six Windows x64/Win32 and Linux x64 static/shared
+Release cells; Linux shared `ldd -r` resolves dependencies. See
+`results/milestone22-async-variable-join-20261105.md`.
+
 `run-stdlib-additions.ps1` builds and runs `fixtures/stdlib-additions/main.cx`
 against `cxcore`. It checks all eight UUID versions, deterministic name-based
 IDs, numeric nullable `TryParse` results, fluent StringBuilder calls, Unicode
 length, immutable snapshots, and virtual `ToString`. It accepts the same build
 and static/shared link options as `run-keyword-expressions.ps1`.
+
+`run-memory-arena-linked-list.ps1` also checks collection owner behavior. It
+materializes a durable `List<T>` snapshot inside an arena and an arena-owned
+list snapshot inside a durable override, then verifies their values while the
+owning lifetime remains active. Its linked-list checks cover mutation of a
+durable list during an arena and an arena list during a durable override. The
+fixture also grows a durable `List<T>` and `Dictionary<string, T>` from four to
+sixteen slots inside an arena, clears their source arrays, forces collection,
+and verifies all nine retained payloads through list access and dictionary
+enumeration. It passes Windows x64/x86 static/shared and Linux x64
+static/shared Release; its runner keeps each architecture, generator, and
+linkage mode in a separate build tree. See
+`results/milestone22-persistent-list-growth-during-arena-20261106.md`.
+
+`run-memory-arena-dynamic-static-init.ps1` verifies the first call into a
+generated CX module while `Memory.WithArena` is active. The generated dynamic
+static initializer publishes a nested object graph into a registered static
+root; after the arena closes and forced GC runs, a later module call reads the
+same values. Its CX consumer also creates `MemoryArena(4096u)`, reuses it across
+two successful runs with an intervening thrown exception, disposes it twice,
+including through `IDisposable`, and confirms use-after-dispose throws. The
+generated-core and checked-in fallback variants pass Windows x64/x86 and Linux
+x64 static/shared Release cells; Linux shared `ldd -r` resolves dependencies.
+See
+`results/milestone22-memory-arena-object-api-20261106.md`.
 
 `run-keyword-expressions.ps1` builds and runs
 `fixtures/keyword-expressions/main.cx`. It covers safe reference/interface and
@@ -32,6 +111,15 @@ runtime checkout, and `CX_STATIC_LINK` to ON or OFF. All three CTest cases requi
 the expected process exit and, for failures, the expected diagnostic. CMake 3.31
 or newer is required. Compiler snapshots allow a full harness run to continue
 while the development compiler is rebuilt.
+
+`run-di-e2e.ps1 -StaticLink BOTH` builds and runs the Milestone 19 container
+fixture on Windows x86/x64. `run-di-cross-module.ps1 -Architecture x64`
+checks a service whose interface and implementation live in a referenced CX
+library. Both fixtures cover static and shared `cxcore` linking. The DI fixture
+also passes on Linux x64 static/shared under WSL/GCC 11; the cross-module probe
+uses the same four platform/link cells. Linux strict builds use `-Werror` with
+documented suppressions for GCC's collector `setjmp` warning and generated
+unused/no-op expressions.
 
 `run-entry-point-e2e.ps1` compiles a temporary CX program, builds the generated
 C with CMake and `cxcore`, then checks argument count and contents,
@@ -219,9 +307,9 @@ Cross-module binding and generated calls also have compiler assertions in the
 From the `cxc` directory, run it with the compiler DLL and CMake executable:
 
 ```powershell
-dotnet build src/CxCompiler.csproj --no-restore
+dotnet build src/CxCompiler/CxCompiler.csproj --no-restore
 .\tests\native\run-entry-point-e2e.ps1 `
-  -Cxc .\src\bin\Debug\net10.0\CxCompiler.dll `
+  -Cxc .\src\CxCompiler\bin\Debug\net10.0\CxCompiler.dll `
   -CxCoreDir ..\cxcore `
   -CMake 'C:\Program Files\Microsoft Visual Studio\18\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe' `
   -Generator 'Visual Studio 18 2026'
@@ -339,7 +427,8 @@ linkage configurations:
 ```
 
 The script uses `/W4 /WX`; it suppresses C4100 for unused generated thunk
-parameters, C4130 for intentional constant comparisons, and C4702 for
+parameters, C4130 for intentional constant comparisons, C4232 for imported
+module-initializer function addresses stored as providers, and C4702 for
 unreachable coroutine continuation paths. It writes object files to a unique
 temporary directory and removes them after a successful run.
 
@@ -359,7 +448,7 @@ Windows x64 static/shared:
 
 ```powershell
 ./cxc/tests/native/run-coroutine-acceptance.ps1 `
-  -Cxc ./cxc/src/bin/Debug/net10.0/CxCompiler.dll `
+  -Cxc ./cxc/src/CxCompiler/bin/Debug/net10.0/CxCompiler.dll `
   -Platform Windows -Architecture x64 -LinkMode both
 ```
 
@@ -367,7 +456,7 @@ Linux x64 static/shared uses WSL, GCC, `ldd`, and CMake 3.31 or newer:
 
 ```powershell
 ./cxc/tests/native/run-coroutine-acceptance.ps1 `
-  -Cxc ./cxc/src/bin/Debug/net10.0/CxCompiler.dll `
+  -Cxc ./cxc/src/CxCompiler/bin/Debug/net10.0/CxCompiler.dll `
   -Platform Linux -Architecture x64 -LinkMode both `
   -Distribution Ubuntu -CMake /path/in/wsl/to/cmake
 ```
@@ -387,7 +476,7 @@ forms with allocation assertions. For example, from the workspace root:
 
 ```powershell
 ./cxc/tests/native/run-cross-module-abi.ps1 `
-  -Cxc ./cxc/src/bin/Debug/net10.0/CxCompiler.dll `
+  -Cxc ./cxc/src/CxCompiler/bin/Debug/net10.0/CxCompiler.dll `
   -Platform Windows -Architecture x86 -LinkMode static -KeepBuild
 ```
 
@@ -412,6 +501,23 @@ Both-mode runs test each mode immediately, but share the app output path; after
 both modes finish, the executable there belongs to the last build. Preserve the
 first failure and report repeat results independently; successful retries do not
 explain an intermittent failure.
+
+## Module metadata
+
+`python probe-module-info.py LIBRARY MODULE_NAME [REFERENCE_NAME ...]` inspects
+exported module descriptors without module initialization. It checks accessor/data
+identity, public type flags, dependency providers, annotation value providers,
+array-reader element descriptors, closed generic argument providers, and annotation
+source coordinates. On Windows,
+use the DLL copies beside the sample executable so all dependencies are available.
+
+The CXTESTS cross-project example in `../../../cxtests/examples/basic` exercises
+module-based library discovery, typed constants and reflected invocation, inline
+and deferred member rows, constructor injection, class/collection fixture scopes,
+output, filters, failures, and repeat execution under static/shared linking.
+Run `cxtests/tests/run-native.ps1` from the workspace root as documented
+in the [CXTESTS README](../../../cxtests/README.md); it independently parses JSON/XML
+and checks actual process exit codes across the supported native matrix.
 
 ## System.Math
 

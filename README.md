@@ -72,6 +72,15 @@ source line directives so native debugger symbols can map statements back to
 their `.cx` files. Command-line errors return exit code 2;
 source, generation, and native-build failures return exit code 1.
 
+## Repository layout
+
+The compiler solution is `CxCompiler.slnx`, its C# implementation is in
+`src/CxCompiler/`, and tests are in `tests/`. Ordinary CX library manifests live
+inside their production `src/` tree; their default outputs are consequently
+`src/.obj/` and `src/.bin/`. Examples and fixtures may keep independent root
+manifests. Repository-root source packages retain their selected layout under
+`source/` after restore; see the cxpm `package.root` setting.
+
 ## Executable entry point
 
 For executable projects, one top-level CX `Main` function generates the native
@@ -87,8 +96,10 @@ Library projects do not generate a native entry point.
 Compiling a `.cx` source or `.cxproj` writes the generated C source, header, and
 `CMakeLists.txt` to the project’s `.obj/` directory unless `--output-dir` is
 provided. The generated CMake target
-also includes native `.c` files under the project source tree, excluding `.obj/`,
-`.bin/`, and `.git/`. Runtime executables and shared libraries are written to
+also includes native `.c` files under the project source tree, excluding generated
+output, caches, tests, benchmarks, examples, and samples. When the manifest is
+in `src/`, native support is also discovered in sibling `native/` and `platform/`
+trees, with headers from sibling `include/`, `native/`, and platform directories. Runtime executables and shared libraries are written to
 `.bin/`; archive and object build files remain under `.obj/`.
 
 Build the generated target with CMake from the project directory:

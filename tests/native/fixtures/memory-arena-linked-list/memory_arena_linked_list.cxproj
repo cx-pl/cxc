@@ -1,0 +1,4 @@
+name: memoryArenaLinkedList
+type: Executable
+project_references:
+- ../../../../../cxcore/src/cxcore.cxproj

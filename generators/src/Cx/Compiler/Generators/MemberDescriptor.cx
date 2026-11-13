@@ -1,0 +1,49 @@
+namespace Cx.Compiler.Generators;
+
+public final class MemberDescriptor {
+    private string _identity;
+    private string _name;
+    private string _typeIdentity;
+    private string _visibility;
+    private GeneratorValueKind _kind;
+    private bool _isStatic;
+    private bool _isReadOnly;
+    private bool _isNullable;
+    private ParameterDescriptor[] _parameters;
+    private string? _constantValue;
+    private SourceLocation _location;
+
+    public string Identity { const get => _identity; }
+    public string Name { const get => _name; }
+    public string TypeIdentity { const get => _typeIdentity; }
+    public string Visibility { const get => _visibility; }
+    public GeneratorValueKind Kind { const get => _kind; }
+    public bool IsStatic { const get => _isStatic; }
+    public bool IsReadOnly { const get => _isReadOnly; }
+    public bool IsNullable { const get => _isNullable; }
+    public ParameterDescriptor[] Parameters { get => CopyParameters(_parameters); }
+    public string? ConstantValue { const get => _constantValue; }
+    public SourceLocation Location { const get => _location; }
+
+    public constructor(string identity, string name, string typeIdentity, string visibility,
+        GeneratorValueKind kind, bool isStatic, bool isReadOnly, bool isNullable,
+        ParameterDescriptor[] parameters, string? constantValue, SourceLocation location) {
+        _identity = identity;
+        _name = name;
+        _typeIdentity = typeIdentity;
+        _visibility = visibility;
+        _kind = kind;
+        _isStatic = isStatic;
+        _isReadOnly = isReadOnly;
+        _isNullable = isNullable;
+        _parameters = CopyParameters(parameters);
+        _constantValue = constantValue;
+        _location = location;
+    }
+
+    private ParameterDescriptor[] CopyParameters(ParameterDescriptor[] values) {
+        var result = new ParameterDescriptor[values.Length];
+        for (uint index = 0u; index < values.Length; index += 1u) result[index] = values[index];
+        return result;
+    }
+}

@@ -10,6 +10,30 @@ namespace CxCompiler.Tests;
 public sealed class ExtensionDeclarationTests
 {
     [Fact]
+    public void AsyncExtensionMethodsKeepTheirAsyncModifierAfterBinding()
+    {
+        var project = CreateProject("""
+            import System.Threading.Tasks;
+            public extension AsyncTextExtensions : string {
+                public async Task<int> Read(Task<int> pending) {
+                    return await pending;
+                }
+            }
+            public int Main() { return 0; }
+            """);
+
+        new SemanticBinder().Bind(project);
+
+        var extension = Assert.IsType<ExtensionDeclaration>(project.CompilationContexts.Single()
+            .DeclarationScope.Declarations.Single(declaration =>
+                declaration.Name == "AsyncTextExtensions"));
+        var method = Assert.Single(extension.Members.MemberDeclarations.Declarations
+            .OfType<FunctionDeclaration>(), function => function.Name == "Read");
+
+        Assert.True(method.IsAsync);
+    }
+
+    [Fact]
     public void ConcreteArrayExtensionMethodsUseTheArrayReceiver()
     {
         var project = CreateProject("""
@@ -292,6 +316,9 @@ public sealed class ExtensionDeclarationTests
             Assert.Contains("__cx_operator_multiply_assign", source);
             Assert.Contains("__cx_operator_divide_assign", source);
             Assert.Contains("__cx_operator_remainder_assign", source);
+            Assert.True(source.Split(
+                "cx_gc_store_reference((cx_ptr*)&((*__cx_extension_assignment_").Length - 1 >= 5,
+                "Each reference-valued extension compound assignment must use the checked store barrier.");
             Assert.DoesNotContain("_unknowntype_", source);
         }
         finally
@@ -407,6 +434,9 @@ public sealed class ExtensionDeclarationTests
             var source = File.ReadAllText(Directory.GetFiles(outputDirectory, "*.c").Single());
             Assert.Contains("__cx_operator_increment", source);
             Assert.Contains("__cx_operator_decrement", source);
+            Assert.True(source.Split(
+                "cx_gc_store_reference((cx_ptr*)&((*__cx_operator_receiver_").Length - 1 >= 2,
+                "Reference-valued extension increment and decrement results must use the checked store barrier.");
             Assert.DoesNotContain("_unknowntype_", source);
         }
         finally
@@ -756,7 +786,7 @@ public sealed class ExtensionDeclarationTests
             var source = File.ReadAllText(Directory.GetFiles(outputDirectory, "*.c").Single());
             Assert.Contains("return 42;", source);
             Assert.Contains("return value;", source);
-            Assert.Contains("__cx_concept_foreach_collection_item", source);
+            Assert.Contains("__cx_foreach_collection_item", source);
         }
         finally
         {

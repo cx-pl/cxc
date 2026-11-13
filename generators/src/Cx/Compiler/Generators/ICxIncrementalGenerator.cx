@@ -1,0 +1,5 @@
+namespace Cx.Compiler.Generators;
+
+public interface ICxIncrementalGenerator {
+    void Initialize(IncrementalGeneratorInitializationContext context);
+}

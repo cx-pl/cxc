@@ -1,3 +1,4 @@
+using CxCompiler.Model.Common;
 using CxCompiler.Model.Project;
 using CxCompiler.Model.Errors;
 using CxCompiler.Model.Expressions;
@@ -25,6 +26,143 @@ public sealed class GenericFoundationTests
         var pair = Assert.IsType<NamedType>(function.ReturnType);
 
         Assert.Equal(["First", "Second"], pair.TypeArguments.Select(argument => argument.Name));
+    }
+
+    [Fact]
+    public void ClosesNestedGenericTypeAcrossGenericContainingClass()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("nested_owner_generic");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Outer<T> {
+                public class Nested<U> {
+                    public T OuterValue;
+                    public U InnerValue;
+                    public T ReadOuter() { return OuterValue; }
+                    public U ReadInner() { return InnerValue; }
+                }
+            }
+            public Outer<int>.Nested<string> Create() {
+                Outer<int>.Nested<string>[] values =
+                    new Outer<int>.Nested<string>[1u];
+                values[0u] = new Outer<int>.Nested<string>();
+                return values[0u];
+            }
+            public int Read() { return Create().ReadOuter(); }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var instance = Assert.Single(project.GenericTypeInstances);
+        Assert.Equal(["Int", "String"],
+            instance.Type.TypeArguments.Select(argument => argument.Name));
+
+        var directory = Path.Combine(
+            Path.GetTempPath(), $"cxc-nested-owner-generic-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(
+                project, Path.Combine(directory, "input.cx"));
+            var header = File.ReadAllText(Path.Combine(directory, "nested_owner_generic.h"));
+            Assert.Contains("cx_int OuterValue;", header);
+            Assert.Contains("cx_ptr InnerValue;", header);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void ClosesNestedGenericTypeAcrossTwoContainingClasses()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "deep_nested_owner_generic");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Outer<T> {
+                public class Middle<U> {
+                    public class Leaf<V> {
+                        public T OuterValue;
+                        public U MiddleValue;
+                        public V InnerValue;
+                    }
+                }
+            }
+            public Outer<int>.Middle<string>.Leaf<long> Create() {
+                return new Outer<int>.Middle<string>.Leaf<long>();
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var instance = Assert.Single(project.GenericTypeInstances);
+        Assert.Equal(["Int", "String", "Long"],
+            instance.Type.TypeArguments.Select(argument => argument.Name));
+
+        var directory = Path.Combine(
+            Path.GetTempPath(), $"cxc-deep-nested-owner-generic-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(
+                project, Path.Combine(directory, "input.cx"));
+            var header = File.ReadAllText(Path.Combine(directory, "deep_nested_owner_generic.h"));
+            Assert.Contains("cx_int OuterValue;", header);
+            Assert.Contains("cx_ptr MiddleValue;", header);
+            Assert.Contains("cx_long InnerValue;", header);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void ClosesNestedGenericTypeWhenParameterNamesRepeat()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "shadowed_nested_generic_parameter");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Outer<T> {
+                public class Nested<T> {
+                    public T Value;
+                }
+            }
+            public Outer<int>.Nested<string> Create() {
+                return new Outer<int>.Nested<string>();
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var instance = Assert.Single(project.GenericTypeInstances);
+        Assert.Equal(["Int", "String"],
+            instance.Type.TypeArguments.Select(argument => argument.Name));
+
+        var directory = Path.Combine(
+            Path.GetTempPath(), $"cxc-shadowed-nested-generic-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(
+                project, Path.Combine(directory, "input.cx"));
+            var header = File.ReadAllText(
+                Path.Combine(directory, "shadowed_nested_generic_parameter.h"));
+            Assert.Contains("cx_ptr Value;", header);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
     }
 
     [Fact]
@@ -400,6 +538,42 @@ public sealed class GenericFoundationTests
     }
 
     [Fact]
+    public void GenericFunctionIdentityDistinguishesDelegateSignatures()
+    {
+        var taskOfBool = NamedType.CreateWithTypeArguments(
+            "Task", [BuiltInSystemTypes.Bool]);
+        taskOfBool.SetResolvedType(
+            new QualifiedIdentifier("System", "Threading", "Tasks", "Task"),
+            "cxcore",
+            ClassType.Class);
+        var syncPredicate = new FunctionType(
+            QualifiedIdentifier.Empty,
+            BuiltInSystemTypes.Bool,
+            [BuiltInSystemTypes.Int]);
+        var asyncPredicate = new FunctionType(
+            QualifiedIdentifier.Empty,
+            taskOfBool,
+            [BuiltInSystemTypes.Int]);
+
+        var sync = GenericTypeIdentity.CreateFunction(
+            "cxcore",
+            "AsyncEnumerableQueryExtensions.FirstAsync@IAsyncEnumerable<int>",
+            [BuiltInSystemTypes.Int],
+            [syncPredicate],
+            taskOfBool);
+        var async = GenericTypeIdentity.CreateFunction(
+            "cxcore",
+            "AsyncEnumerableQueryExtensions.FirstAsync@IAsyncEnumerable<int>",
+            [BuiltInSystemTypes.Int],
+            [asyncPredicate],
+            taskOfBool);
+
+        Assert.NotEqual(sync.CanonicalName, async.CanonicalName);
+        Assert.NotEqual(sync.CIdentifier, async.CIdentifier);
+        Assert.NotEqual(sync.RuntimeHash, async.RuntimeHash);
+    }
+
+    [Fact]
     public void BindingResolvesTypeArgumentsAndRejectsWrongArity()
     {
         var project = CxProject.CreateDefaultApplicationProject();
@@ -692,7 +866,7 @@ public sealed class GenericFoundationTests
             Assert.Contains("__this->id = 7;", source);
             Assert.Contains("__this->computed = ((2 + 5) * 3);", source);
             Assert.Contains("__this->index = initialIndex;", source);
-            Assert.Contains("__this->extra = initialExtra;", source);
+            Assert.Contains("cx_gc_copy_value((cx_ptr)&(__this->extra)", source);
             Assert.Contains($"offsetof(struct {identity.CIdentifier}, id)", source);
             Assert.Contains("->id = id;", source);
             Assert.DoesNotContain("_unknowntype_", header);
@@ -755,7 +929,7 @@ public sealed class GenericFoundationTests
             Assert.True(innerTemplate >= 0 && outerTemplate > innerTemplate, header);
             Assert.Contains($"struct {innerType} inner;", header);
             Assert.Contains($"struct {innerType} initial", header);
-            Assert.Contains("__this->inner = initial;", source);
+            Assert.Contains("cx_gc_copy_value((cx_ptr)&(__this->inner)", source);
             Assert.DoesNotContain("_unknowntype_", header);
         }
         finally
@@ -821,8 +995,10 @@ public sealed class GenericFoundationTests
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var source = File.ReadAllText(Path.Combine(directory, "generic_null_initializers.c"));
 
-            Assert.Contains("__this->value = CX_NULL;", source);
-            Assert.Contains("__this->values = CX_NULL;", source);
+            Assert.Contains(
+                "cx_gc_store_reference((cx_ptr*)&(__this->value)", source);
+            Assert.Contains(
+                "cx_gc_store_reference((cx_ptr*)&(__this->values)", source);
         }
         finally
         {
@@ -1005,7 +1181,8 @@ public sealed class GenericFoundationTests
             Assert.Contains($"offsetof(struct {identity.CIdentifier}, first)", source);
             Assert.Contains($"offsetof(struct {identity.CIdentifier}, second)", source);
             Assert.Contains($"((struct {identity.CIdentifier}*)", source);
-            Assert.Contains("->first = value;", source);
+            Assert.Contains("cx_gc_copy_value((cx_ptr)&(", source);
+            Assert.DoesNotContain("->first = value;", source);
             Assert.Contains("return ((struct ", source);
             Assert.Contains(".fieldCount = 2", source);
             Assert.DoesNotContain("_unknowntype_", source);
@@ -1263,7 +1440,9 @@ public sealed class GenericFoundationTests
             var source = File.ReadAllText(Path.Combine(directory, "generic_constructor_value.c"));
             Assert.Contains("void* initial", header);
             Assert.Contains("void* initial", source);
-            Assert.Contains("__this->value = initial;", source);
+            Assert.Contains("cx_gc_store_reference(", source);
+            Assert.Contains("__this->value", source);
+            Assert.Contains("initial", source);
             foreach (var instance in project.GenericTypeInstances)
             {
                 var identity = instance.Type.ConstructedIdentity!;
@@ -1421,7 +1600,7 @@ public sealed class GenericFoundationTests
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var source = File.ReadAllText(Path.Combine(directory, "generic_property_this.c"));
             Assert.Contains("return (__this)->value;", source);
-            Assert.Contains("(__this)->value = value;", source);
+            Assert.Contains("cx_gc_store_reference((cx_ptr*)&((__this)->value)", source);
         }
         finally
         {
@@ -1554,7 +1733,7 @@ public sealed class GenericFoundationTests
             Assert.Contains("void generic_property_setter_Box_Value___set", header);
             Assert.Contains("void* value", header);
             Assert.Contains("void* value", source);
-            Assert.Contains("__this->stored = value;", source);
+            Assert.Contains("cx_gc_store_reference((cx_ptr*)&(__this->stored)", source);
             foreach (var instance in project.GenericTypeInstances)
             {
                 var identity = instance.Type.ConstructedIdentity!;
@@ -1620,8 +1799,8 @@ public sealed class GenericFoundationTests
             Assert.Contains("cx_ptr second;", header);
             Assert.Contains("void* left", header);
             Assert.Contains("void* right", header);
-            Assert.Contains("__this->first = left;", source);
-            Assert.Contains("__this->second = right;", source);
+            Assert.Contains("cx_gc_store_reference((cx_ptr*)&(__this->first)", source);
+            Assert.Contains("cx_gc_store_reference((cx_ptr*)&(__this->second)", source);
             foreach (var instance in project.GenericTypeInstances)
             {
                 var identity = instance.Type.ConstructedIdentity!;
@@ -1720,7 +1899,9 @@ public sealed class GenericFoundationTests
                     $"struct generic_class_method_{parameterType.Name}* initial",
                     source);
             }
-            Assert.Contains("__this->value = initial;", source);
+            Assert.Contains("cx_gc_store_reference(", source);
+            Assert.Contains("__this->value", source);
+            Assert.Contains("initial", source);
             foreach (var instance in project.GenericTypeInstances)
             {
                 var identity = instance.Type.ConstructedIdentity!;
@@ -1844,6 +2025,12 @@ public sealed class GenericFoundationTests
                 values.Set(2u, 91L);
                 return values.Get(2u) + (values.Length > 0u ? 1L : 0L);
             }
+            public class Node {}
+            public bool ReadWriteReference(Node node) {
+                Buffer<Node> values = new Buffer<Node>(1u);
+                values.Set(0u, node);
+                return values.Get(0u) == node;
+            }
             """));
         new SemanticBinder().Bind(project);
 
@@ -1862,6 +2049,7 @@ public sealed class GenericFoundationTests
             Assert.DoesNotContain("struct void*", source);
             Assert.Contains("sizeof(cx_int)", source);
             Assert.Contains("sizeof(cx_long)", source);
+            Assert.Contains("cx_gc_store_reference(", source);
         }
         finally
         {
@@ -1996,7 +2184,8 @@ public sealed class GenericFoundationTests
 
             Assert.DoesNotContain("_unknowntype_", source);
             Assert.Contains(closedConstructor.SpecializationName!, source);
-            Assert.Contains("__this->Value = (struct", source);
+            Assert.Contains("cx_gc_store_reference(", source);
+            Assert.Contains("__this->Value", source);
         }
         finally
         {

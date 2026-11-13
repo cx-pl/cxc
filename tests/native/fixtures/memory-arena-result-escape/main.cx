@@ -1,0 +1,28 @@
+import System;
+import System.Threading.Tasks;
+
+public class ArenaAsyncPayloadNode {}
+
+public struct ArenaAsyncPayloadLeaf {
+    public ArenaAsyncPayloadNode Reference;
+}
+
+public struct ArenaAsyncPayloadValue {
+    public ArenaAsyncPayloadLeaf Nested;
+}
+
+public static class ArenaResultEscape {
+    private static ArenaAsyncPayloadValue CreateScopedValue() {
+        ArenaAsyncPayloadValue value = default;
+        value.Nested.Reference = new ArenaAsyncPayloadNode();
+        return value;
+    }
+
+    public static void Trigger() {
+        Task<ArenaAsyncPayloadValue> result =
+            Memory.WithArenaAsync<ArenaAsyncPayloadValue>(
+                () => new Task<ArenaAsyncPayloadValue>(CreateScopedValue()));
+        TaskScheduler.RunUntil(result);
+        result.GetResult();
+    }
+}

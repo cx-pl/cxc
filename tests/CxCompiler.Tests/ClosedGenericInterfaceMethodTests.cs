@@ -8,6 +8,161 @@ namespace CxCompiler.Tests;
 public sealed class ClosedGenericInterfaceMethodTests
 {
     [Fact]
+    public void GenericFunctionSupportsGuardedSafeCastLocalReturn()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_guarded_safe_cast_return");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface IAsyncSequence<T> {}
+            public class Plan<T> {
+                public string Kind;
+                public object Source;
+                public constructor(string kind, object source) {
+                    Kind = kind;
+                    Source = source;
+                }
+            }
+            public class Sequence : IAsyncSequence<int> {}
+            public class Provider {
+                public IAsyncSequence<T> Stream<T>(Plan<T> plan) {
+                    if (plan.Kind != "Source") {
+                        throw new System.InvalidOperationException(
+                            "operator plan rejected");
+                    }
+                    IAsyncSequence<T> source =
+                        plan.Source as IAsyncSequence<T>;
+                    if (source == null) {
+                        throw new System.InvalidOperationException(
+                            "invalid source rejected");
+                    }
+                    return source;
+                }
+            }
+            public int Run() {
+                Plan<int> plan = new Plan<int>("Source", new Sequence());
+                return new Provider().Stream<int>(plan) == null ? 1 : 0;
+            }
+            """));
+        new SemanticBinder().Bind(project);
+
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-guarded-safe-cast-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(
+                directory, "generic_guarded_safe_cast_return.c"));
+            Assert.Contains("operator plan rejected", source);
+            Assert.Contains("invalid source rejected", source);
+            Assert.DoesNotContain("_unknowntype_", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ClosedGenericForwardingPropertyUsesClosedInterfaceReturnType()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "closed_generic_forwarding_property_return_type");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface IAsyncEnumerator<T> {
+                T Current { const get; }
+            }
+            public class Value<T> : IAsyncEnumerator<T> {
+                private T _value;
+                public constructor(T value) { _value = value; }
+                public T Current { const get { return _value; } }
+            }
+            public class ForwardingValue<T> : IAsyncEnumerator<T> {
+                private IAsyncEnumerator<T> _source;
+                public constructor(IAsyncEnumerator<T> source) { _source = source; }
+                public T Current { const get { return _source.Current; } }
+            }
+            public int Run() {
+                IAsyncEnumerator<int> source = new Value<int>(42);
+                IAsyncEnumerator<int> forwarded = new ForwardingValue<int>(source);
+                return forwarded.Current;
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-closed-generic-forward-property-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(
+                directory, "closed_generic_forwarding_property_return_type.c"));
+            var forwardingThunk = System.Text.RegularExpressions.Regex.Match(
+                source,
+                @"static cx_int [^\r\n]*___iface_thunk_[^\r\n]*slot_1[^\r\n]*\{(?<body>[^}]+)\}");
+            Assert.True(forwardingThunk.Success);
+            Assert.Contains("cx_int (*)(cx_ptr)", forwardingThunk.Groups["body"].Value);
+            Assert.Contains(".vtable", forwardingThunk.Groups["body"].Value);
+            Assert.Contains("[1].function", forwardingThunk.Groups["body"].Value);
+            Assert.DoesNotContain("ForwardingValue_Current___const_get((const struct", source);
+            Assert.DoesNotContain("_unknowntype_", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ClosedReferenceGenericOwnerAllowsNullReferenceFieldInitialization()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "closed_reference_generic_null_reference_field");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public interface IAsyncEnumerator<T> {
+                T Current { const get; }
+            }
+            public class State {}
+            public class ReferenceForwarder<T> : IAsyncEnumerator<T> {
+                private IAsyncEnumerator<T> _source;
+                private State _state;
+                public constructor(IAsyncEnumerator<T> source) {
+                    _source = source;
+                    _state = null;
+                }
+                public T Current { const get { return _source.Current; } }
+            }
+            public class Client {
+                public string Read(IAsyncEnumerator<string> source) {
+                    ReferenceForwarder<string> forwarder =
+                        new ReferenceForwarder<string>(source);
+                    return forwarder.Current;
+                }
+            }
+            """));
+        new SemanticBinder().Bind(project);
+
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-closed-reference-generic-null-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(
+                directory, "closed_reference_generic_null_reference_field.c"));
+            Assert.Contains("ReferenceForwarder", source);
+            Assert.Contains("cx_generic_", source);
+            Assert.DoesNotContain("_unknowntype_", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ClosedGenericStructInterfaceThunkSupportsConcreteWhileMutations()
     {
         var project = CxProject.CreateDefaultApplicationProject(
@@ -531,6 +686,7 @@ public sealed class ClosedGenericInterfaceMethodTests
     {
         var project = CxProject.CreateDefaultApplicationProject("closed_generic_interface_method");
         project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class IdentityReference { }
             public interface IIdentity<T> {
                 T Echo(T first, T value, int ignored);
                 void Write(T ignored, T value, int unused);
@@ -617,6 +773,10 @@ public sealed class ClosedGenericInterfaceMethodTests
                 if (boxed.ReadCounter() != 7) return -3;
                 boxed.InitializeCounters(11);
                 if (boxed.ReadCounter() != 11 || boxed.ReadOtherCounter() != 22) return -4;
+                Identity<IdentityReference> referenceIdentity = default;
+                IIdentity<IdentityReference> referenceBoxed =
+                    (IIdentity<IdentityReference>)referenceIdentity;
+                referenceBoxed.ClearValue();
                 return boxed.Echo(0, 42, 0);
             }
             """));
@@ -643,6 +803,8 @@ public sealed class ClosedGenericInterfaceMethodTests
             Assert.Contains("return ((cx_int){ 0 });", source);
             Assert.Contains("->Counter = value;", source);
             Assert.Contains("->Counter = (4 - 4);", source);
+            Assert.Contains("cx_gc_store_reference", source);
+            Assert.Contains("__root)->Value", source);
             Assert.Contains("Counter + amount", source);
             Assert.Contains("Counter =", source);
             Assert.Contains("OtherCounter", source);

@@ -1,0 +1,16 @@
+import System;
+import Shared;
+
+namespace App;
+
+public static class CrossModuleDiProbe {
+    public extern static TypeInfo ForceTypeCollision(
+        TypeInfo typeInfo, TypeInfo registeredType);
+
+    public static int Run() {
+        TypeInfo registeredType = CrossModuleDi.GetServiceType();
+        TypeInfo sameNameOtherModuleType = typeof(CrossModuleDiProbe);
+        TypeInfo collisionType = ForceTypeCollision(sameNameOtherModuleType, registeredType);
+        return CrossModuleDi.Verify(registeredType, sameNameOtherModuleType, collisionType);
+    }
+}

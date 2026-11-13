@@ -15,7 +15,9 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <ProjectReference Include="..\..\src\CxCompiler.csproj" />
+    <ProjectReference Include="..\..\src\CxCompiler\CxCompiler.csproj" />
+    <ProjectReference Include="..\GeneratorWorkerFixture\GeneratorWorkerFixture.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

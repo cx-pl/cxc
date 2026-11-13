@@ -1,0 +1,20 @@
+namespace Cx.Compiler.Generators;
+
+public final class GeneratorDiagnostic {
+    private string _id;
+    private string _message;
+    private DiagnosticSeverity _severity;
+    private SourceLocation _location;
+
+    public string Id { const get => _id; }
+    public string Message { const get => _message; }
+    public DiagnosticSeverity Severity { const get => _severity; }
+    public SourceLocation Location { const get => _location; }
+
+    public constructor(string id, string message, DiagnosticSeverity severity, SourceLocation location) {
+        _id = id;
+        _message = message;
+        _severity = severity;
+        _location = location;
+    }
+}

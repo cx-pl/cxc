@@ -7,6 +7,236 @@ namespace CxCompiler.Tests;
 public sealed class ReflectionMetadataTests
 {
     [Fact]
+    public void ModuleAnnotationLocationsPreserveCxFileLineAndColumn()
+    {
+        var source = Generate("""
+            @System.AnnotationUsage(targets = "function")
+            public class Note : System.Annotation { public constructor() {} }
+            public class Target {
+                @Note
+                public void Run() {}
+            }
+            """);
+        Assert.Contains("UNNAMED___annotation_sources[]", source);
+        Assert.Contains("{ \"test.cx\", 4u, 5u }", source);
+        Assert.Contains(".annotationSources = UNNAMED___annotation_sources", source);
+    }
+
+    [Fact]
+    public void CustomExceptionTypesInheritCoreExceptionProperties()
+    {
+        var source = Generate("""
+            public class CustomError : System.Exception {
+                public constructor() : base("detail") {}
+            }
+            public class Reader {
+                public string Message(CustomError error) { return error.Message; }
+            }
+            """);
+        Assert.Contains("cxcore_System_Exception_Message___const_get", source);
+    }
+
+    [Fact]
+    public void ModuleArrayReadersPreserveValueReferenceAndInterfaceElementLayouts()
+    {
+        var source = Generate("""
+            public interface IRow {}
+            public class Row : IRow {}
+            public class Data {
+                public static int[] Numbers() { return new int[0u]; }
+                public static Row[] Rows() { return new Row[0u]; }
+                public static IRow[] Contracts() { return new IRow[0u]; }
+            }
+            """);
+        Assert.Contains(".arrayReaderCount = 3u", source);
+        Assert.Contains("sizeof(cx_int), &cxcore_System_Int___typeinfo, 1u, maximumLength", source);
+        Assert.Contains("sizeof(struct unnamed_Row*), &unnamed_Row___typeinfo, 0u, maximumLength", source);
+        Assert.Contains("sizeof(struct cx_iface_ref), &unnamed_IRow___typeinfo, 2u, maximumLength", source);
+    }
+
+    [Fact]
+    public void ClosedReferenceTypesInitializeNonGenericInterfaceMetadataInSharedModules()
+    {
+        var source = Generate("""
+            public interface IRow { object Read(); }
+            public class Row<T> : IRow {
+                private T _value;
+                public constructor(T value) { _value = value; }
+                public object Read() { return _value as object; }
+            }
+            public class Data { public object Create() { return new Row<int>(7); } }
+            """);
+        Assert.Matches(@"___interfaces\[0\] = \(struct cx_interface_impl\)\{ &unnamed_IRow___typeinfo, cx_generic_", source);
+    }
+
+    [Fact]
+    public void VariadicAnnotationPoliciesWorkBeforeTheirTypeDeclaration()
+    {
+        var source = Generate("""
+            public class Target { @Bag(1, true, null) @Bag() public void Run() {} }
+            @System.AnnotationUsage(targets = "function", repeatable = true, variadic = true)
+            public class Bag : System.Annotation { public constructor(object[] values) {} }
+            """);
+        Assert.Contains("\"unnamed.Bag\"", source);
+        Assert.Contains("\"argument0\", \"1\"", source);
+        Assert.Contains("cx_bool value", source);
+        Assert.Contains(".annotationCount = 3u", source);
+    }
+
+    [Fact]
+    public void VariadicAnnotationsRejectNamedArguments()
+    {
+        var error = Assert.Throws<CxCompiler.Model.Errors.CompilationErrorException>(() => Generate("""
+            @System.AnnotationUsage(targets = "function", variadic = true)
+            public class Bag : System.Annotation { public constructor(object[] values) {} }
+            public class Target { @Bag(values = 1) public void Run() {} }
+            """));
+        Assert.Contains("positional constant arguments only", error.Message);
+    }
+
+    [Fact]
+    public void VariadicAnnotationPolicyValidatesItsConstructorContract()
+    {
+        var error = Assert.Throws<CxCompiler.Model.Errors.CompilationErrorException>(() => Generate("""
+            @System.AnnotationUsage(variadic = true)
+            public class BadBag : System.Annotation { public constructor(int value) {} }
+            """));
+        Assert.Contains("public constructor taking object[]", error.Message);
+    }
+
+    [Fact]
+    public void TypedAnnotationValuesPreserveDeclaredWidthsAndEmbeddedNullStrings()
+    {
+        var source = Generate("""
+            @System.AnnotationUsage(targets = "function")
+            public class Values : System.Annotation {
+                public constructor(sbyte small, ulong big, string text, char control) {}
+            }
+            public class Target {
+                @Values(-8, 18446744073709551615ul, "a\0b", '\b')
+                public void Run() {}
+            }
+            """);
+        Assert.Contains("cx_sbyte value =", source);
+        Assert.Contains("cx_ulong value =", source);
+        Assert.Contains("18446744073709551615ULL", source);
+        Assert.Contains("0x61, 0x00, 0x62", source);
+        Assert.Contains("&cxcore_System_SByte___typeinfo", source);
+        Assert.Contains("&cxcore_System_ULong___typeinfo", source);
+        Assert.Contains("cx_char value = (cx_char)(8ULL)", source);
+    }
+
+    [Fact]
+    public void AnnotationFloatConstantsRejectOverflowAfterConversion()
+    {
+        var error = Assert.Throws<CxCompiler.Model.Errors.CompilationErrorException>(() => Generate("""
+            @System.AnnotationUsage(targets = "function")
+            public class Note : System.Annotation { public constructor(float value) {} }
+            public class Target { @Note(3.5e38) public void Run() {} }
+            """));
+        Assert.Contains("outside float range", error.Message);
+    }
+
+    [Fact]
+    public void ModuleAnnotationsRetainResolvedIdentityAndBoundDefaults()
+    {
+        var source = Generate("""
+            @System.AnnotationUsage(targets = "function")
+            public class Note : System.Annotation {
+                public constructor(string text, int priority = 7) {}
+            }
+            public class Target {
+                @Note("example")
+                public void Run() {}
+            }
+            """);
+        Assert.Contains(".formatVersion = 1u", source);
+        Assert.Contains("\"unnamed.Note\"", source);
+        Assert.Contains("\"function\", \"Run\"", source);
+        Assert.Contains("{ \"priority\", \"7\",", source);
+        Assert.Contains("{ \"text\", \"\\\"example\\\"\",", source);
+        Assert.Contains("&unnamed_Target___typeinfo, 0, -1", source);
+        Assert.Contains(".annotationCount = 2u", source);
+    }
+
+    [Fact]
+    public void ModuleMetadataPreservesNoEscapeCallContract()
+    {
+        var source = Generate("""
+            import System.Interop;
+            public class Inspector {
+                @NoEscape public extern void Inspect(object value);
+            }
+            """);
+
+        Assert.Contains("cxcore.System.Interop.NoEscape", source);
+        Assert.Contains("\"function\", \"Inspect\"", source);
+        Assert.Contains("CX_REFLECTION_FLAG_FUNCTION_NO_ESCAPE", source);
+    }
+
+    [Fact]
+    public void ReflectionFunctionEffectFlagsIncludeInheritedNoEscapeContract()
+    {
+        var source = Generate("""
+            import System.Interop;
+            public class Reader {
+                @NoEscape public virtual void Read(object value) {}
+            }
+            public class SpecializedReader : Reader {
+                public override void Read(object value) {}
+            }
+            """);
+
+        // Two synthetic core comparer members plus the declared slot and override.
+        Assert.Equal(4, source.Split("CX_REFLECTION_FLAG_FUNCTION_NO_ESCAPE").Length - 1);
+    }
+
+    [Fact]
+    public void CurrentModuleCallsAndMethodValuesUseTheCallingModuleDescriptor()
+    {
+        var source = Generate("""
+            import System.Reflection;
+            public class Modules {
+                public ModuleInfo Read() { return ModuleInfo.Current(); }
+                public delegate() => ModuleInfo Factory() { return ModuleInfo.Current; }
+            }
+            """);
+        Assert.Contains("cx_module_info_wrap(__cx_module_info_UNNAMED())", source);
+        Assert.DoesNotContain("cxcore_System_Reflection_ModuleInfo_Current(", source);
+    }
+
+    [Fact]
+    public void ModuleDescriptorListsOnlyPublicTypesInStableOrder()
+    {
+        var source = Generate("""
+            public class Visible {
+                private Hidden _value;
+                public class Nested {}
+            }
+            class Hidden { public class Inner {} }
+            public interface IVisible {}
+            public enum Mode { Off, On }
+            public delegate void Handler(int value);
+            """);
+
+        var start = source.IndexOf("UNNAMED___module_types[]", StringComparison.Ordinal);
+        Assert.True(start >= 0);
+        var end = source.IndexOf("};", start, StringComparison.Ordinal);
+        var entries = source[start..end];
+        Assert.Contains("&unnamed_Visible___typeinfo", entries);
+        Assert.Contains("&unnamed_Visible_Nested___typeinfo", entries);
+        Assert.Contains("&unnamed_IVisible___typeinfo", entries);
+        Assert.Contains("&unnamed_Mode___typeinfo", entries);
+        Assert.Contains("&unnamed_Handler___typeinfo", entries);
+        Assert.DoesNotContain("Hidden", entries);
+        Assert.Contains(".typeCount = 5u", source);
+        Assert.Contains(".referenceCount = 0u", source);
+        Assert.True(entries.IndexOf("IVisible", StringComparison.Ordinal) <
+            entries.IndexOf("Mode", StringComparison.Ordinal));
+        Assert.Contains("return &UNNAMED___module_info;", source);
+    }
+
+    [Fact]
     public void EmitsFieldsFunctionsConstructorsPropertiesAndParameters()
     {
         var source = Generate("""
@@ -38,23 +268,64 @@ public sealed class ReflectionMetadataTests
     }
 
     [Fact]
-    public void EmitsInheritedInterfacesNestedTypesAndGenericArity()
+    public void ReflectionFieldMetadataRecordsRawPointerAndFunctionValueLayouts()
     {
         var source = Generate("""
+            public delegate int Callback(int value);
+            public struct Container {
+                private ptr _state;
+                public Callback _callback;
+            }
+            """);
+
+        Assert.Contains("CX_REFLECTION_FLAG_FIELD_POINTER", source);
+        Assert.Contains("CX_REFLECTION_FLAG_FIELD_FUNCTION_VALUE", source);
+        Assert.Contains("sizeof(((struct unnamed_Container*)0)->_state)", source);
+        Assert.Contains("sizeof(((struct unnamed_Container*)0)->_callback)", source);
+    }
+
+    [Fact]
+    public void EmitsInheritedInterfacesNestedTypesAndGenericArity()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("nested_generic_reflection");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
             public interface IBase {}
             public interface IDerived : IBase {}
             public class Outer<T> {
                 public class Nested : IDerived {}
             }
-            """);
+            public Outer<int>.Nested CreateNested() {
+                return new Outer<int>.Nested();
+            }
+            """));
+        new SemanticBinder().Bind(project);
+        var nested = Assert.Single(project.GenericTypeInstances);
+        var nestedIdentity = nested.Type.ConstructedIdentity!.CIdentifier;
+        var outputDirectory = Path.Combine(
+            Path.GetTempPath(), $"cxc-nested-generic-reflection-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(outputDirectory);
+            CCodeOutputGenerator.GenerateOutput(
+                project, Path.Combine(outputDirectory, "input.cx"));
+            var source = File.ReadAllText(
+                Path.Combine(outputDirectory, "nested_generic_reflection.c"));
 
-        Assert.Contains("unnamed_Outer___typeinfo", source);
-        Assert.Contains(".GenericArity = 1", source);
-        Assert.Contains("CX_REFLECTION_FLAG_TYPE_GENERIC", source);
-        Assert.Contains("unnamed_Outer_Nested___typeinfo", source);
-        Assert.Contains("unnamed_Outer_Nested___interfaces", source);
-        Assert.Contains("&unnamed_IBase___typeinfo", source);
-        Assert.Contains("&unnamed_IDerived___typeinfo", source);
+            Assert.Contains("nested_generic_reflection_Outer___typeinfo", source);
+            Assert.Contains(".GenericArity = 1", source);
+            Assert.Contains("CX_REFLECTION_FLAG_TYPE_GENERIC", source);
+            Assert.Contains("nested_generic_reflection_Outer_Nested___typeinfo", source);
+            Assert.Contains($"{nestedIdentity}___interfaces", source);
+            Assert.Contains("&nested_generic_reflection_IBase___typeinfo", source);
+            Assert.Contains("&nested_generic_reflection_IDerived___typeinfo", source);
+        }
+        finally
+        {
+            if (Directory.Exists(outputDirectory))
+            {
+                Directory.Delete(outputDirectory, recursive: true);
+            }
+        }
     }
 
     [Fact]
@@ -312,7 +583,10 @@ public sealed class ReflectionMetadataTests
             @"\.createInstance = cx_generic_[0-9a-f]+___reflection_create_instance,",
             source);
         Assert.Contains(
-            "unnamed_Marker___constructor(__instance);",
+            "return cx_generic_",
+            source);
+        Assert.Matches(
+            @"return cx_generic_[0-9a-f]+___reflection_invoke_\d+\(CX_NULL, CX_NULL, 0u\);",
             source);
     }
 

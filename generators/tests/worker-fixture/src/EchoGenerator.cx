@@ -1,0 +1,16 @@
+import Cx.Compiler.Generators;
+
+namespace WorkerFixture;
+
+public final class EchoGenerator : ICxGenerator {
+    public void Generate(GeneratorInputSnapshot snapshot,
+        AdditionalText[] additionalFiles, GeneratorOutputContext output) {
+        if (snapshot == null || output == null || additionalFiles.Length != 1u ||
+            additionalFiles[0u].Path != "worker-input.txt" ||
+            additionalFiles[0u].Content != "UTF-8 payload") {
+            throw new System.Exception("The generator worker did not receive its inputs.");
+        }
+        output.AddSource("WorkerGenerated.g.cx",
+            "public final class WorkerGenerated { public static int GetValue() { return 42; } }");
+    }
+}

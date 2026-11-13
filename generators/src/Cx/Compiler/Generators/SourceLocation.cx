@@ -1,0 +1,23 @@
+namespace Cx.Compiler.Generators;
+
+public struct SourceLocation {
+    private string _path;
+    private uint _startLine;
+    private uint _startColumn;
+    private uint _endLine;
+    private uint _endColumn;
+
+    public string Path { const get => _path; }
+    public uint StartLine { const get => _startLine; }
+    public uint StartColumn { const get => _startColumn; }
+    public uint EndLine { const get => _endLine; }
+    public uint EndColumn { const get => _endColumn; }
+
+    public constructor(string path, uint startLine, uint startColumn, uint endLine, uint endColumn) {
+        _path = path;
+        _startLine = startLine;
+        _startColumn = startColumn;
+        _endLine = endLine;
+        _endColumn = endColumn;
+    }
+}

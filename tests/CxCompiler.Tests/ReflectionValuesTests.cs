@@ -119,4 +119,45 @@ public sealed class ReflectionValuesTests
             if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
         }
     }
+
+    [Fact]
+    public void ClosedGenericStructReflectionInvokersCheckReferenceFieldStores()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("generic_reflection_reference_store");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Node { public constructor() { } }
+            public struct GenericRecord<T> {
+                public T Value;
+                public constructor(T value) { Value = value; }
+                public void SetValue(T value) { Value = value; }
+                public void SetValueFromSecond(T ignored, T value) { Value = value; }
+            }
+            public object Create() { return new GenericRecord<Node>(new Node()); }
+            """));
+        new SemanticBinder().Bind(project);
+
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-reflection-reference-store-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(
+                directory, "generic_reflection_reference_store.c"));
+
+            var valueAssignments = string.Join(Environment.NewLine,
+                source.Split('\n').Where(line =>
+                    line.Contains("__instance->Value", StringComparison.Ordinal)));
+            Assert.True(source.Contains(
+                "cx_gc_store_reference((cx_ptr*)&(__instance->Value)", StringComparison.Ordinal),
+                valueAssignments);
+            Assert.False(valueAssignments.Split('\n').Any(line =>
+                line.Contains("__instance->Value =", StringComparison.Ordinal)),
+                valueAssignments);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
 }

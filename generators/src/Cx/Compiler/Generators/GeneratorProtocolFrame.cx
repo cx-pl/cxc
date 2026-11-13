@@ -1,0 +1,50 @@
+import System;
+import System.Interop;
+
+namespace Cx.Compiler.Generators;
+
+// Owns its payload buffer. Dispose the frame after consuming the payload.
+public final class GeneratorProtocolFrame : IDisposable {
+    private ushort _version;
+    private GeneratorMessageKind _kind;
+    private ulong _requestId;
+    private NativeBuffer _payload;
+    private bool _disposed;
+
+    public ushort Version { const get => _version; }
+    public GeneratorMessageKind Kind { const get => _kind; }
+    public ulong RequestId { const get => _requestId; }
+    public NativeBuffer Payload {
+        const get {
+            EnsureAlive();
+            return _payload;
+        }
+    }
+    public uint PayloadLength {
+        const get {
+            EnsureAlive();
+            return (uint)_payload.ByteLength;
+        }
+    }
+
+    public constructor(ushort version, GeneratorMessageKind kind,
+        ulong requestId, NativeBuffer payload) {
+        if (payload == null) throw new Exception("A protocol payload buffer is required.");
+        _version = version;
+        _kind = kind;
+        _requestId = requestId;
+        _payload = payload;
+    }
+
+    public void Dispose() {
+        if (!_disposed) {
+            _payload.Dispose();
+            _payload = null;
+            _disposed = true;
+        }
+    }
+
+    private void EnsureAlive() const {
+        if (_disposed) throw new Exception("The protocol frame has been disposed.");
+    }
+}

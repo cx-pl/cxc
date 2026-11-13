@@ -1,0 +1,7 @@
+name: CxCompilerGenerators
+type: Library
+version: 0.1.0-alpha
+description: CX-authored incremental source generator SDK
+licence: MIT
+project_references:
+- ../../cxcore/src/cxcore.cxproj

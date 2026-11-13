@@ -1,0 +1,249 @@
+using CxCompiler.Model.Common;
+using CxCompiler.Model.Errors;
+
+namespace CxCompiler.Model.Types;
+
+public class ClassDeclaration : DeclarationBase
+{
+    public string? ProjectName { get; internal set; }
+    public NativeTypeMetadata? NativeType { get; internal set; }
+    public Visibility Visibility { get; }
+    public ClassType ClassType { get; }
+    public string? CustomClassTypeName { get; }
+    public bool IsPartial { get; }
+    public bool IsAbstract { get; }
+    public bool IsFinal { get; }
+    public bool IsStatic { get; }
+    public string[] GenericTypeNames { get; }
+    public string[] DeclaredGenericTypeNames { get; }
+    public IReadOnlyList<GenericTypeConstraint> GenericConstraints { get; private set; }
+    public IReadOnlyList<GenericConceptConstraint> ConceptConstraints { get; }
+
+    private readonly List<TypeBase> _baseTypes = [];
+    public IReadOnlyList<TypeBase> BaseTypes => _baseTypes.AsReadOnly();
+    public TypeBase? BaseClassType { get; private set; }
+    public ClassDeclaration? BaseClassDeclaration { get; private set; }
+
+    private readonly List<ClassDeclaration> _baseInterfaces = [];
+    public IReadOnlyList<ClassDeclaration> BaseInterfaces => _baseInterfaces;
+
+    private readonly List<VirtualMethodSlot> _virtualMethodSlots = [];
+    public IReadOnlyList<VirtualMethodSlot> VirtualMethodSlots => _virtualMethodSlots;
+
+    private readonly List<InterfaceDispatchSlot> _interfaceDispatchSlots = [];
+    public IReadOnlyList<InterfaceDispatchSlot> InterfaceDispatchSlots => _interfaceDispatchSlots;
+
+    private readonly List<ClassDeclaration> _interfaceUpcastTargets = [];
+    public IReadOnlyList<ClassDeclaration> InterfaceUpcastTargets => _interfaceUpcastTargets;
+
+    private readonly List<InterfaceDispatchTable> _interfaceDispatchTables = [];
+    public IReadOnlyList<InterfaceDispatchTable> InterfaceDispatchTables =>
+        _interfaceDispatchTables;
+
+    public DeclarationScope MemberDeclarations { get; }
+
+    public ClassDeclaration(
+        IReadOnlyCollection<ClassModifier> classModifiers,
+        bool partial,
+        ClassType classType,
+        string? customClassTypeName,
+        string name,
+        string[] genericTypeNames,
+        DeclarationScope declarationScope,
+        IReadOnlyList<GenericTypeConstraint>? genericConstraints = null,
+        IReadOnlyList<GenericConceptConstraint>? conceptConstraints = null,
+        IReadOnlyList<string>? containingGenericTypeNames = null)
+        : base("class", declarationScope.FullNamespace, name)
+    {
+        Visibility = Visibility.Private;
+        IsPartial = partial;
+        ClassType = classType;
+        CustomClassTypeName = customClassTypeName;
+        MemberDeclarations = declarationScope;
+        DeclaredGenericTypeNames = genericTypeNames;
+        var containingParameters = (containingGenericTypeNames ?? []).ToArray();
+        var parameterNames = containingParameters.Concat(genericTypeNames)
+            .ToHashSet(StringComparer.Ordinal);
+        for (var index = 0; index < containingParameters.Length; index++)
+        {
+            if (!genericTypeNames.Contains(
+                containingParameters[index], StringComparer.Ordinal))
+            {
+                continue;
+            }
+
+            var candidate = $"__cx_outer_{index}_{containingParameters[index]}";
+            var suffix = 0;
+            while (!parameterNames.Add(candidate))
+            {
+                candidate = $"__cx_outer_{index}_{containingParameters[index]}_{++suffix}";
+            }
+            containingParameters[index] = candidate;
+        }
+        GenericTypeNames = containingParameters.Concat(genericTypeNames).ToArray();
+        GenericConstraints = genericConstraints ?? [];
+        ConceptConstraints = conceptConstraints ?? [];
+
+        foreach (var modifier in classModifiers)
+        {
+            switch (modifier)
+            {
+                case ClassModifier.Public:
+                case ClassModifier.Protected:
+                case ClassModifier.Internal:
+                    Visibility = MapVisibility(modifier);
+                    break;
+
+                case ClassModifier.Abstract:
+                    ValidateModifier(modifier);
+                    IsAbstract = true;
+                    break;
+
+                case ClassModifier.Final:
+                    ValidateModifier(modifier);
+                    IsFinal = true;
+                    break;
+
+                case ClassModifier.Static:
+                    ValidateModifier(modifier);
+                    IsStatic = true;
+                    break;
+            }
+        }
+
+        Visibility MapVisibility(ClassModifier classModifier)
+        {
+            if (Visibility != Visibility.Private)
+            {
+                throw new CompilationErrorException($"Type '{name}' cannot be both '{classModifier.ToString().ToLower()}' and '{Visibility.ToString().ToLower()}'");
+            }
+
+            // TODO: Allow Visibility.Private, ClassModifier.Internal and ClassModifier.Protected only in nested types
+
+            return classModifier switch
+            {
+                ClassModifier.Public => Visibility.Public,
+                ClassModifier.Protected => Visibility.Protected,
+                ClassModifier.Private => Visibility.Private,
+                ClassModifier.Internal => Visibility.Internal,
+                _ => throw new InternalCompilerException($"Invalid visibility modifier '{classModifier.ToString().ToLower()}'")
+            };
+        }
+
+        void ValidateModifier(ClassModifier classModifier)
+        {
+            if (IsAbstract || IsFinal || IsStatic)
+            {
+                throw new CompilationErrorException($"Invalid modifier '{classModifier.ToString().ToLower()}'");
+            }
+        }
+    }
+
+    public void AddBaseType(TypeBase baseType)
+    {
+        _baseTypes.Add(baseType);
+    }
+
+    public void BindBaseTypeParameters(IReadOnlyCollection<string> parameters)
+    {
+        for (var index = 0; index < _baseTypes.Count; index++)
+        {
+            _baseTypes[index] = GenericTypeSubstitution.BindParameters(
+                _baseTypes[index], parameters);
+        }
+    }
+
+    public void BindGenericConstraintParameters(IReadOnlyCollection<string> parameters)
+    {
+        GenericConstraints = GenericConstraints.Select(constraint =>
+            new GenericTypeConstraint(
+                constraint.ParameterName,
+                constraint.Types.Select(type =>
+                    GenericTypeSubstitution.BindParameters(type, parameters)).ToArray(),
+                constraint.Kind))
+            .ToArray();
+    }
+
+    public void MergePartialDeclaration(ClassDeclaration declaration)
+    {
+        if (!IsPartial || !declaration.IsPartial || ClassType != declaration.ClassType ||
+            !GenericTypeNames.SequenceEqual(declaration.GenericTypeNames, StringComparer.Ordinal) ||
+            !GenericConstraintsEquivalent(GenericConstraints, declaration.GenericConstraints) ||
+            CustomClassTypeName != declaration.CustomClassTypeName ||
+            Visibility != declaration.Visibility || IsAbstract != declaration.IsAbstract ||
+            IsFinal != declaration.IsFinal || IsStatic != declaration.IsStatic)
+        {
+            throw new ArgumentException("The class declaration is not compatible with this partial type.", nameof(declaration));
+        }
+
+        _baseTypes.AddRange(declaration._baseTypes);
+        MemberDeclarations.AddDeclarations(declaration.MemberDeclarations.Declarations.ToArray());
+    }
+
+    private static bool GenericConstraintsEquivalent(
+        IReadOnlyList<GenericTypeConstraint> first,
+        IReadOnlyList<GenericTypeConstraint> second)
+    {
+        if (first.Count != second.Count)
+        {
+            return false;
+        }
+        for (var index = 0; index < first.Count; index++)
+        {
+            if (first[index].ParameterName != second[index].ParameterName ||
+                first[index].Kind != second[index].Kind ||
+                first[index].Types.Count != second[index].Types.Count ||
+                !first[index].Types.Zip(second[index].Types)
+                    .All(pair => GenericConstraintTypeName(pair.First) ==
+                        GenericConstraintTypeName(pair.Second)))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static string GenericConstraintTypeName(TypeBase type) => type switch
+    {
+        ArrayType array => $"{GenericConstraintTypeName(array.ElementType)}[]",
+        NamedType named => $"{named.Name}<{string.Join(",", named.TypeArguments.Select(GenericConstraintTypeName))}>",
+        GenericType generic => generic.Name,
+        NullableType nullable => $"{GenericConstraintTypeName(nullable.UnderlyingType)}?",
+        _ => type.Name,
+    };
+
+    public void SetBaseClass(TypeBase baseType, ClassDeclaration? declaration)
+    {
+        BaseClassType = baseType;
+        BaseClassDeclaration = declaration;
+    }
+
+    public void AddBaseInterface(ClassDeclaration declaration)
+    {
+        _baseInterfaces.Add(declaration);
+    }
+
+    public void SetVirtualMethodSlots(IEnumerable<VirtualMethodSlot> slots)
+    {
+        _virtualMethodSlots.Clear();
+        _virtualMethodSlots.AddRange(slots);
+    }
+
+    public void SetInterfaceDispatchSlots(IEnumerable<InterfaceDispatchSlot> slots)
+    {
+        _interfaceDispatchSlots.Clear();
+        _interfaceDispatchSlots.AddRange(slots);
+    }
+
+    public void SetInterfaceUpcastTargets(IEnumerable<ClassDeclaration> interfaces)
+    {
+        _interfaceUpcastTargets.Clear();
+        _interfaceUpcastTargets.AddRange(interfaces);
+    }
+
+    public void SetInterfaceDispatchTables(IEnumerable<InterfaceDispatchTable> tables)
+    {
+        _interfaceDispatchTables.Clear();
+        _interfaceDispatchTables.AddRange(tables);
+    }
+}

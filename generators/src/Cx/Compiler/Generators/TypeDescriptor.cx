@@ -1,0 +1,76 @@
+namespace Cx.Compiler.Generators;
+
+public final class TypeDescriptor {
+    private string _identity;
+    private string _metadataName;
+    private string _moduleName;
+    private string _namespaceName;
+    private string _visibility;
+    private GeneratorValueKind _kind;
+    private bool _isPartial;
+    private bool _isAbstract;
+    private bool _isFinal;
+    private bool _isGenericDefinition;
+    private string[] _genericParameters;
+    private string[] _baseTypeIdentities;
+    private GenericConstraintDescriptor[] _genericConstraints;
+    private MemberDescriptor[] _members;
+    private SourceLocation _location;
+
+    public string Identity { const get => _identity; }
+    public string MetadataName { const get => _metadataName; }
+    public string ModuleName { const get => _moduleName; }
+    public string NamespaceName { const get => _namespaceName; }
+    public string Visibility { const get => _visibility; }
+    public GeneratorValueKind Kind { const get => _kind; }
+    public bool IsPartial { const get => _isPartial; }
+    public bool IsAbstract { const get => _isAbstract; }
+    public bool IsFinal { const get => _isFinal; }
+    public bool IsGenericDefinition { const get => _isGenericDefinition; }
+    public string[] GenericParameters { get => CopyStrings(_genericParameters); }
+    public string[] BaseTypeIdentities { get => CopyStrings(_baseTypeIdentities); }
+    public GenericConstraintDescriptor[] GenericConstraints { get => CopyConstraints(_genericConstraints); }
+    public MemberDescriptor[] Members { get => CopyMembers(_members); }
+    public SourceLocation Location { const get => _location; }
+
+    public constructor(string identity, string metadataName, string moduleName,
+        string namespaceName, string visibility, GeneratorValueKind kind,
+        bool isPartial, bool isAbstract, bool isFinal, bool isGenericDefinition,
+        string[] genericParameters,
+        string[] baseTypeIdentities, GenericConstraintDescriptor[] genericConstraints,
+        MemberDescriptor[] members, SourceLocation location) {
+        _identity = identity;
+        _metadataName = metadataName;
+        _moduleName = moduleName;
+        _namespaceName = namespaceName;
+        _visibility = visibility;
+        _kind = kind;
+        _isPartial = isPartial;
+        _isAbstract = isAbstract;
+        _isFinal = isFinal;
+        _isGenericDefinition = isGenericDefinition;
+        _genericParameters = CopyStrings(genericParameters);
+        _baseTypeIdentities = CopyStrings(baseTypeIdentities);
+        _genericConstraints = CopyConstraints(genericConstraints);
+        _members = CopyMembers(members);
+        _location = location;
+    }
+
+    private string[] CopyStrings(string[] values) {
+        var result = new string[values.Length];
+        for (uint index = 0u; index < values.Length; index += 1u) result[index] = values[index];
+        return result;
+    }
+
+    private MemberDescriptor[] CopyMembers(MemberDescriptor[] values) {
+        var result = new MemberDescriptor[values.Length];
+        for (uint index = 0u; index < values.Length; index += 1u) result[index] = values[index];
+        return result;
+    }
+
+    private GenericConstraintDescriptor[] CopyConstraints(GenericConstraintDescriptor[] values) {
+        var result = new GenericConstraintDescriptor[values.Length];
+        for (uint index = 0u; index < values.Length; index += 1u) result[index] = values[index];
+        return result;
+    }
+}

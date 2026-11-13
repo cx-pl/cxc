@@ -34,11 +34,19 @@ runtime contracts.
 Built-in scalar types are `bool`, `char`, signed `sbyte`, `short`, `int`, `long`,
 unsigned `byte`, `ushort`, `uint`, `ulong`, `float`, `double`, and `decimal`. `string` and
 `object` are reference types; `ptr` is an opaque pointer. `void` is a return type.
-Types can be nullable with `?` and arrays with `[]`. CX also supports enums,
+Types can be nullable with `?` and arrays with `[]`. For fields, properties,
+and function parameters, `T?[]` marks nullable array elements and `T[]?` marks
+the array itself nullable; both levels can be written as `T?[]?`. CX also supports enums,
 structs, classes, interfaces, properties, constructors, generic declarations,
 and generic methods. Generic implementations are specialized for closed types;
 only the supported generic body and layout patterns described by compiler
 diagnostics are accepted.
+
+Nested constructed types specify arguments for each generic segment in order.
+For example, inside `Outer<T>`, a nested `Nested<U>` is named
+`Outer<int>.Nested<string>` when the outer and nested arguments are `int` and
+`string`. The closed nested layout substitutes both argument sets, including
+references to the outer parameter in nested fields and methods.
 
 ### Decimal values
 
@@ -753,6 +761,27 @@ Virtual calls dispatch through class vtables. Interface values carry both a
 dispatch table and an instance pointer; generated interface tables support
 interface upcasts and method/property dispatch. Runtime type metadata supports
 type tests, checked casts, and read-only reflection enumeration. Reflection
+modules export `System.Reflection.ModuleInfo` descriptors. `ModuleInfo.Current()`
+selects the module containing the call; `Types` snapshots its public classes,
+interfaces, structs, enums, and delegates. `ReferenceCount`/`GetReference(index)`
+traverse explicit project dependencies. `TypeInfo.GetModule()` identifies the defining
+module; constructed generic types retain their generic definition's module.
+Native descriptor accessors do not run
+module initializers or allocate managed objects.
+
+`AnnotationCount`/`GetAnnotation(index)` expose annotation applications and typed
+constant arguments without constructing annotation objects. `AnnotationInfo.SourceFile`,
+`SourceLine`, and `SourceColumn` identify the CX annotation application.
+`TypeInfo.GetFunction`
+and `InvokeFunction` use indices matching annotation metadata; unsupported or
+invalid indexed invocations throw catchable exceptions. `TypeInfo.GetInterfaces()`
+and `ModuleInfo.GetGenericArguments(type)` provide interface and closed argument
+snapshots. Array-returning methods can expose bounded `object[]` snapshots through
+`ModuleInfo.ReadFunctionArray`; reading a value does not invoke its provider.
+These are general reflection facilities; annotated test discovery is implemented
+by the ordinary `System.Tests` library.
+
+Reflection
 metadata supports dynamic construction of concrete classes that declare or inherit
 a public parameterless constructor, including closed generic reference classes
 whose supported layout is shared with their generic declaration.
@@ -1024,8 +1053,17 @@ feature.
 `@Name` annotations use exact type names and positional/named constant constructor
 arguments. Named annotation arguments use `name = value`; ordinary calls retain
 `name: value`. User annotations derive from `System.Annotation`; AnnotationUsage
-defines targets and repeatability. `@return:Tag` targets a function result.
-Annotations are compile-time metadata; compilation never executes constructors.
+defines targets, repeatability, and an optional `variadic` policy. `@return:Tag`
+targets a function result. Annotation binding never executes constructors;
+module descriptors retain the applications and typed constant values for reflection.
+
+`@AnnotationUsage(variadic = true)` requires one public constructor taking
+`object[]`. Applications supply zero or more positional scalar, enum, string,
+or null constants; named arguments are rejected. Metadata exposes the expanded
+arguments as `argument0`, `argument1`, and so on, preserving their literal types.
+For ordinary annotations, argument values retain the constructor parameter types
+and include optional defaults. `ModuleInfo.GetAnnotation(index)` exposes both
+bound expressions and boxed values without constructing annotation objects.
 
 `System.Interop.NativeImport` selects a foreign C symbol on a nongeneric extern
 top-level function/static method. Plain extern retains the CX ABI. Native signatures
@@ -1057,6 +1095,32 @@ union storage, packing, alignment, checked offsets and inline `T[count]` fields.
 Native enums have explicit underlying types. sizeof/alignof/offsetof query native
 storage; stackalloc<T>(count) allocates aligned caller storage, limited to 1 MiB.
 Known stack borrows cannot escape or enter a parked blocking native call.
+Passing a stack borrow to a nonblocking native import requires the explicit
+trusted contract `noEscape = true`; the native implementation must not retain
+any pointer argument after returning. Blocking imports reject stack borrows even
+with this contract because the collector may scan while native code is active.
+
+Managed calls without an analyzable body are treated as retaining arena-scoped
+receivers and arguments unless the function carries the trusted
+`System.Interop.NoEscape` annotation. The annotation promises that the function
+does not retain its receiver or any argument after returning. An unknown
+reference-like return value remains potentially arena-scoped even when this
+contract is present. When a source body is available to the current compilation,
+the compiler analyzes it instead of relying on the annotation. Virtual and
+interface dispatch requires the annotation on the declared dispatch slot even
+when known implementations are non-retaining; overrides inherit the slot
+contract, and known implementations are still checked for retention.
+Generated reflection function records preserve this contract in
+`CX_REFLECTION_FLAG_FUNCTION_NO_ESCAPE`, also surfaced in `FunctionInfo.Flags`.
+Async and iterator calls remain opaque across arena scopes: `NoEscape` does not
+authorize deferred work to retain scoped arguments, and reference-like results
+remain possibly arena-scoped.
+
+```cx
+import System.Interop;
+
+@NoEscape public extern void Inspect(object value);
+```
 
 `wchar` is an unsigned 16-bit UTF-16 code unit, distinct from scalar `char` and C
 wchar_t. Out-of-range constant conversions are diagnosed. WideString is immutable:

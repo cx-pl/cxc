@@ -1,0 +1,81 @@
+import System;
+import System.Interop;
+
+namespace Cx.Compiler.Generators;
+
+public final class GeneratorWorkerOutputContext : GeneratorOutputContext {
+    private ulong _requestId;
+    private string[] _hintNames;
+    private string[] _hintNameIndex;
+    private uint _hintCount;
+
+    public constructor(ulong requestId) {
+        _requestId = requestId;
+        _hintNames = new string[8u];
+        _hintNameIndex = new string[16u];
+        _hintCount = 0u;
+    }
+
+    public unsafe void AddSource(string hintName, string cxSource) {
+        if (hintName == null || cxSource == null) {
+            throw new Exception("A generated source requires a hint name and source text.");
+        }
+        var bucket = FindHintBucket(hintName, _hintNameIndex);
+        if (_hintNameIndex[bucket] != null)
+            throw new Exception("A generator emitted a duplicate source hint name.");
+        EnsureHintIndexCapacity();
+        bucket = FindHintBucket(hintName, _hintNameIndex);
+        EnsureHintCapacity();
+        _hintNameIndex[bucket] = hintName;
+        _hintNames[_hintCount] = hintName;
+        _hintCount += 1u;
+        var payload = GeneratorWorkerMessages.EncodeSourceOutput(hintName, cxSource);
+        var frame = new GeneratorProtocolFrame(GeneratorProtocolTransport.CurrentVersion,
+            GeneratorMessageKind.SourceOutput, _requestId, payload);
+        try {
+            GeneratorProtocolTransport.WriteFrame(frame);
+        } finally {
+            frame.Dispose();
+        }
+    }
+
+    public unsafe void ReportDiagnostic(GeneratorDiagnostic diagnostic) {
+        if (diagnostic == null) throw new Exception("A generator diagnostic is required.");
+        var payload = GeneratorWorkerMessages.EncodeDiagnostic(diagnostic);
+        var frame = new GeneratorProtocolFrame(GeneratorProtocolTransport.CurrentVersion,
+            GeneratorMessageKind.Diagnostic, _requestId, payload);
+        try {
+            GeneratorProtocolTransport.WriteFrame(frame);
+        } finally {
+            frame.Dispose();
+        }
+    }
+
+    private void EnsureHintCapacity() {
+        if (_hintCount < _hintNames.Length) return;
+        var replacement = new string[_hintNames.Length * 2u];
+        for (uint index = 0u; index < _hintCount; index += 1u) {
+            replacement[index] = _hintNames[index];
+        }
+        _hintNames = replacement;
+    }
+
+    private void EnsureHintIndexCapacity() {
+        if ((_hintCount + 1u) * 2u <= _hintNameIndex.Length) return;
+        var replacement = new string[_hintNameIndex.Length * 2u];
+        for (uint index = 0u; index < _hintCount; index += 1u) {
+            var name = _hintNames[index];
+            var bucket = FindHintBucket(name, replacement);
+            replacement[bucket] = name;
+        }
+        _hintNameIndex = replacement;
+    }
+
+    private uint FindHintBucket(string hintName, string[] index) {
+        var mask = index.Length - 1u;
+        var bucket = (uint)hintName.GetHashCode() & mask;
+        while (index[bucket] != null && index[bucket] != hintName)
+            bucket = (bucket + 1u) & mask;
+        return bucket;
+    }
+}

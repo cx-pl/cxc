@@ -38,6 +38,8 @@ public sealed class NativeRegistrationTests
         var generated = NativeInteropTests.Generate(project).Source;
         Assert.Contains("cx_interop_registration_create", generated);
         Assert.Contains("cx_interop_registration_acquire", generated);
+        Assert.Contains("cx_interop_registration_enter_logical", generated);
+        Assert.Contains("cx_interop_registration_leave_logical", generated);
         Assert.Contains("cx_interop_registration_release(&registrationScope)", generated);
         Assert.Contains("cx_interop_registration_failed", generated);
     }

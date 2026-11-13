@@ -1,0 +1,27 @@
+namespace Cx.Compiler.Generators;
+
+public final class GenericConstraintDescriptor {
+    private string _parameterName;
+    private string _kind;
+    private string[] _typeIdentities;
+    private string[] _conceptNames;
+
+    public string ParameterName { const get => _parameterName; }
+    public string Kind { const get => _kind; }
+    public string[] TypeIdentities { get => CopyStrings(_typeIdentities); }
+    public string[] ConceptNames { get => CopyStrings(_conceptNames); }
+
+    public constructor(string parameterName, string kind, string[] typeIdentities,
+        string[] conceptNames) {
+        _parameterName = parameterName;
+        _kind = kind;
+        _typeIdentities = CopyStrings(typeIdentities);
+        _conceptNames = CopyStrings(conceptNames);
+    }
+
+    private string[] CopyStrings(string[] values) {
+        var result = new string[values.Length];
+        for (uint index = 0u; index < values.Length; index += 1u) result[index] = values[index];
+        return result;
+    }
+}

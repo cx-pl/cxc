@@ -1,0 +1,936 @@
+import System;
+import System.Collections;
+import System.Interop;
+import System.Threading.Tasks;
+
+public class ArenaAsyncPayload {
+    public int Value;
+}
+
+public class ArenaAsyncConstructionProbe {
+    public ArenaAsyncPayload Payload;
+
+    public constructor() {
+        Memory.WithDurable(() => {
+            Payload = new ArenaAsyncPayload();
+            Payload.Value = 96;
+        });
+        GC.Collect();
+    }
+}
+
+public class GenericOuter<T> {
+    public class Nested<U> {
+        public T OuterValue;
+        public U InnerValue;
+
+        public T ReadOuter() { return OuterValue; }
+    }
+
+    public class Shadowed<T> {
+        public T Value;
+    }
+
+    public class Middle<U> {
+        public class Leaf<V> {
+            public T OuterValue;
+            public U MiddleValue;
+            public V InnerValue;
+        }
+    }
+}
+
+public class ArenaAsyncDerivedException : Exception {
+    private ArenaAsyncPayload _payload;
+
+    public ArenaAsyncPayload Payload { const get => _payload; }
+
+    public constructor(ArenaAsyncPayload payload)
+        : base() {
+        _payload = payload;
+    }
+}
+
+public static class ArenaAsyncProbe {
+    public static int Result;
+    public static uint NativeResourceDisposeCount;
+    public static uint CancellationCallbackCount;
+}
+
+public async Task ReadAfterDelay() {
+    ArenaAsyncPayload payload = new ArenaAsyncPayload();
+    payload.Value = 73;
+    await TaskHandle.Delay(20u);
+    ArenaAsyncProbe.Result = payload.Value;
+}
+
+public async Task ReadAncestorAfterNestedDelay(ArenaAsyncPayload payload) {
+    await TaskHandle.Delay(2u);
+    ArenaAsyncProbe.Result = payload.Value;
+}
+
+public async Task ReadAfterNestedArena() {
+    ArenaAsyncPayload payload = new ArenaAsyncPayload();
+    payload.Value = 78;
+    TaskHandle nested = Memory.WithArenaAsync(() =>
+        ReadAncestorAfterNestedDelay(payload));
+    await nested;
+    ArenaAsyncProbe.Result += 1;
+}
+
+public async Task ReadAfterLoopJoins() {
+    uint index = 0u;
+    while (index < 2u) {
+        TaskHandle child = TaskHandle.Delay(2u);
+        await child;
+        index += 1u;
+        ArenaAsyncProbe.Result = 80;
+    }
+}
+
+public async Task ReadAfterLoopJoinsWithParameter(uint delayMilliseconds) {
+    uint index = 0u;
+    uint delay = delayMilliseconds;
+    while (index < 2u) {
+        TaskHandle child = TaskHandle.Delay(delay + index + 1u);
+        await child;
+        index += 1u;
+        ArenaAsyncProbe.Result = 81;
+    }
+}
+
+public async Task ReadAfterForLoopJoins() {
+    for (uint index = 0u; index < 2u; index += 1u) {
+        TaskHandle child = TaskHandle.Delay(index + 2u);
+        await child;
+        ArenaAsyncProbe.Result = 82;
+    }
+}
+
+public async Task ReadAfterDoWhileLoopJoins() {
+    uint index = 0u;
+    do {
+        TaskHandle child = TaskHandle.Delay(index + 2u);
+        await child;
+        index += 1u;
+        ArenaAsyncProbe.Result = 83;
+    } while (index < 2u);
+}
+
+public async Task ReadAfterScalarAssignmentJoins(uint initialValue) {
+    TaskHandle child = TaskHandle.Delay(2u);
+    uint result = initialValue;
+    result = result + 1u;
+    await child;
+    ArenaAsyncProbe.Result = (int)result;
+}
+
+public async Task ReadAfterLocalDelay() {
+    TaskHandle delay = TaskHandle.Delay(20u);
+    await delay;
+    ArenaAsyncProbe.Result = 74;
+}
+
+public async Task ReadAfterLiteralLocalPrefix() {
+    TaskHandle delay = TaskHandle.Delay(20u);
+    int prefix = 77;
+    bool writeResult = true;
+    await delay;
+    if (writeResult) ArenaAsyncProbe.Result = prefix;
+}
+
+public async Task ReadAfterScalarLocalPrefix(uint delayMilliseconds) {
+    TaskHandle delay = TaskHandle.Delay(20u);
+    uint initialDelay = delayMilliseconds + 1u;
+    uint adjustedDelay = initialDelay + 2u;
+    await delay;
+    if (adjustedDelay > 0u) ArenaAsyncProbe.Result = 78;
+}
+
+public async Task ReadAfterScalarBranchedPrefix(uint delayMilliseconds) {
+    Task child = TaskHandle.Delay(20u);
+    uint adjustedDelay = delayMilliseconds + 1u;
+    if (delayMilliseconds > 0u && adjustedDelay < 100u) {
+        uint thenDelay = adjustedDelay + 1u;
+        await child;
+        int observedAfterJoin = ArenaAsyncProbe.Result;
+    } else {
+        bool useFallback = delayMilliseconds == 0u;
+        await child;
+    }
+    if (adjustedDelay > 0u) ArenaAsyncProbe.Result = 79;
+}
+
+public async Task ReadAfterBranchedLocalDelay(bool chooseFirst) {
+    TaskHandle delay = TaskHandle.Delay(20u);
+    if (chooseFirst) await delay;
+    else await delay;
+    ArenaAsyncProbe.Result = 75;
+}
+
+public async Task UpdateSwitchPayload(ArenaAsyncPayload payload) {
+    await TaskHandle.Delay(2u);
+    payload.Value = 86;
+}
+
+public async Task ReadAfterSwitchJoinedChild(int selector) {
+    ArenaAsyncPayload payload = new ArenaAsyncPayload();
+    Task child = UpdateSwitchPayload(payload);
+    switch (selector) {
+        case 0: {
+            await child;
+            break;
+        }
+        default: {
+            await child;
+            break;
+        }
+    }
+    ArenaAsyncProbe.Result = payload.Value;
+}
+
+public class GenericAsyncChildFactory<T> {
+    public int Completed;
+    public async Task Create(ArenaAsyncPayload payload) {
+        await TaskHandle.Delay(2u);
+        Completed = payload.Value;
+    }
+}
+
+public async Task ReadGenericChild() {
+    ArenaAsyncPayload payload = new ArenaAsyncPayload();
+    payload.Value = 76;
+    GenericAsyncChildFactory<int> factory =
+        new GenericAsyncChildFactory<int>();
+    TaskHandle child = factory.Create(payload);
+    await child;
+    ArenaAsyncProbe.Result = factory.Completed;
+}
+
+public async Task MutateChildAfterDelay(
+    ArenaAsyncPayload payload, uint delay, bool faultAfterMutation) {
+    await TaskHandle.Delay(delay);
+    payload.Value += 1;
+    if (faultAfterMutation) {
+        throw new Exception("first joined child fault");
+    }
+}
+
+public async Task JoinTwoChildrenIncludingFaultedChild(
+    ArenaAsyncPayload payload) {
+    Task first = MutateChildAfterDelay(payload, 1u, true);
+    Task second = MutateChildAfterDelay(payload, 30u, false);
+    await TaskHandle.WhenAll(first, second);
+}
+
+public async Task JoinInlineChildrenOnSelectedBranch(
+    ArenaAsyncPayload payload, bool firstBranch) {
+    if (firstBranch) {
+        await TaskHandle.WhenAll(
+            MutateChildAfterDelay(payload, 1u, false),
+            MutateChildAfterDelay(payload, 20u, false));
+    } else {
+        await TaskHandle.WhenAll(
+            MutateChildAfterDelay(payload, 1u, false),
+            MutateChildAfterDelay(payload, 30u, false));
+    }
+}
+
+public async Task JoinBranchLocalChildrenOnSelectedBranch(
+    ArenaAsyncPayload payload, bool firstBranch) {
+    if (firstBranch) {
+        Task[] children = new Task[2u];
+        children[0u] = MutateChildAfterDelay(payload, 1u, false);
+        children[1u] = MutateChildAfterDelay(payload, 20u, false);
+        await TaskHandle.WhenAll(children);
+    } else {
+        Task[] children = new Task[2u];
+        children[0u] = MutateChildAfterDelay(payload, 1u, false);
+        children[1u] = MutateChildAfterDelay(payload, 30u, false);
+        await TaskHandle.WhenAll(children);
+    }
+}
+
+public async Task JoinThreeBranchLocalChildrenOnSelectedBranch(
+    ArenaAsyncPayload payload, bool firstBranch) {
+    if (firstBranch) {
+        Task[] children = new Task[3u];
+        children[0u] = MutateChildAfterDelay(payload, 1u, false);
+        children[1u] = MutateChildAfterDelay(payload, 10u, false);
+        children[2u] = MutateChildAfterDelay(payload, 20u, false);
+        await TaskHandle.WhenAll(children);
+    } else {
+        Task[] children = new Task[3u];
+        children[0u] = MutateChildAfterDelay(payload, 1u, false);
+        children[1u] = MutateChildAfterDelay(payload, 20u, false);
+        children[2u] = MutateChildAfterDelay(payload, 30u, false);
+        await TaskHandle.WhenAll(children);
+    }
+}
+
+public async Task JoinCanceledChildWithSibling(
+    ArenaAsyncPayload payload, CancellationToken cancellationToken) {
+    Task canceled = TaskHandle.Delay(1u, cancellationToken);
+    Task sibling = MutateChildAfterDelay(payload, 30u, false);
+    await TaskHandle.WhenAll(canceled, sibling);
+}
+
+public async Task JoinThreeChildrenIncludingFaultedChild(
+    ArenaAsyncPayload payload) {
+    Task first = MutateChildAfterDelay(payload, 1u, true);
+    Task second = MutateChildAfterDelay(payload, 10u, false);
+    Task third = MutateChildAfterDelay(payload, 30u, false);
+    Task[] children = new Task[3u];
+    children[0u] = first;
+    children[1u] = second;
+    children[2u] = third;
+    await TaskHandle.WhenAll(children);
+}
+
+public async Task JoinThreeChildrenIncludingCanceledChild(
+    ArenaAsyncPayload payload, CancellationToken cancellationToken) {
+    Task canceled = TaskHandle.Delay(1u, cancellationToken);
+    Task firstSibling = MutateChildAfterDelay(payload, 10u, false);
+    Task secondSibling = MutateChildAfterDelay(payload, 30u, false);
+    Task[] children = new Task[3u];
+    children[0u] = canceled;
+    children[1u] = firstSibling;
+    children[2u] = secondSibling;
+    await TaskHandle.WhenAll(children);
+}
+
+public async Task FaultAfterDelay() {
+    await TaskHandle.Delay(1u);
+    Memory.WithDurable(() => { throw new Exception("arena async fault"); });
+}
+
+public async Task FaultDerivedAfterDelay() {
+    await TaskHandle.Delay(1u);
+    throw new EncodingException(4242u);
+}
+
+public async Task FaultDerivedWithDurablePayloadAfterDelay(
+    ArenaAsyncPayload payload) {
+    await TaskHandle.Delay(1u);
+    throw new ArenaAsyncDerivedException(payload);
+}
+
+public Task StartCancellationWithNativeBuffer(CancellationToken cancellationToken) {
+    NativeBuffer resource = NativeBuffer.Allocate(1ul);
+    CancellationTokenRegistration registration = CancellationTokenRegistration.None;
+    try {
+        TaskCompletionSourceVoid completion = new TaskCompletionSourceVoid();
+        registration = cancellationToken.Register(() => {
+            ArenaAsyncProbe.CancellationCallbackCount += 1u;
+            completion.SetCanceled();
+        });
+        return DisposeNativeBufferAfterAwait(completion.Task, registration, resource);
+    } catch (Exception) {
+        registration.Dispose();
+        resource.Dispose();
+        throw;
+    }
+}
+
+public async Task DisposeNativeBufferAfterAwait(
+    Task pending,
+    CancellationTokenRegistration registration,
+    NativeBuffer resource) {
+    try {
+        await pending;
+    } finally {
+        registration.Dispose();
+        resource.Dispose();
+        ArenaAsyncProbe.NativeResourceDisposeCount += 1u;
+    }
+}
+
+public TaskHandle FailBeforeReturningTask() {
+    Memory.WithDurable(() => { throw new Exception("arena async start fault"); });
+    return null;
+}
+
+public int CheckCollectionOwnerGrowth() {
+    string[] keys = new string[8];
+    keys[0] = "owner-0";
+    keys[1] = "owner-1";
+    keys[2] = "owner-2";
+    keys[3] = "owner-3";
+    keys[4] = "owner-4";
+    keys[5] = "owner-5";
+    keys[6] = "owner-6";
+    keys[7] = "owner-7";
+
+    List<int> durableList = new List<int>();
+    Dictionary<string, int> durableDictionary =
+        new Dictionary<string, int>();
+    Queue<int> durableQueue = new Queue<int>();
+    Stack<int> durableStack = new Stack<int>();
+    Memory.WithArena(() => {
+        for (int index = 0; index < 8; index += 1) {
+            durableList.Add(index);
+            durableDictionary.Set(keys[index], index);
+            durableQueue.Enqueue(index);
+            durableStack.Push(index);
+        }
+    });
+    if (durableList.Count != 8u || durableDictionary.Count != 8u ||
+        durableQueue.Count != 8u || durableStack.Count != 8u) return 1;
+    for (int index = 0; index < 8; index += 1) {
+        if (durableList.Get((uint)index) != index ||
+            durableDictionary.GetValueOrDefault(keys[index]) != index) return 2;
+        if (durableQueue.Dequeue() != index) return 2;
+        if (durableStack.Pop() != 7 - index) return 3;
+    }
+
+    ArenaAsyncProbe.Result = 0;
+    Memory.WithArena(() => {
+        List<int> scopedList = new List<int>();
+        Dictionary<string, int> scopedDictionary =
+            new Dictionary<string, int>();
+        Queue<int> scopedQueue = new Queue<int>();
+        Stack<int> scopedStack = new Stack<int>();
+        for (int index = 0; index < 4; index += 1) {
+            scopedList.Add(index);
+            scopedDictionary.Set(keys[index], index);
+            scopedQueue.Enqueue(index);
+            scopedStack.Push(index);
+        }
+        Memory.WithDurable(() => {
+            for (int index = 4; index < 8; index += 1) {
+                scopedList.Add(index);
+                scopedDictionary.Set(keys[index], index);
+                scopedQueue.Enqueue(index);
+                scopedStack.Push(index);
+            }
+        });
+        if (scopedList.Count != 8u || scopedDictionary.Count != 8u ||
+            scopedQueue.Count != 8u || scopedStack.Count != 8u ||
+            scopedQueue.Peek() != 0 || scopedStack.Peek() != 7) {
+            ArenaAsyncProbe.Result = 1;
+        }
+        for (int index = 0; index < 8; index += 1) {
+            if (scopedList.Get((uint)index) != index ||
+                scopedDictionary.GetValueOrDefault(keys[index]) != index) {
+                ArenaAsyncProbe.Result = 2;
+            }
+            if (scopedQueue.Dequeue() != index ||
+                scopedStack.Pop() != 7 - index) {
+                ArenaAsyncProbe.Result = 3;
+            }
+        }
+    });
+    return ArenaAsyncProbe.Result;
+}
+
+public int CheckCollectionEnumeratorOwner() {
+    string[] keys = new string[4];
+    keys[0] = "enum-0";
+    keys[1] = "enum-1";
+    keys[2] = "enum-2";
+    keys[3] = "enum-3";
+    List<int> durableList = new List<int>();
+    Dictionary<string, int> durableDictionary =
+        new Dictionary<string, int>();
+    LinkedList<int> durableLinkedList = new LinkedList<int>();
+    int[] durableArray = new int[4];
+    for (int index = 0; index < 4; index += 1) {
+        durableList.Add(index);
+        durableDictionary.Set(keys[index], index);
+        durableLinkedList.AddLast(index);
+        durableArray[index] = index;
+    }
+
+    ArenaAsyncProbe.Result = 0;
+    Memory.WithArena(() => {
+        try { durableList.GetEnumerator(); }
+        catch (Exception) { ArenaAsyncProbe.Result = 1; }
+        try { durableDictionary.GetEnumerator(); }
+        catch (Exception) { ArenaAsyncProbe.Result = 2; }
+        try { durableLinkedList.GetEnumerator(); }
+        catch (Exception) { ArenaAsyncProbe.Result = 3; }
+        try { durableArray.GetEnumerator(); }
+        catch (Exception) { ArenaAsyncProbe.Result = 4; }
+    });
+    if (ArenaAsyncProbe.Result != 0) return ArenaAsyncProbe.Result;
+
+    Memory.WithArena(() => {
+        List<int> scopedList = new List<int>();
+        Dictionary<string, int> scopedDictionary =
+            new Dictionary<string, int>();
+        LinkedList<int> scopedLinkedList = new LinkedList<int>();
+        int[] scopedArray = new int[4];
+        for (int index = 0; index < 4; index += 1) {
+            scopedList.Add(index);
+            scopedDictionary.Set(keys[index], index);
+            scopedLinkedList.AddLast(index);
+            scopedArray[index] = index;
+        }
+        IEnumerator<int> scopedListEnumerator = null;
+        IEnumerator<KeyValuePair<string, int>> scopedDictionaryEnumerator = null;
+        IEnumerator<int> scopedLinkedListEnumerator = null;
+        IEnumerator<int> scopedArrayEnumerator = null;
+        Memory.WithDurable(() => {
+            try { scopedListEnumerator = scopedList.GetEnumerator(); }
+            catch (Exception) { ArenaAsyncProbe.Result = 5; }
+            try { scopedDictionaryEnumerator = scopedDictionary.GetEnumerator(); }
+            catch (Exception) { ArenaAsyncProbe.Result = 6; }
+            try { scopedLinkedListEnumerator = scopedLinkedList.GetEnumerator(); }
+            catch (Exception) { ArenaAsyncProbe.Result = 7; }
+            try { scopedArrayEnumerator = scopedArray.GetEnumerator(); }
+            catch (Exception) { ArenaAsyncProbe.Result = 8; }
+        });
+        if (ArenaAsyncProbe.Result == 0) {
+            for (int index = 0; index < 4; index += 1) {
+                if (!scopedListEnumerator.MoveNext() ||
+                    !scopedLinkedListEnumerator.MoveNext() ||
+                    !scopedArrayEnumerator.MoveNext() ||
+                    !scopedDictionaryEnumerator.MoveNext()) {
+                    ArenaAsyncProbe.Result = 9;
+                }
+            }
+            if (scopedListEnumerator.MoveNext() ||
+                scopedLinkedListEnumerator.MoveNext() ||
+                scopedArrayEnumerator.MoveNext() ||
+                scopedDictionaryEnumerator.MoveNext()) {
+                ArenaAsyncProbe.Result = 10;
+            }
+        }
+    });
+    return ArenaAsyncProbe.Result;
+}
+
+public int CheckArenaExceptionCopy() {
+    try {
+        Memory.WithArena(() => {
+            throw new EncodingException(4242u);
+        });
+    } catch (EncodingException exception) {
+        GC.Collect();
+        return exception.Position == 4242u ? 0 : 1;
+    }
+    return 2;
+}
+
+public int CheckSynchronousScopeGcAndLoopCleanup() {
+    int observedValue = 0;
+    Memory.WithArena(() => {
+        ArenaAsyncConstructionProbe probe =
+            new ArenaAsyncConstructionProbe();
+        GC.Collect();
+        observedValue = probe.Payload.Value;
+    });
+    if (observedValue != 96) return 1;
+
+    ArenaAsyncProbe.NativeResourceDisposeCount = 0u;
+    Memory.WithArena(() => {
+        for (uint index = 0u; index < 4u; index += 1u) {
+            NativeBuffer scratch = NativeBuffer.Allocate(1ul);
+            try {
+                GC.Collect();
+                if (index == 0u) continue;
+                if (index == 2u) break;
+            } finally {
+                GC.Collect();
+                scratch.Dispose();
+                ArenaAsyncProbe.NativeResourceDisposeCount += 1u;
+            }
+        }
+    });
+    return ArenaAsyncProbe.NativeResourceDisposeCount == 3u ? 0 : 2;
+}
+
+public int CheckNestedGenericOwnerType() {
+    GenericOuter<int>.Nested<string> nested =
+        new GenericOuter<int>.Nested<string>();
+    nested.OuterValue = 41;
+    nested.InnerValue = "nested";
+    return nested.ReadOuter() == 41 && nested.InnerValue == "nested" ? 0 : 1;
+}
+
+public int CheckDeepNestedGenericOwnerType() {
+    GenericOuter<int>.Middle<string>.Leaf<long> leaf =
+        new GenericOuter<int>.Middle<string>.Leaf<long>();
+    leaf.OuterValue = 11;
+    leaf.MiddleValue = "middle";
+    leaf.InnerValue = 13L;
+    return leaf.OuterValue == 11 && leaf.MiddleValue == "middle" &&
+        leaf.InnerValue == 13L ? 0 : 1;
+}
+
+public int CheckShadowedNestedGenericParameter() {
+    GenericOuter<int>.Shadowed<string> value =
+        new GenericOuter<int>.Shadowed<string>();
+    value.Value = "inner parameter";
+    return value.Value == "inner parameter" ? 0 : 1;
+}
+
+public int Main() {
+    if (CheckNestedGenericOwnerType() != 0) return 43;
+    if (CheckDeepNestedGenericOwnerType() != 0) return 44;
+    if (CheckShadowedNestedGenericParameter() != 0) return 45;
+    if (CheckArenaExceptionCopy() != 0) return 35;
+    if (CheckSynchronousScopeGcAndLoopCleanup() != 0) return 46;
+    if (CheckCollectionOwnerGrowth() != 0) return 30;
+    try {
+        if (CheckCollectionEnumeratorOwner() != 0) return 31;
+    } catch (Exception) {
+        return 32;
+    }
+
+    Task[] noJoinChildren = new Task[0u];
+    TaskHandle emptyJoin = TaskHandle.WhenAll(noJoinChildren);
+    if (!emptyJoin.IsCompleted) return 41;
+    emptyJoin.GetResult();
+    Task[] nullJoinChildren = new Task[1u];
+    bool nullJoinEntryRejected = false;
+    try { TaskHandle.WhenAll(nullJoinChildren); }
+    catch (Exception) { nullJoinEntryRejected = true; }
+    if (!nullJoinEntryRejected) return 42;
+
+    Task[] joinSnapshotChildren = new Task[2u];
+    joinSnapshotChildren[0u] = TaskHandle.Delay(2u);
+    joinSnapshotChildren[1u] = TaskHandle.Delay(5u);
+    TaskHandle joinSnapshot = TaskHandle.WhenAll(joinSnapshotChildren);
+    joinSnapshotChildren[0u] = null;
+    GC.Collect();
+    TaskScheduler.RunUntil(joinSnapshot);
+    joinSnapshot.GetResult();
+
+    Task<int> genericResult = Memory.WithArenaAsync<int>(
+        () => new Task<int>(91));
+    TaskScheduler.RunUntil(genericResult);
+    if (genericResult.GetResult() != 91) return 13;
+
+    Task<int> fixedCapacityResult = Memory.WithArenaAsync<int>(
+        65536u, () => new Task<int>(92));
+    TaskScheduler.RunUntil(fixedCapacityResult);
+    if (fixedCapacityResult.GetResult() != 92) return 14;
+
+    Task<int> genericCanceled = Memory.WithArenaAsync<int>(() => {
+        Task<int> operation = new Task<int>();
+        operation.SetCanceled();
+        return operation;
+    });
+    TaskScheduler.RunUntil(genericCanceled);
+    if (!genericCanceled.IsCanceled) return 17;
+    bool genericCancellationObserved = false;
+    try { genericCanceled.GetResult(); }
+    catch (OperationCanceledException) { genericCancellationObserved = true; }
+    if (!genericCancellationObserved) return 18;
+
+    Task<int> genericFaulted = Memory.WithArenaAsync<int>(() => {
+        Task<int> operation = new Task<int>();
+        operation.SetFault(new Exception("generic arena task fault"));
+        return operation;
+    });
+    TaskScheduler.RunUntil(genericFaulted);
+    bool genericFaultObserved = false;
+    try { genericFaulted.GetResult(); }
+    catch (Exception) { genericFaultObserved = true; }
+    if (!genericFaultObserved) return 19;
+
+    Task<int> wrongGenericResult = Memory.WithArenaAsync<int>(
+        () => new Task<long>(21L));
+    TaskScheduler.RunUntil(wrongGenericResult);
+    bool wrongGenericResultRejected = false;
+    try { wrongGenericResult.GetResult(); }
+    catch (Exception) { wrongGenericResultRejected = true; }
+    if (!wrongGenericResultRejected) return 20;
+
+    Task<ArenaAsyncPayload> durableReferenceResult =
+        Memory.WithArenaAsync<ArenaAsyncPayload>(() => {
+            ArenaAsyncPayload durablePayload;
+            Memory.WithDurable(() => {
+                durablePayload = new ArenaAsyncPayload();
+                durablePayload.Value = 93;
+            });
+            return new Task<ArenaAsyncPayload>(durablePayload);
+        });
+    TaskScheduler.RunUntil(durableReferenceResult);
+    if (durableReferenceResult.GetResult().Value != 93) return 15;
+
+    TaskHandle completed = Memory.WithArenaAsync(() => ReadAfterDelay());
+    for (int index = 0; index < 24; index++) {
+        byte[] garbage = new byte[32768];
+        garbage[0] = (byte)index;
+    }
+    GC.Collect();
+    TaskScheduler.RunUntil(completed);
+    completed.GetResult();
+    if (ArenaAsyncProbe.Result != 73) return 1;
+
+    TaskHandle nestedOperation = Memory.WithArenaAsync(() => ReadAfterNestedArena());
+    GC.Collect();
+    TaskScheduler.RunUntil(nestedOperation);
+    nestedOperation.GetResult();
+    if (ArenaAsyncProbe.Result != 79) return 22;
+
+    TaskHandle loopJoinOperation = Memory.WithArenaAsync(() => ReadAfterLoopJoins());
+    TaskScheduler.RunUntil(loopJoinOperation);
+    loopJoinOperation.GetResult();
+    if (ArenaAsyncProbe.Result != 80) return 23;
+
+    TaskHandle parameterLoopJoinOperation = Memory.WithArenaAsync(() =>
+        ReadAfterLoopJoinsWithParameter(2u));
+    TaskScheduler.RunUntil(parameterLoopJoinOperation);
+    parameterLoopJoinOperation.GetResult();
+    if (ArenaAsyncProbe.Result != 81) return 24;
+
+    TaskHandle forLoopJoinOperation = Memory.WithArenaAsync(() =>
+        ReadAfterForLoopJoins());
+    TaskScheduler.RunUntil(forLoopJoinOperation);
+    forLoopJoinOperation.GetResult();
+    if (ArenaAsyncProbe.Result != 82) return 27;
+
+    TaskHandle doWhileLoopJoinOperation = Memory.WithArenaAsync(() =>
+        ReadAfterDoWhileLoopJoins());
+    TaskScheduler.RunUntil(doWhileLoopJoinOperation);
+    doWhileLoopJoinOperation.GetResult();
+    if (ArenaAsyncProbe.Result != 83) return 28;
+
+    TaskHandle scalarAssignmentJoinOperation = Memory.WithArenaAsync(() =>
+        ReadAfterScalarAssignmentJoins(83u));
+    TaskScheduler.RunUntil(scalarAssignmentJoinOperation);
+    scalarAssignmentJoinOperation.GetResult();
+    if (ArenaAsyncProbe.Result != 84) return 29;
+
+    TaskHandle localOperation = Memory.WithArenaAsync(() =>
+        ReadAfterLocalDelay());
+    TaskScheduler.RunUntil(localOperation);
+    localOperation.GetResult();
+    if (ArenaAsyncProbe.Result != 74) return 5;
+
+    TaskHandle literalPrefixOperation = Memory.WithArenaAsync(() =>
+        ReadAfterLiteralLocalPrefix());
+    TaskScheduler.RunUntil(literalPrefixOperation);
+    literalPrefixOperation.GetResult();
+    if (ArenaAsyncProbe.Result != 77) return 21;
+
+    TaskHandle scalarPrefixOperation = Memory.WithArenaAsync(() =>
+        ReadAfterScalarLocalPrefix(2u));
+    GC.Collect();
+    TaskScheduler.RunUntil(scalarPrefixOperation);
+    scalarPrefixOperation.GetResult();
+    if (ArenaAsyncProbe.Result != 78) return 25;
+
+    TaskHandle scalarBranchedOperation = Memory.WithArenaAsync(() =>
+        ReadAfterScalarBranchedPrefix(2u));
+    GC.Collect();
+    TaskScheduler.RunUntil(scalarBranchedOperation);
+    scalarBranchedOperation.GetResult();
+    if (ArenaAsyncProbe.Result != 79) return 26;
+
+    TaskHandle branchedOperation = Memory.WithArenaAsync(() =>
+        ReadAfterBranchedLocalDelay(true));
+    TaskScheduler.RunUntil(branchedOperation);
+    branchedOperation.GetResult();
+    if (ArenaAsyncProbe.Result != 75) return 6;
+
+    TaskHandle switchJoinedOperation = Memory.WithArenaAsync(() =>
+        ReadAfterSwitchJoinedChild(0));
+    GC.Collect();
+    TaskScheduler.RunUntil(switchJoinedOperation);
+    switchJoinedOperation.GetResult();
+    if (ArenaAsyncProbe.Result != 86) return 33;
+
+    TaskHandle switchDefaultJoinedOperation = Memory.WithArenaAsync(() =>
+        ReadAfterSwitchJoinedChild(1));
+    GC.Collect();
+    TaskScheduler.RunUntil(switchDefaultJoinedOperation);
+    switchDefaultJoinedOperation.GetResult();
+    if (ArenaAsyncProbe.Result != 86) return 34;
+
+    TaskHandle genericChildOperation = Memory.WithArenaAsync(() =>
+        ReadGenericChild());
+    GC.Collect();
+    TaskScheduler.RunUntil(genericChildOperation);
+    genericChildOperation.GetResult();
+    if (ArenaAsyncProbe.Result != 76) return 7;
+
+    ArenaAsyncPayload joinedChildrenPayload = new ArenaAsyncPayload();
+    joinedChildrenPayload.Value = 0;
+    ArenaAsyncProbe.Result = -1;
+    TaskHandle joinedChildrenOperation = Memory.WithArenaAsync(() =>
+        JoinTwoChildrenIncludingFaultedChild(joinedChildrenPayload));
+    GC.Collect();
+    TaskScheduler.RunUntil(joinedChildrenOperation);
+    bool joinedChildFaultObserved = false;
+    try { joinedChildrenOperation.GetResult(); }
+    catch (Exception) { joinedChildFaultObserved = true; }
+    if (!joinedChildFaultObserved || joinedChildrenPayload.Value != 2) return 37;
+
+    ArenaAsyncPayload trueBranchPayload = new ArenaAsyncPayload();
+    TaskHandle trueBranchOperation = Memory.WithArenaAsync(() =>
+        JoinInlineChildrenOnSelectedBranch(trueBranchPayload, true));
+    GC.Collect();
+    TaskScheduler.RunUntil(trueBranchOperation);
+    trueBranchOperation.GetResult();
+    if (trueBranchPayload.Value != 2) return 41;
+
+    ArenaAsyncPayload falseBranchPayload = new ArenaAsyncPayload();
+    TaskHandle falseBranchOperation = Memory.WithArenaAsync(() =>
+        JoinInlineChildrenOnSelectedBranch(falseBranchPayload, false));
+    GC.Collect();
+    TaskScheduler.RunUntil(falseBranchOperation);
+    falseBranchOperation.GetResult();
+    if (falseBranchPayload.Value != 2) return 42;
+
+    ArenaAsyncPayload trueLocalBranchPayload = new ArenaAsyncPayload();
+    TaskHandle trueLocalBranchOperation = Memory.WithArenaAsync(() =>
+        JoinBranchLocalChildrenOnSelectedBranch(trueLocalBranchPayload, true));
+    GC.Collect();
+    TaskScheduler.RunUntil(trueLocalBranchOperation);
+    trueLocalBranchOperation.GetResult();
+    if (trueLocalBranchPayload.Value != 2) return 43;
+
+    ArenaAsyncPayload falseLocalBranchPayload = new ArenaAsyncPayload();
+    TaskHandle falseLocalBranchOperation = Memory.WithArenaAsync(() =>
+        JoinBranchLocalChildrenOnSelectedBranch(falseLocalBranchPayload, false));
+    GC.Collect();
+    TaskScheduler.RunUntil(falseLocalBranchOperation);
+    falseLocalBranchOperation.GetResult();
+    if (falseLocalBranchPayload.Value != 2) return 44;
+
+    ArenaAsyncPayload trueThreeLocalBranchPayload = new ArenaAsyncPayload();
+    TaskHandle trueThreeLocalBranchOperation = Memory.WithArenaAsync(() =>
+        JoinThreeBranchLocalChildrenOnSelectedBranch(
+            trueThreeLocalBranchPayload, true));
+    GC.Collect();
+    TaskScheduler.RunUntil(trueThreeLocalBranchOperation);
+    trueThreeLocalBranchOperation.GetResult();
+    if (trueThreeLocalBranchPayload.Value != 3) return 88;
+
+    ArenaAsyncPayload falseThreeLocalBranchPayload = new ArenaAsyncPayload();
+    TaskHandle falseThreeLocalBranchOperation = Memory.WithArenaAsync(() =>
+        JoinThreeBranchLocalChildrenOnSelectedBranch(
+            falseThreeLocalBranchPayload, false));
+    GC.Collect();
+    TaskScheduler.RunUntil(falseThreeLocalBranchOperation);
+    falseThreeLocalBranchOperation.GetResult();
+    if (falseThreeLocalBranchPayload.Value != 3) return 89;
+
+    CancellationTokenSource aggregateCancellationSource =
+        new CancellationTokenSource();
+    aggregateCancellationSource.Cancel();
+    ArenaAsyncPayload canceledChildrenPayload = new ArenaAsyncPayload();
+    TaskHandle canceledChildrenOperation = Memory.WithArenaAsync(() =>
+        JoinCanceledChildWithSibling(
+            canceledChildrenPayload, aggregateCancellationSource.Token));
+    GC.Collect();
+    TaskScheduler.RunUntil(canceledChildrenOperation);
+    bool canceledChildrenObserved = false;
+    try { canceledChildrenOperation.GetResult(); }
+    catch (OperationCanceledException) { canceledChildrenObserved = true; }
+    if (!canceledChildrenObserved || !canceledChildrenOperation.IsCanceled ||
+        canceledChildrenPayload.Value != 1) return 38;
+
+    ArenaAsyncPayload threeJoinedChildrenPayload = new ArenaAsyncPayload();
+    ArenaAsyncProbe.Result = -1;
+    TaskHandle threeJoinedChildrenOperation = Memory.WithArenaAsync(() =>
+        JoinThreeChildrenIncludingFaultedChild(threeJoinedChildrenPayload));
+    GC.Collect();
+    TaskScheduler.RunUntil(threeJoinedChildrenOperation);
+    bool threeChildFaultObserved = false;
+    try { threeJoinedChildrenOperation.GetResult(); }
+    catch (Exception) { threeChildFaultObserved = true; }
+    if (!threeChildFaultObserved || threeJoinedChildrenPayload.Value != 3) return 39;
+
+    CancellationTokenSource threeChildCancellationSource =
+        new CancellationTokenSource();
+    threeChildCancellationSource.Cancel();
+    ArenaAsyncPayload threeCanceledChildrenPayload = new ArenaAsyncPayload();
+    TaskHandle threeCanceledChildrenOperation = Memory.WithArenaAsync(() =>
+        JoinThreeChildrenIncludingCanceledChild(
+            threeCanceledChildrenPayload, threeChildCancellationSource.Token));
+    GC.Collect();
+    TaskScheduler.RunUntil(threeCanceledChildrenOperation);
+    bool threeChildCancellationObserved = false;
+    try { threeCanceledChildrenOperation.GetResult(); }
+    catch (OperationCanceledException) { threeChildCancellationObserved = true; }
+    if (!threeChildCancellationObserved || !threeCanceledChildrenOperation.IsCanceled ||
+        threeCanceledChildrenPayload.Value != 2) return 40;
+
+    TaskHandle faulted = Memory.WithArenaAsync(() => FaultAfterDelay());
+    TaskScheduler.RunUntil(faulted);
+    bool observed = false;
+    try { faulted.GetResult(); }
+    catch (Exception) { observed = true; }
+    if (!observed) return 2;
+
+    TaskHandle derivedFaulted = Memory.WithArenaAsync(() =>
+        FaultDerivedAfterDelay());
+    GC.Collect();
+    TaskScheduler.RunUntil(derivedFaulted);
+    observed = false;
+    try { derivedFaulted.GetResult(); }
+    catch (EncodingException exception) {
+        observed = exception.Position == 4242u;
+    }
+    if (!observed) return 35;
+
+    ArenaAsyncPayload durableExceptionPayload = new ArenaAsyncPayload();
+    durableExceptionPayload.Value = 93;
+    TaskHandle derivedPayloadFaulted = Memory.WithArenaAsync(() =>
+        FaultDerivedWithDurablePayloadAfterDelay(durableExceptionPayload));
+    GC.Collect();
+    TaskScheduler.RunUntil(derivedPayloadFaulted);
+    observed = false;
+    try { derivedPayloadFaulted.GetResult(); }
+    catch (ArenaAsyncDerivedException exception) {
+        observed = exception.Payload == durableExceptionPayload &&
+            exception.Payload.Value == 93;
+    }
+    if (!observed) return 36;
+
+    TaskHandle startFault = Memory.WithArenaAsync(() =>
+        FailBeforeReturningTask());
+    TaskScheduler.RunUntil(startFault);
+    observed = false;
+    try { startFault.GetResult(); }
+    catch (Exception) { observed = true; }
+    if (!observed) return 3;
+
+    CancellationTokenSource source = new CancellationTokenSource();
+    source.Cancel();
+    TaskHandle canceled = Memory.WithArenaAsync(() =>
+        TaskHandle.Delay(1u, source.Token));
+    TaskScheduler.RunUntil(canceled);
+    if (!canceled.IsCanceled) return 4;
+
+    CancellationTokenSource resourceSource = new CancellationTokenSource();
+    ArenaAsyncProbe.NativeResourceDisposeCount = 0u;
+    ArenaAsyncProbe.CancellationCallbackCount = 0u;
+    TaskHandle resourceCanceled = null;
+    try {
+        resourceCanceled = Memory.WithArenaAsync(() =>
+            StartCancellationWithNativeBuffer(resourceSource.Token));
+        GC.Collect();
+        if (ArenaAsyncProbe.NativeResourceDisposeCount != 0u) return 35;
+        resourceSource.Cancel();
+        GC.Collect();
+        TaskScheduler.RunUntil(resourceCanceled);
+    } catch (Exception exception) {
+        Console.WriteLine(exception.Message);
+        return 10;
+    }
+    if (!resourceCanceled.IsCanceled) return 8;
+    bool observedCancellation = false;
+    try {
+        resourceCanceled.GetResult();
+    } catch (OperationCanceledException) {
+        observedCancellation = true;
+    }
+    if (!observedCancellation) return 8;
+    if (ArenaAsyncProbe.NativeResourceDisposeCount != 1u) return 9;
+    if (ArenaAsyncProbe.CancellationCallbackCount == 0u) {
+        Console.WriteLine("cancellation callback was not invoked");
+        return 11;
+    }
+    if (ArenaAsyncProbe.CancellationCallbackCount != 1u) {
+        Console.WriteLine("cancellation callback ran more than once");
+        return 12;
+    }
+
+    return 0;
+}

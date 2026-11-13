@@ -7,6 +7,83 @@ namespace CxCompiler.Tests;
 public sealed class RestoredNativePackageTests
 {
     [Fact]
+    public void RestoredPackageBinaryApiAndEffectsLoadAutomatically()
+    {
+        var root = Directory.CreateTempSubdirectory("cxc-binary-module-package-").FullName;
+        var provider = Path.Combine(root, ".obj", "provider");
+        var package = Path.Combine(root, ".packages", "binding", "1.0.0");
+        var binaryDirectory = Path.Combine(package, "bin", "linux-x64");
+        Directory.CreateDirectory(provider);
+        Directory.CreateDirectory(binaryDirectory);
+        try
+        {
+            File.WriteAllText(Path.Combine(provider, "BinaryModule.cxproj"), """
+                name: BinaryModule
+                version: 1.0.0
+                type: Library
+                """);
+            File.WriteAllText(Path.Combine(provider, "api.cx"), """
+                import System.Interop;
+                public class Payload {}
+                public static class BinaryApi {
+                    @NoEscape public static void Read(Payload value) {}
+                }
+                """);
+            new Compiler().Compile([Path.Combine(provider, "BinaryModule.cxproj")]);
+            var apiSidecar = File.ReadAllText(
+                Path.Combine(provider, ".obj", "BinaryModule.cxapi.json"));
+            File.WriteAllText(Path.Combine(binaryDirectory, "BinaryModule.cxapi.json"),
+                apiSidecar.Replace("@NoEscape ", "", StringComparison.Ordinal));
+            File.Copy(Path.Combine(provider, ".obj", "BinaryModule.cxeffects.json"),
+                Path.Combine(binaryDirectory, "BinaryModule.cxeffects.json"));
+
+            File.WriteAllText(Path.Combine(package, "package.cxpm"), """
+                name: binding
+                version: 1.0.0
+                type: Library
+                """);
+            var project = Path.Combine(root, "app.cxproj");
+            File.WriteAllText(project, """
+                name: app
+                version: 1.0.0
+                type: Executable
+                dependencies: ['binding@1.0.0']
+                module_api_references:
+                - module_name: cxcore
+                  source: core.cxapi
+                  synthetic_core: true
+                """);
+            File.WriteAllText(Path.Combine(root, "core.cxapi"), """
+                namespace System;
+                public static class Memory {
+                    public extern static void WithArena(delegate() => void action);
+                }
+                """);
+            File.WriteAllText(Path.Combine(root, "main.cx"), """
+                import System;
+                public void Consume() {
+                    Memory.WithArena(() => {
+                        Payload value = new Payload();
+                        BinaryApi.Read(value);
+                    });
+                }
+                """);
+            var hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(project))).ToLowerInvariant();
+            File.WriteAllText(Path.Combine(root, "cxpm.lock"), JsonSerializer.Serialize(new {
+                LockVersion = 1, ProjectHash = hash, Packages = new Dictionary<string, object> {
+                    ["binding"] = new { Id = "binding", Version = "1.0.0" }
+                }
+            }));
+
+            new Compiler().Compile([project]);
+
+            var generatedSource = File.ReadAllText(Path.Combine(root, ".obj", "app.c"));
+            Assert.Contains("BinaryApi_Read", generatedSource);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public void RestoredNativeMetadataAndAssetsFlowToConsumerAndStaleLocksAreRejected()
     {
         var root = Directory.CreateTempSubdirectory("cxc-native-package-").FullName;

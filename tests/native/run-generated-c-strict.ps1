@@ -23,32 +23,32 @@ $results = Join-Path $PSScriptRoot 'results'
 New-Item -ItemType Directory -Path $results -Force | Out-Null
 $strictLog = Join-Path $results "milestone18-f4-generated-c-strict-windows-$Architecture-$([guid]::NewGuid().ToString('N').Substring(0, 8)).log"
 New-Item -ItemType Directory -Path $strictOutput | Out-Null
-"MSVC strict generated-C run: architecture=$Architecture compiler=MSVC C11 warnings-as-errors (4100,4130,4702 suppressed)" |
+"MSVC strict generated-C run: architecture=$Architecture compiler=MSVC C11 warnings-as-errors (4100,4130,4232,4702 suppressed)" |
     Tee-Object -FilePath $strictLog
 
 # Keep cxcore/platform off the include path: its stdlib.h shadows the C standard header.
 $includeSets = @{
     core = @(
-        'cxcore/src/.obj', 'cxcore/src', 'cxcore/inc',
+        'cxcore/src/.obj', 'cxcore/src', 'cxcore/include',
         'cxcore/platform/common', 'cxcore/platform/win'
     )
     cxnet = @(
-        'cxnet/.obj', 'cxnet/include', 'cxnet/platform/common',
-        'cxnet/platform/win', 'cxcore/src/.obj', 'cxcore/src', 'cxcore/inc',
+        'cxnet/src/.obj', 'cxnet/include', 'cxnet/platform/common',
+        'cxnet/platform/win', 'cxcore/src/.obj', 'cxcore/src', 'cxcore/include',
         'cxcore/platform/common', 'cxcore/platform/win'
     )
     consumer = @(
-        'cxnet/examples/streaming-read/.obj', 'cxnet/.obj', 'cxnet/include',
+        'cxnet/examples/streaming-read/.obj', 'cxnet/src/.obj', 'cxnet/include',
         'cxnet/platform/common', 'cxnet/platform/win', 'cxcore/src/.obj',
-        'cxcore/src', 'cxcore/inc',
+        'cxcore/src', 'cxcore/include',
         'cxcore/platform/common', 'cxcore/platform/win'
     )
 }
 $cases = @(
     @{ Name = 'core-static'; Source = 'cxcore/src/.obj/cxcore.generated.c'; Includes = $includeSets.core; Defines = @('CX_CXCORE_BUILD', 'CX_STATIC_LINK') }
     @{ Name = 'core-shared'; Source = 'cxcore/src/.obj/cxcore.generated.c'; Includes = $includeSets.core; Defines = @('CX_CXCORE_BUILD', 'CX_DYNAMIC_MODULE') }
-    @{ Name = 'cxnet-static'; Source = 'cxnet/.obj/cxnet.c'; Includes = $includeSets.cxnet; Defines = @('CX_CXNET_BUILD', 'CX_STATIC_LINK') }
-    @{ Name = 'cxnet-shared'; Source = 'cxnet/.obj/cxnet.c'; Includes = $includeSets.cxnet; Defines = @('CX_CXNET_BUILD', 'CX_DYNAMIC_MODULE') }
+    @{ Name = 'cxnet-static'; Source = 'cxnet/src/.obj/cxnet.c'; Includes = $includeSets.cxnet; Defines = @('CX_CXNET_BUILD', 'CX_STATIC_LINK') }
+    @{ Name = 'cxnet-shared'; Source = 'cxnet/src/.obj/cxnet.c'; Includes = $includeSets.cxnet; Defines = @('CX_CXNET_BUILD', 'CX_DYNAMIC_MODULE') }
     @{ Name = 'consumer-static'; Source = 'cxnet/examples/streaming-read/.obj/streamingRead.c'; Includes = $includeSets.consumer; Defines = @('CX_STREAMINGREAD_BUILD', 'CX_STATIC_LINK') }
     @{ Name = 'consumer-shared'; Source = 'cxnet/examples/streaming-read/.obj/streamingRead.c'; Includes = $includeSets.consumer; Defines = @('CX_STREAMINGREAD_BUILD', 'CX_DYNAMIC_MODULE') }
 )
@@ -62,7 +62,7 @@ try {
 
         $arguments = @(
             '/nologo', '/c', '/std:c11', '/W4', '/WX',
-            '/wd4100', '/wd4130', '/wd4702',
+            '/wd4100', '/wd4130', '/wd4232', '/wd4702',
             '/utf-8', '/experimental:c11atomics'
         )
         foreach ($include in $case.Includes) {

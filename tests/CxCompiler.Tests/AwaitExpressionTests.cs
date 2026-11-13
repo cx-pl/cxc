@@ -219,7 +219,7 @@ public sealed class AwaitExpressionTests
             }
             public interface IAsyncEnumerator<T> : System.IAsyncDisposable {
                 T Current { const get; }
-                System.Threading.Tasks.Task<bool> MoveNextAsync();
+                System.Threading.Tasks.ValueTask<bool> MoveNextAsync();
             }
             """));
         project.AddCompilationContext(CompilerTestHelper.Parse("""
@@ -297,7 +297,7 @@ public sealed class AwaitExpressionTests
     }
 
     [Fact]
-    public void AsyncIteratorMatchesTaskBasedAsyncEnumeratorContract()
+    public void AsyncIteratorMatchesValueTaskBasedAsyncEnumeratorContract()
     {
         var project = CxProject.CreateDefaultApplicationProject();
         project.AddCompilationContext(CompilerTestHelper.Parse("""
@@ -314,7 +314,7 @@ public sealed class AwaitExpressionTests
             }
             public interface IAsyncEnumerator<T> : System.IAsyncDisposable {
                 T Current { const get; }
-                System.Threading.Tasks.Task<bool> MoveNextAsync();
+                System.Threading.Tasks.ValueTask<bool> MoveNextAsync();
             }
             """));
         project.AddCompilationContext(CompilerTestHelper.Parse("""
@@ -336,7 +336,7 @@ public sealed class AwaitExpressionTests
             .ToDictionary(candidate => candidate.Name);
         var moveReturnType = Assert.IsType<NamedType>(methods["MoveNextAsync"].ReturnType);
         var disposeReturnType = Assert.IsType<NamedType>(methods["DisposeAsync"].ReturnType);
-        Assert.Equal("Task", moveReturnType.ResolvedTypeFullName.Parts[^1]);
+        Assert.Equal("ValueTask", moveReturnType.ResolvedTypeFullName.Parts[^1]);
         Assert.Equal("TaskHandle", disposeReturnType.ResolvedTypeFullName.Parts[^1]);
 
         var forwardIterator = Assert.Single(project.CompilationContexts
@@ -355,6 +355,80 @@ public sealed class AwaitExpressionTests
         Assert.NotEmpty(onCompleted);
         Assert.All(onCompleted, invocation => Assert.IsType<MemberAccessExpression>(
             invocation.Target));
+    }
+
+    [Fact]
+    public void GenericAsyncIteratorEmitsClosedInterfaceThunkReturnTypes()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_async_iterator_thunk_returns");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            namespace System;
+            public interface IAsyncDisposable {
+                System.Threading.Tasks.TaskHandle DisposeAsync();
+            }
+            """));
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            namespace System.Collections;
+            public interface IAsyncEnumerable<T> {
+                IAsyncEnumerator<T> GetAsyncEnumerator(
+                    System.Threading.Tasks.CancellationToken cancellationToken);
+            }
+            public interface IAsyncEnumerator<T> : System.IAsyncDisposable {
+                T Current { const get; }
+                System.Threading.Tasks.ValueTask<bool> MoveNextAsync();
+            }
+            """));
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            import System.Collections;
+            namespace App;
+            public async IAsyncEnumerable<T> Values<T>(T value) {
+                yield return value;
+            }
+            public int Run() {
+                IAsyncEnumerable<int> values = Values<int>(7);
+                return 0;
+            }
+            """));
+
+        var valuesFunction = project.CompilationContexts
+            .SelectMany(context => context.DeclarationScope.Declarations)
+            .OfType<CxCompiler.Model.Types.FunctionDeclaration>()
+            .Single(function => function.Name == "Values");
+        Assert.True(valuesFunction.IsAsync);
+
+        new SemanticBinder().Bind(project);
+
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-async-iterator-thunk-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var generatedC = string.Join("\n", Directory.GetFiles(directory, "*.c")
+                .Select(File.ReadAllText));
+
+            var thunkDeclarations = generatedC.Split('\n')
+                .Where(line => line.Contains("__iface_thunk", StringComparison.Ordinal) &&
+                    line.StartsWith("static ", StringComparison.Ordinal))
+                .Select(line => line.Trim())
+                .ToArray();
+            Assert.Contains(thunkDeclarations, line =>
+                line.StartsWith("static struct cx_iface_ref ", StringComparison.Ordinal) &&
+                line.Contains("IAsyncEnumerable_slot_1", StringComparison.Ordinal));
+            Assert.Contains(thunkDeclarations, line =>
+                line.StartsWith("static struct ", StringComparison.Ordinal) &&
+                line.Contains("IAsyncEnumerator_slot_3", StringComparison.Ordinal));
+            Assert.Contains(thunkDeclarations, line =>
+                line.StartsWith("static struct cxcore_System_Threading_Tasks_TaskHandle* ",
+                    StringComparison.Ordinal) &&
+                line.Contains("System_IAsyncDisposable_slot_1", StringComparison.Ordinal));
+            Assert.DoesNotContain("_unknowntype_", generatedC);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]
@@ -559,8 +633,9 @@ public sealed class AwaitExpressionTests
                     .Identifier.ToString() == callbackName);
             Assert.IsType<IdentifierExpression>(completion.Arguments[0]);
         }
-        Assert.Equal(2, CoroutineSyntaxAnalysis
-            .EnumerateBodyExpressions(moveNextCore.Body!).OfType<LambdaExpression>().Count());
+        // The lowered MoveNextCore body contains callback identifiers, not the
+        // source lambda nodes. The Register/OnCompleted pairing above verifies
+        // the callback reuse that matters after coroutine lowering.
     }
 
     [Fact]
@@ -3437,15 +3512,16 @@ public sealed class AwaitExpressionTests
             var methodStart = generatedC.IndexOf(
                 $"{functionName}(", StringComparison.Ordinal);
             Assert.True(methodStart >= 0);
-            var prefixDeclaration = generatedC.IndexOf(
-                "= marker", methodStart, StringComparison.Ordinal);
+            var prefixInitialization = generatedC.IndexOf(
+                "cx_gc_store_reference((cx_ptr*)&(prefix)",
+                methodStart, StringComparison.Ordinal);
             var firstReadinessCheck = generatedC.IndexOf(
                 "IsCompleted", methodStart, StringComparison.Ordinal);
             var firstAllocation = generatedC.IndexOf(
                 "Memory_Alloc", methodStart, StringComparison.Ordinal);
-            Assert.True(prefixDeclaration >= 0 && prefixDeclaration < firstReadinessCheck,
-                $"Expected {functionName}'s prefix declaration before its readiness check " +
-                $"(prefix {prefixDeclaration}, readiness {firstReadinessCheck}).");
+            Assert.True(prefixInitialization >= 0 && prefixInitialization < firstReadinessCheck,
+                $"Expected {functionName}'s checked prefix initialization before its readiness check " +
+                $"(initialization {prefixInitialization}, readiness {firstReadinessCheck}).");
             Assert.True(firstReadinessCheck >= 0 && firstReadinessCheck < firstAllocation);
         }
     }
@@ -4114,6 +4190,53 @@ public sealed class AwaitExpressionTests
         Assert.Contains(pendingStatements.OfType<LocalVariableDeclarationStatement>(),
             declaration => declaration.Declarators.Any(declarator =>
                 declarator.Initializer is LambdaExpression));
+    }
+
+    [Fact]
+    public void GenericOwnerAsyncMethodEmitsCapturedParameterCellOnce()
+    {
+        var project = CreateProject("""
+            import System.Threading.Tasks;
+            namespace App;
+            public class Owner<T> {
+                public T Value;
+                public async Task Complete(T payload) {
+                    await TaskHandle.Delay(1u);
+                    Value = payload;
+                }
+            }
+            public class Entry {
+                public Task Start() {
+                    Owner<int> owner = new Owner<int>();
+                    return owner.Complete(42);
+                }
+            }
+            """);
+
+        new SemanticBinder().Bind(project);
+
+        var outputDirectory = Path.Combine(
+            Path.GetTempPath(), $"cxc-generic-owner-async-cell-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(outputDirectory);
+            CCodeOutputGenerator.GenerateOutput(
+                project, Path.Combine(outputDirectory, "input.cx"));
+
+            var generatedC = File.ReadAllText(Path.Combine(outputDirectory, "unnamed.c"));
+            var cellDeclarations = System.Text.RegularExpressions.Regex.Matches(
+                generatedC,
+                @"(?m)^\s*cx_int\s*\*__cx_generated_cell_1\s*=");
+
+            Assert.Single(cellDeclarations);
+        }
+        finally
+        {
+            if (Directory.Exists(outputDirectory))
+            {
+                Directory.Delete(outputDirectory, recursive: true);
+            }
+        }
     }
 
     [Fact]

@@ -1,0 +1,16 @@
+namespace Cx.Compiler.Generators;
+
+public interface IncrementalGeneratorInitializationContext {
+    IIncrementalValuesProvider<SyntaxCandidate> SyntaxProvider { const get; }
+    IIncrementalValuesProvider<AnnotationDescriptor> Annotations { const get; }
+    IIncrementalValuesProvider<TypeDescriptor> Types { const get; }
+    IIncrementalValuesProvider<ClosedGenericRequest> ClosedGenericRequests { const get; }
+    IIncrementalValuesProvider<AdditionalText> AdditionalFiles { const get; }
+
+    IIncrementalValuesProvider<AnnotationDescriptor> ForAnnotation(string metadataName);
+    IIncrementalValueProvider<string> GetOption(string name);
+    void RegisterSourceOutput<T>(IIncrementalValuesProvider<T> provider,
+        IGeneratorOutputAction<T> action);
+    void RegisterSourceOutput<T>(IIncrementalValueProvider<T> provider,
+        IGeneratorOutputAction<T> action);
+}

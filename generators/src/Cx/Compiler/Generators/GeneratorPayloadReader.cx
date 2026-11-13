@@ -1,0 +1,94 @@
+import System;
+import System.Interop;
+
+namespace Cx.Compiler.Generators;
+
+// Bounded little-endian payload reader shared by snapshot and worker-message codecs.
+// The caller owns the input buffer and must keep it alive for this reader's lifetime.
+public final class GeneratorPayloadReader {
+    private static const uint MaximumFieldBytes = 1048576u;
+    private static const uint MaximumPayloadBytes = 67108864u;
+    private NativeBuffer _payload;
+    private uint _length;
+    private uint _offset;
+
+    public uint Remaining { const get => _length - _offset; }
+
+    public constructor(NativeBuffer payload, uint length) {
+        if (payload == null || (ulong)length > payload.ByteLength ||
+            length > MaximumPayloadBytes) {
+            throw new Exception("Invalid generator payload buffer or length.");
+        }
+        _payload = payload;
+        _length = length;
+        _offset = 0u;
+    }
+
+    public uint ReadUInt32() {
+        EnsureAvailable(4u);
+        var value = (uint)_payload.ReadByte((ulong)_offset) +
+            (uint)_payload.ReadByte((ulong)(_offset + 1u)) * 256u +
+            (uint)_payload.ReadByte((ulong)(_offset + 2u)) * 65536u +
+            (uint)_payload.ReadByte((ulong)(_offset + 3u)) * 16777216u;
+        _offset += 4u;
+        return value;
+    }
+
+    public int ReadInt32() {
+        return (int)ReadUInt32();
+    }
+
+    public bool ReadBoolean() {
+        EnsureAvailable(1u);
+        var value = _payload.ReadByte((ulong)_offset);
+        _offset += 1u;
+        if (value == 0u) return false;
+        if (value == 1u) return true;
+        throw new Exception("Invalid boolean value in generator payload.");
+    }
+
+    public uint ReadCount(uint maximum, string fieldName) {
+        var value = ReadUInt32();
+        if (value > maximum) {
+            var message = new System.StringBuilder();
+            message.Append("Generator payload ");
+            message.Append(fieldName);
+            message.Append(" value ");
+            message.Append(value);
+            message.Append(" exceeds maximum ");
+            message.Append(maximum);
+            message.Append(" at byte offset ");
+            message.Append(_offset);
+            throw new Exception(message.ToString());
+        }
+        return value;
+    }
+
+    public string ReadString(bool allowLarge = false) {
+        var maximum = allowLarge ? MaximumPayloadBytes : MaximumFieldBytes;
+        var length = ReadCount(maximum, "string byte length");
+        EnsureAvailable(length);
+        var bytes = NativeBuffer.Allocate((ulong)length);
+        try {
+            _payload.CopyTo(bytes, (ulong)_offset, 0uL, (ulong)length);
+            var value = bytes.ToUtf8String(length);
+            _offset += length;
+            return value;
+        } finally {
+            bytes.Dispose();
+        }
+    }
+
+    public string? ReadOptionalString() {
+        if (!ReadBoolean()) return null;
+        return ReadString();
+    }
+
+    public void EnsureEnd() {
+        if (_offset != _length) throw new Exception("Generator payload has trailing bytes.");
+    }
+
+    private void EnsureAvailable(uint count) const {
+        if (count > _length - _offset) throw new Exception("Truncated generator payload.");
+    }
+}

@@ -109,8 +109,9 @@ all virtual methods on generic owners. A referenced library's concrete closed
 generic class owner also registers exact and primary-fallback dispatch in the
 consuming project under static and DLL linking. Generic abstract methods fail earlier
 under the current generic method-body restrictions and have separate rejection
-coverage. Coroutine method compatibility is deferred to Milestone 18, which
-introduces coroutine bodies. Local generic functions use the lexical declaration scope instead
+coverage. Coroutine bodies are subject to the
+[coroutine lowering restrictions](coroutines-design.md).
+Local generic functions use the lexical declaration scope instead
 of the project-level method registry: a specialization matches one generic
 local function in the same block, inherits its constraints and captures, and
 does not enter the local overload set. Calls select it by the same closed

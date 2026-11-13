@@ -36,6 +36,8 @@ public sealed class InterfaceDispatchTests
     public void ClosesGenericInterfaceCallsInsideConstructedGenericOwners()
     {
         var project = CreateProject("""
+            namespace System;
+
             public interface IEqualityComparer<T> {
                 int GetHashCode(T value) const;
             }
@@ -61,6 +63,7 @@ public sealed class InterfaceDispatchTests
         Assert.DoesNotContain("_unknowntype_", source);
         Assert.Contains("cx_generic_", source);
         Assert.Contains("System_String", source);
+        Assert.Contains("static CX_STRING_DEF(__namespace_System, \"System\");", source);
     }
 
     [Fact]
@@ -129,7 +132,9 @@ public sealed class InterfaceDispatchTests
         Assert.Contains(".vtable", source);
         Assert.Contains(".instance == CX_NULL", source);
         Assert.Contains(".instance != CX_NULL", source);
-        Assert.Contains("struct cx_iface_ref calc =", source);
+        Assert.Contains("struct cx_iface_ref calc;", source);
+        Assert.Contains("cx_gc_store_interface_reference(", source);
+        Assert.Contains("&(calc)", source);
         Assert.Contains("struct cx_iface_ref __cx_iface_receiver_", source);
     }
 

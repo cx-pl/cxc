@@ -4281,10 +4281,12 @@ public int Main(string[] args) {
     $dictionaryOutput = Join-Path $dictionaryRoot 'generated'
     New-Item -ItemType Directory -Path $dictionarySourceDirectory, $dictionaryOutput -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $dictionaryRoot 'collections-dictionary.cxproj'), "name: collectionsDictionaryE2e`ntype: Executable`n", [Text.UTF8Encoding]::new($false))
-    foreach ($collectionSource in @('Array.cx', 'ICollection.cx', 'IEnumerable.cx', 'IEnumerator.cx', 'IEqualityComparer.cx', 'Dictionary.cx')) {
+    foreach ($collectionSource in @('Array.cx', 'ICollection.cx', 'IEnumerable.cx', 'IEnumerator.cx', 'Dictionary.cx')) {
         Copy-Item -LiteralPath (Join-Path $cxCorePath "src\System\Collections\$collectionSource") -Destination (Join-Path $dictionarySourceDirectory $collectionSource)
     }
+    Copy-Item -LiteralPath (Join-Path $cxCorePath 'src\System\IEqualityComparer.cx') -Destination (Join-Path $dictionarySourceDirectory 'IEqualityComparer.cx')
     [IO.File]::WriteAllText((Join-Path $dictionarySourceDirectory 'main.cx'), @'
+import System;
 import System.Collections;
 public final class ConstantStringComparer : IEqualityComparer<string> {
     public int GetHashCode(string value) const { return 1; }

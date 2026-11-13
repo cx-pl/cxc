@@ -1,5 +1,5 @@
 param(
-    [string] $CompilerDll = (Join-Path $PSScriptRoot '../../src/bin/Debug/net10.0/CxCompiler.dll'),
+    [string] $CompilerDll = (Join-Path $PSScriptRoot '../../src/CxCompiler/bin/Debug/net10.0/CxCompiler.dll'),
     [string] $CxCoreDir = (Join-Path $PSScriptRoot '../../../cxcore'),
     [string] $BuildRoot = (Join-Path $PSScriptRoot '../../../.build/native-interop'),
     [ValidateSet('x64','Win32')] [string] $Architecture = 'x64',
@@ -55,7 +55,7 @@ foreach ($negative in @('signature','layout','field')) {
     $checks = Join-Path $destination 'sdk-checks'
     New-Item -ItemType Directory -Path $checks -Force | Out-Null
     $source = (Join-Path $destination '.obj/badNative.c').Replace('\','/')
-    $includes = ($destination.Replace('\','/') + '" "' + $CxCoreDir + '/src" "' + $CxCoreDir + '/inc" "' + $CxCoreDir + '/platform')
+    $includes = ($destination.Replace('\','/') + '" "' + $CxCoreDir + '/src" "' + $CxCoreDir + '/include" "' + $CxCoreDir + '/platform')
     [IO.File]::WriteAllText((Join-Path $checks 'CMakeLists.txt'), "cmake_minimum_required(VERSION 3.31)`nproject(sdk_check C)`nadd_library(badNative OBJECT `"$source`")`ntarget_include_directories(badNative PRIVATE `"$includes`")`ntarget_compile_features(badNative PRIVATE c_std_11)`ntarget_compile_definitions(badNative PRIVATE CX_STATIC_LINK CX_BADNATIVE_BUILD)`n")
     $build = Join-Path $destination "build-$Architecture-$StaticLink"
     & cmake -S $checks -B $build -A $Architecture

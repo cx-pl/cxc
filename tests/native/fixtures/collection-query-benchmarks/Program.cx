@@ -1,0 +1,2175 @@
+import System.Collections;
+import System.Collections.Query;
+
+internal final class BenchmarkNativeClock {
+    public static extern long GetNanoseconds();
+    public static extern void StartAllocationTracking();
+    public static extern void StopAllocationTracking();
+    public static extern long GetAllocationCount();
+    public static extern long GetAllocationBytes();
+    public static extern long GetHeapBytes();
+    public static extern void ScrubConservativeStack();
+    public static extern uint SupportsRetainedReleaseBudget();
+    public static extern uint SupportsPrefixCompletionReleaseBudget();
+    public static extern void WriteHeader();
+    public static extern uint ShouldMeasureCategory(uint category);
+    public static extern void WriteResult(
+        uint category,
+        uint sample,
+        uint iterations,
+        long elapsedNanoseconds,
+        long checksum,
+        long allocationCount,
+        long allocationBytes);
+    public static extern void WriteRetained(uint workload, long bytes);
+}
+
+public final class BenchmarkArraySequence : IEnumerable<int> {
+    private Array<int> _values;
+
+    public uint Length { const get { return _values.Length; } }
+
+    public constructor(Array<int> values) {
+        _values = values;
+    }
+
+    public int Get(uint index) const {
+        return _values.Get(index);
+    }
+
+    public IEnumerator<int> GetEnumerator() const {
+        return _values.GetEnumerator();
+    }
+}
+
+public final class RetainedQueryProjection {
+    private Array<int> _payload;
+
+    public constructor(int value) {
+        _payload = new Array<int>(65536u);
+        _payload.Set(0u, value);
+        _payload.Set(65535u, value + 1);
+    }
+
+    public int Read() const {
+        return _payload.Get(0u) + _payload.Get(65535u);
+    }
+}
+
+public static class QueryBenchmarks {
+    public static List<int> ListValues;
+    public static IEnumerator<int> RetainedSortEnumerator;
+    public static IEnumerator<RetainedQueryProjection>
+        RetainedMapTakeEnumerator;
+    public static IEnumerator<int> RetainedFilterTakeEnumerator;
+    public static IEnumerator<RetainedQueryProjection>
+        RetainedMapSkipTakeEnumerator;
+
+    public static bool IsEven(int value) {
+        return value % 2 == 0;
+    }
+
+    public static bool GreaterThanTwo(int value) {
+        return value > 2;
+    }
+
+    public static bool GreaterThan10240(int value) {
+        return value > 10240;
+    }
+
+    public static int MultiplyByTen(int value) {
+        return value * 10;
+    }
+
+    public static int Identity(int value) {
+        return value;
+    }
+
+    public static int Triple(int value) {
+        return value * 3;
+    }
+
+    public static bool GreaterThan512(int value) {
+        return value > 512;
+    }
+
+    public static int CompareInt(int left, int right) {
+        if (left < right) { return -1; }
+        if (left > right) { return 1; }
+        return 0;
+    }
+
+    public static int SortBucket(int value) {
+        return value % 17;
+    }
+
+    public static int SortSecondaryBucket(int value) {
+        return value % 11;
+    }
+
+    public static int SortTertiaryBucket(int value) {
+        return value % 7;
+    }
+
+    public static int SortQuaternaryBucket(int value) {
+        return value % 5;
+    }
+
+    public static int SortQuinaryBucket(int value) {
+        return value % 3;
+    }
+
+    public static int SortSixthBucket(int value) {
+        return value % 2;
+    }
+
+    public static int SortSeventhBucket(int value) {
+        return value % 19;
+    }
+
+    public static BenchmarkArraySequence CreateSortInput(uint count) {
+        Array<int> storage = new Array<int>(count);
+        for (uint index = 0u; index < count; index += 1u) {
+            storage.Set(index, (int)((index * 37u) % count));
+        }
+        return new BenchmarkArraySequence(storage);
+    }
+
+    public static bool VerifySorted(
+        IEnumerable<int> values,
+        uint expectedCount,
+        long expectedSum) {
+        IEnumerator<int> enumerator = values.GetEnumerator();
+        uint count = 0u;
+        long sum = 0L;
+        int previous = 0;
+        bool hasPrevious = false;
+        bool ordered = true;
+        try {
+            while (enumerator.MoveNext()) {
+                int value = enumerator.Current;
+                if (hasPrevious && value < previous) { ordered = false; }
+                previous = value;
+                hasPrevious = true;
+                count += 1u;
+                sum += value;
+            }
+        } finally {
+            enumerator.Dispose();
+        }
+        return ordered && count == expectedCount && sum == expectedSum;
+    }
+
+    public static bool VerifyMultiKeySorted(
+        IEnumerable<int> values,
+        uint expectedCount,
+        long expectedSum) {
+        IEnumerator<int> enumerator = values.GetEnumerator();
+        uint count = 0u;
+        long sum = 0L;
+        int previousBucket = 0;
+        int previousSecondary = 0;
+        bool hasPrevious = false;
+        bool ordered = true;
+        try {
+            while (enumerator.MoveNext()) {
+                int value = enumerator.Current;
+                int bucket = SortBucket(value);
+                int secondary = SortSecondaryBucket(value);
+                if (hasPrevious && (bucket < previousBucket ||
+                    (bucket == previousBucket && secondary < previousSecondary))) {
+                    ordered = false;
+                }
+                previousBucket = bucket;
+                previousSecondary = secondary;
+                hasPrevious = true;
+                count += 1u;
+                sum += value;
+            }
+        } finally {
+            enumerator.Dispose();
+        }
+        return ordered && count == expectedCount && sum == expectedSum;
+    }
+
+    public static bool VerifyBucketSorted(
+        IEnumerable<int> values,
+        uint expectedCount,
+        long expectedSum) {
+        IEnumerator<int> enumerator = values.GetEnumerator();
+        uint count = 0u;
+        long sum = 0L;
+        int previousBucket = 0;
+        bool hasPrevious = false;
+        bool ordered = true;
+        try {
+            while (enumerator.MoveNext()) {
+                int value = enumerator.Current;
+                int bucket = SortBucket(value);
+                if (hasPrevious && bucket < previousBucket) {
+                    ordered = false;
+                }
+                previousBucket = bucket;
+                hasPrevious = true;
+                count += 1u;
+                sum += value;
+            }
+        } finally {
+            enumerator.Dispose();
+        }
+        return ordered && count == expectedCount && sum == expectedSum;
+    }
+
+    public static bool VerifyTripleKeySorted(
+        IEnumerable<int> values,
+        uint expectedCount,
+        long expectedSum) {
+        IEnumerator<int> enumerator = values.GetEnumerator();
+        uint count = 0u;
+        long sum = 0L;
+        int previousPrimary = 0;
+        int previousSecondary = 0;
+        int previousTertiary = 0;
+        int previousValue = 0;
+        bool hasPrevious = false;
+        bool ordered = true;
+        try {
+            while (enumerator.MoveNext()) {
+                int value = enumerator.Current;
+                int primary = SortBucket(value);
+                int secondary = SortSecondaryBucket(value);
+                int tertiary = SortTertiaryBucket(value);
+                if (hasPrevious && (primary < previousPrimary ||
+                    (primary == previousPrimary && secondary < previousSecondary) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary < previousTertiary))) {
+                    ordered = false;
+                }
+                previousPrimary = primary;
+                previousSecondary = secondary;
+                previousTertiary = tertiary;
+                previousValue = value;
+                hasPrevious = true;
+                count += 1u;
+                sum += value;
+            }
+        } finally {
+            enumerator.Dispose();
+        }
+        return ordered && count == expectedCount && sum == expectedSum;
+    }
+
+    public static bool VerifyFourKeySorted(
+        IEnumerable<int> values,
+        uint expectedCount,
+        long expectedSum) {
+        IEnumerator<int> enumerator = values.GetEnumerator();
+        uint count = 0u;
+        long sum = 0L;
+        int previousPrimary = 0;
+        int previousSecondary = 0;
+        int previousTertiary = 0;
+        int previousValue = 0;
+        bool hasPrevious = false;
+        bool ordered = true;
+        try {
+            while (enumerator.MoveNext()) {
+                int value = enumerator.Current;
+                int primary = SortBucket(value);
+                int secondary = SortSecondaryBucket(value);
+                int tertiary = SortTertiaryBucket(value);
+                if (hasPrevious && (primary < previousPrimary ||
+                    (primary == previousPrimary && secondary < previousSecondary) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary < previousTertiary) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary == previousTertiary && value < previousValue))) {
+                    ordered = false;
+                }
+                previousPrimary = primary;
+                previousSecondary = secondary;
+                previousTertiary = tertiary;
+                previousValue = value;
+                hasPrevious = true;
+                count += 1u;
+                sum += value;
+            }
+        } finally {
+            enumerator.Dispose();
+        }
+        return ordered && count == expectedCount && sum == expectedSum;
+    }
+
+    public static bool VerifyFiveKeySorted(
+        IEnumerable<int> values,
+        uint expectedCount,
+        long expectedSum) {
+        IEnumerator<int> enumerator = values.GetEnumerator();
+        uint count = 0u;
+        long sum = 0L;
+        int previousPrimary = 0;
+        int previousSecondary = 0;
+        int previousTertiary = 0;
+        int previousQuaternary = 0;
+        int previousValue = 0;
+        bool hasPrevious = false;
+        bool ordered = true;
+        try {
+            while (enumerator.MoveNext()) {
+                int value = enumerator.Current;
+                int primary = SortBucket(value);
+                int secondary = SortSecondaryBucket(value);
+                int tertiary = SortTertiaryBucket(value);
+                int quaternary = SortQuaternaryBucket(value);
+                if (hasPrevious && (primary < previousPrimary ||
+                    (primary == previousPrimary && secondary < previousSecondary) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary < previousTertiary) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary == previousTertiary && quaternary < previousQuaternary) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary == previousTertiary && quaternary == previousQuaternary &&
+                        value < previousValue))) {
+                    ordered = false;
+                }
+                previousPrimary = primary;
+                previousSecondary = secondary;
+                previousTertiary = tertiary;
+                previousQuaternary = quaternary;
+                previousValue = value;
+                hasPrevious = true;
+                count += 1u;
+                sum += value;
+            }
+        } finally {
+            enumerator.Dispose();
+        }
+        return ordered && count == expectedCount && sum == expectedSum;
+    }
+
+    public static bool VerifySixKeySorted(
+        IEnumerable<int> values,
+        uint expectedCount,
+        long expectedSum) {
+        IEnumerator<int> enumerator = values.GetEnumerator();
+        uint count = 0u;
+        long sum = 0L;
+        int previousPrimary = 0;
+        int previousSecondary = 0;
+        int previousTertiary = 0;
+        int previousQuaternary = 0;
+        int previousQuinary = 0;
+        int previousValue = 0;
+        bool hasPrevious = false;
+        bool ordered = true;
+        try {
+            while (enumerator.MoveNext()) {
+                int value = enumerator.Current;
+                int primary = SortBucket(value);
+                int secondary = SortSecondaryBucket(value);
+                int tertiary = SortTertiaryBucket(value);
+                int quaternary = SortQuaternaryBucket(value);
+                int quinary = SortQuinaryBucket(value);
+                if (hasPrevious && (primary < previousPrimary ||
+                    (primary == previousPrimary && secondary < previousSecondary) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary < previousTertiary) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary == previousTertiary && quaternary < previousQuaternary) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary == previousTertiary && quaternary == previousQuaternary &&
+                        quinary < previousQuinary) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary == previousTertiary && quaternary == previousQuaternary &&
+                        quinary == previousQuinary && value < previousValue))) {
+                    ordered = false;
+                }
+                previousPrimary = primary;
+                previousSecondary = secondary;
+                previousTertiary = tertiary;
+                previousQuaternary = quaternary;
+                previousQuinary = quinary;
+                previousValue = value;
+                hasPrevious = true;
+                count += 1u;
+                sum += value;
+            }
+        } finally {
+            enumerator.Dispose();
+        }
+        return ordered && count == expectedCount && sum == expectedSum;
+    }
+
+    public static bool VerifySevenKeySorted(
+        IEnumerable<int> values,
+        uint expectedCount,
+        long expectedSum) {
+        IEnumerator<int> enumerator = values.GetEnumerator();
+        uint count = 0u;
+        long sum = 0L;
+        int previousPrimary = 0;
+        int previousSecondary = 0;
+        int previousTertiary = 0;
+        int previousQuaternary = 0;
+        int previousQuinary = 0;
+        int previousSixth = 0;
+        int previousValue = 0;
+        bool hasPrevious = false;
+        bool ordered = true;
+        try {
+            while (enumerator.MoveNext()) {
+                int value = enumerator.Current;
+                int primary = SortBucket(value);
+                int secondary = SortSecondaryBucket(value);
+                int tertiary = SortTertiaryBucket(value);
+                int quaternary = SortQuaternaryBucket(value);
+                int quinary = SortQuinaryBucket(value);
+                int sixth = SortSixthBucket(value);
+                if (hasPrevious && (primary < previousPrimary ||
+                    (primary == previousPrimary && secondary < previousSecondary) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary < previousTertiary) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary == previousTertiary && quaternary < previousQuaternary) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary == previousTertiary && quaternary == previousQuaternary &&
+                        quinary < previousQuinary) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary == previousTertiary && quaternary == previousQuaternary &&
+                        quinary == previousQuinary && sixth < previousSixth) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary == previousTertiary && quaternary == previousQuaternary &&
+                        quinary == previousQuinary && sixth == previousSixth &&
+                        value < previousValue))) {
+                    ordered = false;
+                }
+                previousPrimary = primary;
+                previousSecondary = secondary;
+                previousTertiary = tertiary;
+                previousQuaternary = quaternary;
+                previousQuinary = quinary;
+                previousSixth = sixth;
+                previousValue = value;
+                hasPrevious = true;
+                count += 1u;
+                sum += value;
+            }
+        } finally {
+            enumerator.Dispose();
+        }
+        return ordered && count == expectedCount && sum == expectedSum;
+    }
+
+    public static bool VerifyEightKeySorted(
+        IEnumerable<int> values,
+        uint expectedCount,
+        long expectedSum) {
+        IEnumerator<int> enumerator = values.GetEnumerator();
+        uint count = 0u;
+        long sum = 0L;
+        int previousPrimary = 0;
+        int previousSecondary = 0;
+        int previousTertiary = 0;
+        int previousQuaternary = 0;
+        int previousQuinary = 0;
+        int previousSixth = 0;
+        int previousSeventh = 0;
+        int previousValue = 0;
+        bool hasPrevious = false;
+        bool ordered = true;
+        try {
+            while (enumerator.MoveNext()) {
+                int value = enumerator.Current;
+                int primary = SortBucket(value);
+                int secondary = SortSecondaryBucket(value);
+                int tertiary = SortTertiaryBucket(value);
+                int quaternary = SortQuaternaryBucket(value);
+                int quinary = SortQuinaryBucket(value);
+                int sixth = SortSixthBucket(value);
+                int seventh = SortSeventhBucket(value);
+                if (hasPrevious && (primary < previousPrimary ||
+                    (primary == previousPrimary && secondary < previousSecondary) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary < previousTertiary) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary == previousTertiary && quaternary < previousQuaternary) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary == previousTertiary && quaternary == previousQuaternary &&
+                        quinary < previousQuinary) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary == previousTertiary && quaternary == previousQuaternary &&
+                        quinary == previousQuinary && sixth < previousSixth) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary == previousTertiary && quaternary == previousQuaternary &&
+                        quinary == previousQuinary && sixth == previousSixth &&
+                        seventh < previousSeventh) ||
+                    (primary == previousPrimary && secondary == previousSecondary &&
+                        tertiary == previousTertiary && quaternary == previousQuaternary &&
+                        quinary == previousQuinary && sixth == previousSixth &&
+                        seventh == previousSeventh && value < previousValue))) {
+                    ordered = false;
+                }
+                previousPrimary = primary;
+                previousSecondary = secondary;
+                previousTertiary = tertiary;
+                previousQuaternary = quaternary;
+                previousQuinary = quinary;
+                previousSixth = sixth;
+                previousSeventh = seventh;
+                previousValue = value;
+                hasPrevious = true;
+                count += 1u;
+                sum += value;
+            }
+        } finally {
+            enumerator.Dispose();
+        }
+        return ordered && count == expectedCount && sum == expectedSum;
+    }
+
+    public static long MeasureCapturedRetention(
+        BenchmarkArraySequence values) {
+        System.GC.Collect();
+        long before = BenchmarkNativeClock.GetHeapBytes();
+        int threshold = 512;
+        int multiplier = 3;
+        IEnumerable<int> filtered = values
+            .Filter((int value) => value > threshold);
+        IEnumerable<int> query = filtered
+            .Map<int>((int value) => value * multiplier);
+        System.GC.Collect();
+        long retained = BenchmarkNativeClock.GetHeapBytes() - before;
+        long checksum = Sum(query);
+        if (checksum == 0L) { return -1L; }
+        return retained;
+    }
+
+    public static long MeasureStaticRetention(BenchmarkArraySequence values) {
+        System.GC.Collect();
+        long before = BenchmarkNativeClock.GetHeapBytes();
+        IEnumerable<int> filtered = values
+            .Filter((int value) => IsEven(value));
+        IEnumerable<int> query = filtered
+            .Map<int>((int value) => MultiplyByTen(value));
+        System.GC.Collect();
+        long retained = BenchmarkNativeClock.GetHeapBytes() - before;
+        long checksum = Sum(query);
+        if (checksum == 0L) { return -1L; }
+        return retained;
+    }
+
+    private static void CreateSortedSevenKeyEnumerator(
+        BenchmarkArraySequence values) {
+        IEnumerable<int> sorted = values
+            .Sort<int>(
+                (int value) => SortBucket(value),
+                (int left, int right) => CompareInt(left, right))
+            .ThenSort<int>(
+                (int value) => SortSecondaryBucket(value),
+                (int left, int right) => CompareInt(left, right))
+            .ThenSort<int>(
+                (int value) => SortTertiaryBucket(value),
+                (int left, int right) => CompareInt(left, right))
+            .ThenSort<int>(
+                (int value) => SortQuaternaryBucket(value),
+                (int left, int right) => CompareInt(left, right))
+            .ThenSort<int>(
+                (int value) => SortQuinaryBucket(value),
+                (int left, int right) => CompareInt(left, right))
+            .ThenSort<int>(
+                (int value) => SortSixthBucket(value),
+                (int left, int right) => CompareInt(left, right))
+            .ThenSort<int>(
+                (int value) => SortSeventhBucket(value),
+                (int left, int right) => CompareInt(left, right));
+        RetainedSortEnumerator = sorted.GetEnumerator();
+        RetainedSortEnumerator.MoveNext();
+    }
+
+    private static void CreateSortedEightKeyEnumerator(
+        BenchmarkArraySequence values) {
+        IEnumerable<int> sorted = values
+            .Sort<int>(
+                (int value) => SortBucket(value),
+                (int left, int right) => CompareInt(left, right))
+            .ThenSort<int>(
+                (int value) => SortSecondaryBucket(value),
+                (int left, int right) => CompareInt(left, right))
+            .ThenSort<int>(
+                (int value) => SortTertiaryBucket(value),
+                (int left, int right) => CompareInt(left, right))
+            .ThenSort<int>(
+                (int value) => SortQuaternaryBucket(value),
+                (int left, int right) => CompareInt(left, right))
+            .ThenSort<int>(
+                (int value) => SortQuinaryBucket(value),
+                (int left, int right) => CompareInt(left, right))
+            .ThenSort<int>(
+                (int value) => SortSixthBucket(value),
+                (int left, int right) => CompareInt(left, right))
+            .ThenSort<int>(
+                (int value) => SortSeventhBucket(value),
+                (int left, int right) => CompareInt(left, right))
+            .ThenSort<int>(
+                (int value) => value,
+                (int left, int right) => CompareInt(left, right));
+        RetainedSortEnumerator = sorted.GetEnumerator();
+        RetainedSortEnumerator.MoveNext();
+    }
+
+    private static void ReleaseDisposedSortEnumerator() {
+        RetainedSortEnumerator = default;
+    }
+
+    public static long MeasureDisposedSortScratchRetention(
+        BenchmarkArraySequence values) {
+        System.GC.Collect();
+        CreateSortedSevenKeyEnumerator(values);
+        System.GC.Collect();
+        long beforeDispose = BenchmarkNativeClock.GetHeapBytes();
+        RetainedSortEnumerator.Dispose();
+        System.GC.Collect();
+        long afterDispose = BenchmarkNativeClock.GetHeapBytes();
+        ReleaseDisposedSortEnumerator();
+        System.GC.Collect();
+        return beforeDispose - afterDispose;
+    }
+
+    public static long MeasureDisposedEightKeySortScratchRetention(
+        BenchmarkArraySequence values) {
+        System.GC.Collect();
+        CreateSortedEightKeyEnumerator(values);
+        System.GC.Collect();
+        long beforeDispose = BenchmarkNativeClock.GetHeapBytes();
+        RetainedSortEnumerator.Dispose();
+        System.GC.Collect();
+        long afterDispose = BenchmarkNativeClock.GetHeapBytes();
+        ReleaseDisposedSortEnumerator();
+        System.GC.Collect();
+        return beforeDispose - afterDispose;
+    }
+
+    public static RetainedQueryProjection MakeRetainedProjection(int value) {
+        return new RetainedQueryProjection(value);
+    }
+
+    private static bool CreateRetainedArrayMapTakeEnumerator() {
+        Array<int> source = new Array<int>(1u);
+        source.Set(0u, 41);
+        IEnumerable<RetainedQueryProjection> query = source
+            .Map<RetainedQueryProjection>(
+                (int value) => MakeRetainedProjection(value))
+            .Take(1u);
+        RetainedMapTakeEnumerator = query.GetEnumerator();
+        return RetainedMapTakeEnumerator.MoveNext();
+    }
+
+    private static bool CreateRetainedListMapTakeEnumerator() {
+        List<int> source = new List<int>();
+        source.Add(41);
+        IEnumerable<RetainedQueryProjection> query = source
+            .Map<RetainedQueryProjection>(
+                (int value) => MakeRetainedProjection(value))
+            .Take(1u);
+        RetainedMapTakeEnumerator = query.GetEnumerator();
+        return RetainedMapTakeEnumerator.MoveNext();
+    }
+
+    private static bool CreateRetainedListFilterMapTakeEnumerator() {
+        List<int> source = new List<int>();
+        source.Add(41);
+        int threshold = 40;
+        int multiplier = 1;
+        IEnumerable<RetainedQueryProjection> query = source
+            .Filter((int value) => value > threshold)
+            .Map<RetainedQueryProjection>((int value) =>
+                MakeRetainedProjection(value * multiplier))
+            .Take(1u);
+        RetainedMapTakeEnumerator = query.GetEnumerator();
+        return RetainedMapTakeEnumerator.MoveNext();
+    }
+
+    private static bool CreateRetainedArrayFilterMapTakeEnumerator() {
+        Array<int> source = new Array<int>(1u);
+        source.Set(0u, 41);
+        int threshold = 40;
+        int multiplier = 1;
+        IEnumerable<RetainedQueryProjection> query = source
+            .Filter((int value) => value > threshold)
+            .Map<RetainedQueryProjection>((int value) =>
+                MakeRetainedProjection(value * multiplier))
+            .Take(1u);
+        RetainedMapTakeEnumerator = query.GetEnumerator();
+        return RetainedMapTakeEnumerator.MoveNext();
+    }
+
+    private static bool RetainedMapTakeCurrentIsValid() {
+        RetainedQueryProjection value = RetainedMapTakeEnumerator.Current;
+        return value != null && value.Read() == 83;
+    }
+
+    private static long MeasureDisposedMapTakeRetention(
+        bool useListSource) {
+        System.GC.Collect();
+        bool moved = useListSource
+            ? CreateRetainedListMapTakeEnumerator()
+            : CreateRetainedArrayMapTakeEnumerator();
+        if (!moved) {
+            RetainedMapTakeEnumerator = default;
+            return -1L;
+        }
+        System.GC.Collect();
+        if (!RetainedMapTakeCurrentIsValid()) {
+            RetainedMapTakeEnumerator.Dispose();
+            RetainedMapTakeEnumerator = default;
+            return -2L;
+        }
+        System.GC.Collect();
+        long beforeDispose = BenchmarkNativeClock.GetHeapBytes();
+        RetainedMapTakeEnumerator.Dispose();
+        System.GC.Collect();
+        long afterDispose = BenchmarkNativeClock.GetHeapBytes();
+        RetainedMapTakeEnumerator = default;
+        System.GC.Collect();
+        return beforeDispose - afterDispose;
+    }
+
+    public static long MeasureDisposedArrayMapTakeRetention() {
+        return MeasureDisposedMapTakeRetention(false);
+    }
+
+    public static long MeasureDisposedListMapTakeRetention() {
+        return MeasureDisposedMapTakeRetention(true);
+    }
+
+    private static long MeasureDisposedFilterMapTakeRetention(
+        bool useListSource) {
+        System.GC.Collect();
+        bool moved = useListSource
+            ? CreateRetainedListFilterMapTakeEnumerator()
+            : CreateRetainedArrayFilterMapTakeEnumerator();
+        if (!moved) {
+            RetainedMapTakeEnumerator = default;
+            return -1L;
+        }
+        System.GC.Collect();
+        if (!RetainedMapTakeCurrentIsValid()) {
+            RetainedMapTakeEnumerator.Dispose();
+            RetainedMapTakeEnumerator = default;
+            return -2L;
+        }
+        System.GC.Collect();
+        long beforeDispose = BenchmarkNativeClock.GetHeapBytes();
+        RetainedMapTakeEnumerator.Dispose();
+        System.GC.Collect();
+        long afterDispose = BenchmarkNativeClock.GetHeapBytes();
+        RetainedMapTakeEnumerator = default;
+        System.GC.Collect();
+        return beforeDispose - afterDispose;
+    }
+
+    public static long MeasureDisposedArrayFilterMapTakeRetention() {
+        return MeasureDisposedFilterMapTakeRetention(false);
+    }
+
+    public static long MeasureDisposedListFilterMapTakeRetention() {
+        return MeasureDisposedFilterMapTakeRetention(true);
+    }
+
+    private static bool CreateRetainedArrayFilterTakeEnumerator() {
+        Array<int> source = new Array<int>(2u);
+        source.Set(0u, 41);
+        source.Set(1u, 42);
+        RetainedQueryProjection captured = MakeRetainedProjection(41);
+        IEnumerable<int> query = source
+            .Filter((int value) => captured.Read() == 83 && value > 0)
+            .Take(2u);
+        RetainedFilterTakeEnumerator = query.GetEnumerator();
+        return RetainedFilterTakeEnumerator.MoveNext();
+    }
+
+    private static bool CreateRetainedListFilterTakeEnumerator() {
+        List<int> source = new List<int>();
+        source.Add(41);
+        source.Add(42);
+        RetainedQueryProjection captured = MakeRetainedProjection(41);
+        IEnumerable<int> query = source
+            .Filter((int value) => captured.Read() == 83 && value > 0)
+            .Take(2u);
+        RetainedFilterTakeEnumerator = query.GetEnumerator();
+        return RetainedFilterTakeEnumerator.MoveNext();
+    }
+
+    private static bool CreateRetainedArrayFilterSkipTakeEnumerator() {
+        Array<int> source = new Array<int>(3u);
+        source.Set(0u, 41);
+        source.Set(1u, 42);
+        source.Set(2u, 43);
+        RetainedQueryProjection captured = MakeRetainedProjection(41);
+        IEnumerable<int> query = source
+            .Filter((int value) => captured.Read() == 83 && value > 0)
+            .Skip(1u).Take(1u);
+        RetainedFilterTakeEnumerator = query.GetEnumerator();
+        return true;
+    }
+
+    private static bool CreateRetainedListFilterSkipTakeEnumerator() {
+        List<int> source = new List<int>();
+        source.Add(41);
+        source.Add(42);
+        source.Add(43);
+        RetainedQueryProjection captured = MakeRetainedProjection(41);
+        IEnumerable<int> query = source
+            .Filter((int value) => captured.Read() == 83 && value > 0)
+            .Skip(1u).Take(1u);
+        RetainedFilterTakeEnumerator = query.GetEnumerator();
+        return true;
+    }
+
+    private static long CollectAndReadHeapBytes() {
+        BenchmarkNativeClock.ScrubConservativeStack();
+        System.GC.Collect();
+        return BenchmarkNativeClock.GetHeapBytes();
+    }
+
+    private static long MeasureFilterTakeCompletionRelease(
+        bool useListSource) {
+        System.GC.Collect();
+        bool moved = useListSource
+            ? CreateRetainedListFilterTakeEnumerator()
+            : CreateRetainedArrayFilterTakeEnumerator();
+        if (!moved || RetainedFilterTakeEnumerator.Current != 41) {
+            RetainedFilterTakeEnumerator = default;
+            return -1L;
+        }
+        long beforeCompletion = CollectAndReadHeapBytes();
+        bool completed = RetainedFilterTakeEnumerator.MoveNext();
+        if (!completed || RetainedFilterTakeEnumerator.Current != 42) {
+            RetainedFilterTakeEnumerator.Dispose();
+            RetainedFilterTakeEnumerator = default;
+            return -2L;
+        }
+        long afterCompletion = CollectAndReadHeapBytes();
+        RetainedFilterTakeEnumerator.Dispose();
+        RetainedFilterTakeEnumerator = default;
+        System.GC.Collect();
+        return beforeCompletion - afterCompletion;
+    }
+
+    public static long MeasureArrayFilterTakeCompletionRelease() {
+        return MeasureFilterTakeCompletionRelease(false);
+    }
+
+    public static long MeasureListFilterTakeCompletionRelease() {
+        return MeasureFilterTakeCompletionRelease(true);
+    }
+
+    private static long MeasureFilterSkipTakeCompletionRelease(
+        bool useListSource) {
+        System.GC.Collect();
+        bool created = useListSource
+            ? CreateRetainedListFilterSkipTakeEnumerator()
+            : CreateRetainedArrayFilterSkipTakeEnumerator();
+        if (!created) {
+            RetainedFilterTakeEnumerator = default;
+            return -1L;
+        }
+        long beforeCompletion = CollectAndReadHeapBytes();
+        bool moved = RetainedFilterTakeEnumerator.MoveNext();
+        if (!moved || RetainedFilterTakeEnumerator.Current != 42) {
+            RetainedFilterTakeEnumerator.Dispose();
+            RetainedFilterTakeEnumerator = default;
+            return -2L;
+        }
+        long afterCompletion = CollectAndReadHeapBytes();
+        RetainedFilterTakeEnumerator.Dispose();
+        RetainedFilterTakeEnumerator = default;
+        System.GC.Collect();
+        return beforeCompletion - afterCompletion;
+    }
+
+    public static long MeasureArrayFilterSkipTakeCompletionRelease() {
+        return MeasureFilterSkipTakeCompletionRelease(false);
+    }
+
+    public static long MeasureListFilterSkipTakeCompletionRelease() {
+        return MeasureFilterSkipTakeCompletionRelease(true);
+    }
+
+    private static bool CreateRetainedArrayMapSkipTakeEnumerator() {
+        Array<int> source = new Array<int>(3u);
+        source.Set(0u, 41);
+        source.Set(1u, 42);
+        source.Set(2u, 43);
+        RetainedQueryProjection captured = MakeRetainedProjection(41);
+        IEnumerable<RetainedQueryProjection> query = source
+            .Map<RetainedQueryProjection>((int value) =>
+                MakeRetainedProjection(value + captured.Read() - 83))
+            .Skip(1u).Take(1u);
+        RetainedMapSkipTakeEnumerator = query.GetEnumerator();
+        return true;
+    }
+
+    private static bool CreateRetainedListMapSkipTakeEnumerator() {
+        List<int> source = new List<int>();
+        source.Add(41);
+        source.Add(42);
+        source.Add(43);
+        RetainedQueryProjection captured = MakeRetainedProjection(41);
+        IEnumerable<RetainedQueryProjection> query = source
+            .Map<RetainedQueryProjection>((int value) =>
+                MakeRetainedProjection(value + captured.Read() - 83))
+            .Skip(1u).Take(1u);
+        RetainedMapSkipTakeEnumerator = query.GetEnumerator();
+        return true;
+    }
+
+    private static long MeasureMapSkipTakeCompletionRelease(
+        bool useListSource) {
+        System.GC.Collect();
+        bool created = useListSource
+            ? CreateRetainedListMapSkipTakeEnumerator()
+            : CreateRetainedArrayMapSkipTakeEnumerator();
+        if (!created) {
+            RetainedMapSkipTakeEnumerator = default;
+            return -1L;
+        }
+        bool moved = RetainedMapSkipTakeEnumerator.MoveNext();
+        if (!moved || RetainedMapSkipTakeEnumerator.Current == null ||
+            RetainedMapSkipTakeEnumerator.Current.Read() != 85) {
+            RetainedMapSkipTakeEnumerator.Dispose();
+            RetainedMapSkipTakeEnumerator = default;
+            return -2L;
+        }
+        long beforeCompletion = CollectAndReadHeapBytes();
+        bool completed = RetainedMapSkipTakeEnumerator.MoveNext();
+        if (completed) {
+            RetainedMapSkipTakeEnumerator.Dispose();
+            RetainedMapSkipTakeEnumerator = default;
+            return -3L;
+        }
+        long afterCompletion = CollectAndReadHeapBytes();
+        RetainedMapSkipTakeEnumerator.Dispose();
+        RetainedMapSkipTakeEnumerator = default;
+        System.GC.Collect();
+        return beforeCompletion - afterCompletion;
+    }
+
+    public static long MeasureArrayMapSkipTakeCompletionRelease() {
+        return MeasureMapSkipTakeCompletionRelease(false);
+    }
+
+    public static long MeasureListMapSkipTakeCompletionRelease() {
+        return MeasureMapSkipTakeCompletionRelease(true);
+    }
+
+    public static long Sum(IEnumerable<int> values) {
+        long sum = 0L;
+        IEnumerator<int> enumerator = values.GetEnumerator();
+        try {
+            while (enumerator.MoveNext()) {
+                sum += enumerator.Current;
+            }
+        } finally {
+            enumerator.Dispose();
+        }
+        return sum;
+    }
+
+    public static long HandwrittenTwoFilterSum(BenchmarkArraySequence values) {
+        long sum = 0L;
+        for (uint index = 0u; index < values.Length; index += 1u) {
+            int value = values.Get(index);
+            if (IsEven(value) && GreaterThanTwo(value)) {
+                sum += value;
+            }
+        }
+        return sum;
+    }
+
+    public static long HandwrittenStreamingSum(BenchmarkArraySequence values) {
+        long sum = 0L;
+        uint selected = 0u;
+        for (uint index = 0u; index < values.Length && selected < 128u;
+            index += 1u) {
+            int value = values.Get(index);
+            if (IsEven(value) && GreaterThanTwo(value)) {
+                sum += MultiplyByTen(value);
+                selected += 1u;
+            }
+        }
+        return sum;
+    }
+
+    public static long HandwrittenSingleFilterMapTakeSum(
+        BenchmarkArraySequence values) {
+        long sum = 0L;
+        uint selected = 0u;
+        for (uint index = 0u; index < values.Length && selected < 128u;
+            index += 1u) {
+            int value = values.Get(index);
+            if (IsEven(value)) {
+                sum += MultiplyByTen(value);
+                selected += 1u;
+            }
+        }
+        return sum;
+    }
+
+    public static long HandwrittenListFilterMapTakeSum() {
+        long sum = 0L;
+        uint selected = 0u;
+        for (uint index = 0u;
+            index < ListValues.Count && selected < 128u;
+            index += 1u) {
+            int value = ListValues.Get(index);
+            if (IsEven(value)) {
+                sum += MultiplyByTen(value);
+                selected += 1u;
+            }
+        }
+        return sum;
+    }
+
+    public static long HandwrittenArrayMapFilterTakeSum(
+        BenchmarkArraySequence values) {
+        long sum = 0L;
+        uint selected = 0u;
+        for (uint index = 0u; index < values.Length && selected < 128u;
+            index += 1u) {
+            int mapped = MultiplyByTen(values.Get(index));
+            if (GreaterThan10240(mapped)) {
+                sum += mapped;
+                selected += 1u;
+            }
+        }
+        return sum;
+    }
+
+    public static long HandwrittenListMapFilterTakeSum() {
+        long sum = 0L;
+        uint selected = 0u;
+        for (uint index = 0u;
+            index < ListValues.Count && selected < 128u;
+            index += 1u) {
+            int mapped = MultiplyByTen(ListValues.Get(index));
+            if (GreaterThan10240(mapped)) {
+                sum += mapped;
+                selected += 1u;
+            }
+        }
+        return sum;
+    }
+
+    public static long HandwrittenArrayMapTakeSum(
+        BenchmarkArraySequence values) {
+        long sum = 0L;
+        uint index = 0u;
+        while (index < values.Length && index < 128u) {
+            sum += MultiplyByTen(values.Get(index));
+            index += 1u;
+        }
+        return sum;
+    }
+
+    public static long HandwrittenListMapTakeSum() {
+        long sum = 0L;
+        uint index = 0u;
+        while (index < ListValues.Count && index < 128u) {
+            sum += MultiplyByTen(ListValues.Get(index));
+            index += 1u;
+        }
+        return sum;
+    }
+
+    public static long HandwrittenArrayMapSkipTakeSum(
+        BenchmarkArraySequence values) {
+        long sum = 0L;
+        for (uint index = 0u; index < values.Length && index < 640u;
+            index += 1u) {
+            int mapped = MultiplyByTen(values.Get(index));
+            if (index >= 512u) { sum += mapped; }
+        }
+        return sum;
+    }
+
+    public static long HandwrittenListMapSkipTakeSum() {
+        long sum = 0L;
+        for (uint index = 0u;
+            index < ListValues.Count && index < 640u;
+            index += 1u) {
+            int mapped = MultiplyByTen(ListValues.Get(index));
+            if (index >= 512u) { sum += mapped; }
+        }
+        return sum;
+    }
+
+    public static long HandwrittenArrayFilterTakeSum(
+        BenchmarkArraySequence values) {
+        long sum = 0L;
+        uint selected = 0u;
+        for (uint index = 0u; index < values.Length && selected < 128u;
+            index += 1u) {
+            int value = values.Get(index);
+            if (IsEven(value)) {
+                sum += value;
+                selected += 1u;
+            }
+        }
+        return sum;
+    }
+
+    public static long HandwrittenListFilterTakeSum() {
+        long sum = 0L;
+        uint selected = 0u;
+        for (uint index = 0u;
+            index < ListValues.Count && selected < 128u;
+            index += 1u) {
+            int value = ListValues.Get(index);
+            if (IsEven(value)) {
+                sum += value;
+                selected += 1u;
+            }
+        }
+        return sum;
+    }
+
+    public static long HandwrittenPageSum(BenchmarkArraySequence values) {
+        long sum = 0L;
+        for (uint index = 512u; index < 640u; index += 1u) {
+            sum += values.Get(index);
+        }
+        return sum;
+    }
+
+    public static long HandwrittenListPageSum() {
+        long sum = 0L;
+        for (uint index = 512u; index < 640u; index += 1u) {
+            sum += ListValues.Get(index);
+        }
+        return sum;
+    }
+
+    public static long HandwrittenCapturedSum(
+        BenchmarkArraySequence values,
+        int threshold,
+        int multiplier) {
+        long sum = 0L;
+        for (uint index = 0u; index < values.Length; index += 1u) {
+            int value = values.Get(index);
+            if (value > threshold) {
+                sum += value * multiplier;
+            }
+        }
+        return sum;
+    }
+
+    public static long HandwrittenNoncapturedFilterMapSum(
+        BenchmarkArraySequence values) {
+        long sum = 0L;
+        for (uint index = 0u; index < values.Length; index += 1u) {
+            int value = values.Get(index);
+            if (value > 512) {
+                sum += value * 3;
+            }
+        }
+        return sum;
+    }
+
+    public static long Evaluate(
+        uint category,
+        IEnumerable<int> query,
+        BenchmarkArraySequence values,
+        int threshold,
+        int multiplier) {
+        if (category == 0u) { return HandwrittenTwoFilterSum(values); }
+        if (category == 4u) { return HandwrittenStreamingSum(values); }
+        if (category == 11u) {
+            return HandwrittenSingleFilterMapTakeSum(values);
+        }
+        if (category == 16u) { return HandwrittenListFilterMapTakeSum(); }
+        if (category == 45u || category == 46u) {
+            return HandwrittenArrayMapFilterTakeSum(values);
+        }
+        if (category == 47u) {
+            return HandwrittenArrayMapTakeSum(values);
+        }
+        if (category == 50u) { return HandwrittenListMapTakeSum(); }
+        if (category == 65u) {
+            return HandwrittenArrayMapSkipTakeSum(values);
+        }
+        if (category == 68u) { return HandwrittenListMapSkipTakeSum(); }
+        if (category == 22u) { return HandwrittenListPageSum(); }
+        if (category == 6u) { return HandwrittenPageSum(values); }
+        if (category == 8u) {
+            return HandwrittenCapturedSum(values, threshold, multiplier);
+        }
+        if (category == 41u) {
+            return HandwrittenNoncapturedFilterMapSum(values);
+        }
+        return Sum(query);
+    }
+
+    public static void Measure(
+        uint category,
+        IEnumerable<int> query,
+        BenchmarkArraySequence values,
+        uint iterations,
+        uint samples,
+        int threshold,
+        int multiplier) {
+        if (BenchmarkNativeClock.ShouldMeasureCategory(category) == 0u) {
+            return;
+        }
+        uint warmup = 0u;
+        while (warmup < 100u) {
+            long ignored = Evaluate(
+                category, query, values, threshold, multiplier);
+            warmup += 1u;
+        }
+
+        uint sample = 0u;
+        while (sample < samples) {
+            MeasureSample(
+                category, query, values, iterations, threshold, multiplier,
+                sample);
+            sample += 1u;
+        }
+    }
+
+    public static void MeasureSample(
+        uint category,
+        IEnumerable<int> query,
+        BenchmarkArraySequence values,
+        uint iterations,
+        int threshold,
+        int multiplier,
+        uint sample) {
+        BenchmarkNativeClock.StartAllocationTracking();
+        long start = BenchmarkNativeClock.GetNanoseconds();
+        uint iteration = 0u;
+        long checksum = 0L;
+        while (iteration < iterations) {
+            checksum += Evaluate(
+                category, query, values, threshold, multiplier);
+            iteration += 1u;
+        }
+        long elapsed = BenchmarkNativeClock.GetNanoseconds() - start;
+        BenchmarkNativeClock.StopAllocationTracking();
+        BenchmarkNativeClock.WriteResult(
+            category,
+            sample,
+            iterations,
+            elapsed,
+            checksum,
+            BenchmarkNativeClock.GetAllocationCount(),
+            BenchmarkNativeClock.GetAllocationBytes());
+    }
+
+    public static void MeasurePaired(
+        uint firstCategory,
+        IEnumerable<int> firstQuery,
+        uint secondCategory,
+        IEnumerable<int> secondQuery,
+        BenchmarkArraySequence values,
+        uint iterations,
+        uint samples,
+        int threshold,
+        int multiplier) {
+        bool measureFirst =
+            BenchmarkNativeClock.ShouldMeasureCategory(firstCategory) != 0u;
+        bool measureSecond =
+            BenchmarkNativeClock.ShouldMeasureCategory(secondCategory) != 0u;
+        if (!measureFirst && !measureSecond) { return; }
+
+        uint warmup = 0u;
+        while (warmup < 100u) {
+            if (measureFirst) {
+                long ignoredFirst = Evaluate(
+                    firstCategory, firstQuery, values, threshold, multiplier);
+            }
+            if (measureSecond) {
+                long ignoredSecond = Evaluate(
+                    secondCategory, secondQuery, values, threshold, multiplier);
+            }
+            warmup += 1u;
+        }
+
+        uint sample = 0u;
+        while (sample < samples) {
+            if (sample % 2u == 0u) {
+                if (measureFirst) {
+                    MeasureSample(firstCategory, firstQuery, values,
+                        iterations, threshold, multiplier, sample);
+                }
+                if (measureSecond) {
+                    MeasureSample(secondCategory, secondQuery, values,
+                        iterations, threshold, multiplier, sample);
+                }
+            } else {
+                if (measureSecond) {
+                    MeasureSample(secondCategory, secondQuery, values,
+                        iterations, threshold, multiplier, sample);
+                }
+                if (measureFirst) {
+                    MeasureSample(firstCategory, firstQuery, values,
+                        iterations, threshold, multiplier, sample);
+                }
+            }
+            sample += 1u;
+        }
+    }
+}
+
+public int Main() {
+    const uint valueCount = 2048u;
+    const uint iterations = 2000u;
+    const uint samples = 7u;
+    Array<int> storage = new Array<int>(valueCount);
+    BenchmarkArraySequence values = new BenchmarkArraySequence(storage);
+    BenchmarkNativeClock.WriteHeader();
+    List<int> list = new List<int>();
+    for (uint index = 0u; index < valueCount; index += 1u) {
+        storage.Set(index, (int)index);
+        list.Add((int)index);
+    }
+
+    WhereEnumerable<int> first = values
+        .Filter((int value) => QueryBenchmarks.IsEven(value));
+    WhereWhereEnumerable<int> fused = first
+        .Filter((int value) => QueryBenchmarks.GreaterThanTwo(value));
+    IEnumerable<int> firstInterface = first;
+    IEnumerable<int> layered = firstInterface
+        .Filter((int value) => QueryBenchmarks.GreaterThanTwo(value));
+
+    long expected = QueryBenchmarks.HandwrittenTwoFilterSum(values);
+    if (QueryBenchmarks.Sum(fused) != expected ||
+        QueryBenchmarks.Sum(layered) != expected) {
+        return 1;
+    }
+
+    QueryBenchmarks.Measure(0u, fused, values, iterations, samples, 0, 0);
+    QueryBenchmarks.Measure(1u, fused, values, iterations, samples, 0, 0);
+    QueryBenchmarks.Measure(2u, layered, values, iterations, samples, 0, 0);
+    IEnumerable<int> listInterface = list;
+    IEnumerable<int> listFirstFilter = listInterface
+        .Filter((int value) => QueryBenchmarks.IsEven(value));
+    IEnumerable<int> listLayered = listFirstFilter
+        .Filter((int value) => QueryBenchmarks.GreaterThanTwo(value));
+    QueryBenchmarks.ListValues = list;
+    QueryBenchmarks.Measure(
+        3u, listLayered, values, iterations, samples, 0, 0);
+
+    IEnumerable<int> indexedListStream = list
+        .Filter((int value) => QueryBenchmarks.IsEven(value))
+        .Map<int>((int value) => QueryBenchmarks.MultiplyByTen(value))
+        .Take(128u);
+    if (QueryBenchmarks.Sum(indexedListStream) !=
+        QueryBenchmarks.HandwrittenListFilterMapTakeSum()) {
+        return 9;
+    }
+    IEnumerable<int> listSingleFilterFallback = listInterface
+        .Filter((int value) => QueryBenchmarks.IsEven(value))
+        .Map<int>((int value) => QueryBenchmarks.MultiplyByTen(value))
+        .Take(128u);
+    if (QueryBenchmarks.Sum(listSingleFilterFallback) !=
+        QueryBenchmarks.HandwrittenListFilterMapTakeSum()) {
+        return 10;
+    }
+    QueryBenchmarks.Measure(
+        16u, indexedListStream, values, iterations, samples, 0, 0);
+    QueryBenchmarks.Measure(
+        17u, indexedListStream, values, iterations, samples, 0, 0);
+    QueryBenchmarks.Measure(
+        18u, listSingleFilterFallback, values, iterations, samples, 0, 0);
+
+    IEnumerable<int> streamingFiltered = values
+        .Filter((int value) => QueryBenchmarks.IsEven(value))
+        .Filter((int value) => QueryBenchmarks.GreaterThanTwo(value));
+    IEnumerable<int> streamingMapped = streamingFiltered
+        .Map<int>((int value) => QueryBenchmarks.MultiplyByTen(value));
+    IEnumerable<int> streaming = streamingMapped.Take(128u);
+    if (QueryBenchmarks.Sum(streaming) !=
+        QueryBenchmarks.HandwrittenStreamingSum(values)) { return 2; }
+    QueryBenchmarks.Measure(4u, streaming, values, iterations, samples, 0, 0);
+    QueryBenchmarks.Measure(5u, streaming, values, iterations, samples, 0, 0);
+
+    IEnumerable<int> singleFilterStream = values
+        .Filter((int value) => QueryBenchmarks.IsEven(value))
+        .Map<int>((int value) => QueryBenchmarks.MultiplyByTen(value))
+        .Take(128u);
+    IEnumerable<int> singleFilterInterface = values
+        .Filter((int value) => QueryBenchmarks.IsEven(value));
+    IEnumerable<int> singleFilterLayered = singleFilterInterface
+        .Map<int>((int value) => QueryBenchmarks.MultiplyByTen(value))
+        .Take(128u);
+    if (QueryBenchmarks.Sum(singleFilterStream) !=
+            QueryBenchmarks.HandwrittenSingleFilterMapTakeSum(values) ||
+        QueryBenchmarks.Sum(singleFilterLayered) !=
+            QueryBenchmarks.HandwrittenSingleFilterMapTakeSum(values)) {
+        return 6;
+    }
+    QueryBenchmarks.Measure(
+        11u, singleFilterStream, values, iterations, samples, 0, 0);
+    QueryBenchmarks.Measure(
+        12u, singleFilterStream, values, iterations, samples, 0, 0);
+    QueryBenchmarks.Measure(
+        13u, singleFilterLayered, values, iterations, samples, 0, 0);
+
+    IEnumerable<int> indexedArrayStream = storage
+        .Filter((int value) => QueryBenchmarks.IsEven(value))
+        .Map<int>((int value) => QueryBenchmarks.MultiplyByTen(value))
+        .Take(128u);
+    if (QueryBenchmarks.Sum(indexedArrayStream) !=
+        QueryBenchmarks.HandwrittenSingleFilterMapTakeSum(values)) {
+        return 8;
+    }
+    QueryBenchmarks.Measure(
+        15u, indexedArrayStream, values, iterations, samples, 0, 0);
+
+    IEnumerable<int> paged = values.Page(4u, 128u);
+    IEnumerable<int> page = paged
+        .Map<int>((int value) => QueryBenchmarks.Identity(value));
+    if (QueryBenchmarks.Sum(page) != QueryBenchmarks.HandwrittenPageSum(values)) {
+        return 3;
+    }
+    QueryBenchmarks.Measure(6u, page, values, iterations, samples, 0, 0);
+    QueryBenchmarks.Measure(7u, page, values, iterations, samples, 0, 0);
+
+    IEnumerable<int> indexedPaged = storage.Page(4u, 128u);
+    IEnumerable<int> indexedPage = indexedPaged
+        .Map<int>((int value) => QueryBenchmarks.Identity(value));
+    if (QueryBenchmarks.Sum(indexedPage) != QueryBenchmarks.HandwrittenPageSum(values)) {
+        return 7;
+    }
+    QueryBenchmarks.Measure(14u, indexedPage, values, iterations, samples, 0, 0);
+
+    IEnumerable<int> indexedListPage = list.Page(4u, 128u)
+        .Map<int>((int value) => QueryBenchmarks.Identity(value));
+    if (QueryBenchmarks.Sum(indexedListPage) !=
+        QueryBenchmarks.HandwrittenListPageSum()) {
+        return 14;
+    }
+    IEnumerable<int> interfaceListPage = listInterface.Page(4u, 128u)
+        .Map<int>((int value) => QueryBenchmarks.Identity(value));
+    if (QueryBenchmarks.Sum(interfaceListPage) !=
+        QueryBenchmarks.HandwrittenListPageSum()) {
+        return 15;
+    }
+    QueryBenchmarks.Measure(
+        22u, indexedListPage, values, iterations, samples, 0, 0);
+    QueryBenchmarks.Measure(
+        23u, indexedListPage, values, iterations, samples, 0, 0);
+    QueryBenchmarks.Measure(
+        24u, interfaceListPage, values, iterations, samples, 0, 0);
+
+    IEnumerable<int> indexedArrayMapFilterTake = storage
+        .Map<int>((int value) => QueryBenchmarks.MultiplyByTen(value))
+        .Filter((int value) => QueryBenchmarks.GreaterThan10240(value))
+        .Take(128u);
+    IEnumerable<int> interfaceArrayMapFilterTake = values
+        .Map<int>((int value) => QueryBenchmarks.MultiplyByTen(value))
+        .Filter((int value) => QueryBenchmarks.GreaterThan10240(value))
+        .Take(128u);
+    long expectedArrayMapFilterTake =
+        QueryBenchmarks.HandwrittenArrayMapFilterTakeSum(values);
+    if (QueryBenchmarks.Sum(indexedArrayMapFilterTake) !=
+            expectedArrayMapFilterTake ||
+        QueryBenchmarks.Sum(interfaceArrayMapFilterTake) !=
+            expectedArrayMapFilterTake) {
+        return 45;
+    }
+    QueryBenchmarks.MeasurePaired(
+        45u, indexedArrayMapFilterTake,
+        46u, interfaceArrayMapFilterTake,
+        values, iterations, samples, 0, 0);
+
+    IEnumerable<int> indexedListMapFilterTake = list
+        .Map<int>((int value) => QueryBenchmarks.MultiplyByTen(value))
+        .Filter((int value) => QueryBenchmarks.GreaterThan10240(value))
+        .Take(128u);
+    IEnumerable<int> interfaceListMapFilterTake = listInterface
+        .Map<int>((int value) => QueryBenchmarks.MultiplyByTen(value))
+        .Filter((int value) => QueryBenchmarks.GreaterThan10240(value))
+        .Take(128u);
+    long expectedListMapFilterTake =
+        QueryBenchmarks.HandwrittenListMapFilterTakeSum();
+    if (QueryBenchmarks.Sum(indexedListMapFilterTake) !=
+            expectedListMapFilterTake ||
+        QueryBenchmarks.Sum(interfaceListMapFilterTake) !=
+            expectedListMapFilterTake) {
+        return 71;
+    }
+    QueryBenchmarks.MeasurePaired(
+        71u, indexedListMapFilterTake,
+        72u, interfaceListMapFilterTake,
+        values, iterations, samples, 0, 0);
+
+    IEnumerable<int> indexedArrayMapTake = storage
+        .Map<int>((int value) => QueryBenchmarks.MultiplyByTen(value))
+        .Take(128u);
+    IEnumerable<int> interfaceArrayMapTake = values
+        .Map<int>((int value) => QueryBenchmarks.MultiplyByTen(value))
+        .Take(128u);
+    long expectedArrayMapTake =
+        QueryBenchmarks.HandwrittenArrayMapTakeSum(values);
+    if (QueryBenchmarks.Sum(indexedArrayMapTake) != expectedArrayMapTake ||
+        QueryBenchmarks.Sum(interfaceArrayMapTake) != expectedArrayMapTake) {
+        return 47;
+    }
+    QueryBenchmarks.Measure(
+        47u, indexedArrayMapTake, values, iterations, samples, 0, 0);
+    QueryBenchmarks.MeasurePaired(
+        48u, indexedArrayMapTake,
+        49u, interfaceArrayMapTake,
+        values, iterations, samples, 0, 0);
+
+    IEnumerable<int> indexedListMapTake = list
+        .Map<int>((int value) => QueryBenchmarks.MultiplyByTen(value))
+        .Take(128u);
+    IEnumerable<int> interfaceListMapTake = listInterface
+        .Map<int>((int value) => QueryBenchmarks.MultiplyByTen(value))
+        .Take(128u);
+    long expectedListMapTake = QueryBenchmarks.HandwrittenListMapTakeSum();
+    if (QueryBenchmarks.Sum(indexedListMapTake) != expectedListMapTake ||
+        QueryBenchmarks.Sum(interfaceListMapTake) != expectedListMapTake) {
+        return 50;
+    }
+    QueryBenchmarks.Measure(
+        50u, indexedListMapTake, values, iterations, samples, 0, 0);
+    QueryBenchmarks.MeasurePaired(
+        51u, indexedListMapTake,
+        52u, interfaceListMapTake,
+        values, iterations, samples, 0, 0);
+
+    IEnumerable<int> indexedArrayMapSkipTake = storage
+        .Map<int>((int value) => QueryBenchmarks.MultiplyByTen(value))
+        .Skip(512u)
+        .Take(128u);
+    IEnumerable<int> interfaceArrayMapSkipTake = values
+        .Map<int>((int value) => QueryBenchmarks.MultiplyByTen(value))
+        .Skip(512u)
+        .Take(128u);
+    long expectedArrayMapSkipTake =
+        QueryBenchmarks.HandwrittenArrayMapSkipTakeSum(values);
+    if (QueryBenchmarks.Sum(indexedArrayMapSkipTake) !=
+            expectedArrayMapSkipTake ||
+        QueryBenchmarks.Sum(interfaceArrayMapSkipTake) !=
+            expectedArrayMapSkipTake) {
+        return 81;
+    }
+    QueryBenchmarks.MeasurePaired(
+        66u, indexedArrayMapSkipTake,
+        67u, interfaceArrayMapSkipTake,
+        values, iterations, samples, 0, 0);
+
+    IEnumerable<int> indexedListMapSkipTake = list
+        .Map<int>((int value) => QueryBenchmarks.MultiplyByTen(value))
+        .Skip(512u)
+        .Take(128u);
+    IEnumerable<int> interfaceListMapSkipTake = listInterface
+        .Map<int>((int value) => QueryBenchmarks.MultiplyByTen(value))
+        .Skip(512u)
+        .Take(128u);
+    long expectedListMapSkipTake =
+        QueryBenchmarks.HandwrittenListMapSkipTakeSum();
+    if (QueryBenchmarks.Sum(indexedListMapSkipTake) !=
+            expectedListMapSkipTake ||
+        QueryBenchmarks.Sum(interfaceListMapSkipTake) !=
+            expectedListMapSkipTake) {
+        return 82;
+    }
+    QueryBenchmarks.MeasurePaired(
+        69u, indexedListMapSkipTake,
+        70u, interfaceListMapSkipTake,
+        values, iterations, samples, 0, 0);
+
+    IEnumerable<int> indexedArrayFilterTake = storage
+        .Filter((int value) => QueryBenchmarks.IsEven(value))
+        .Take(128u);
+    IEnumerable<int> interfaceArrayFilterTake = values
+        .Filter((int value) => QueryBenchmarks.IsEven(value))
+        .Take(128u);
+    long expectedArrayFilterTake =
+        QueryBenchmarks.HandwrittenArrayFilterTakeSum(values);
+    if (QueryBenchmarks.Sum(indexedArrayFilterTake) !=
+            expectedArrayFilterTake ||
+        QueryBenchmarks.Sum(interfaceArrayFilterTake) !=
+            expectedArrayFilterTake) {
+        return 53;
+    }
+    QueryBenchmarks.MeasurePaired(
+        53u, indexedArrayFilterTake,
+        54u, interfaceArrayFilterTake,
+        values, iterations, samples, 0, 0);
+
+    IEnumerable<int> indexedListFilterTake = list
+        .Filter((int value) => QueryBenchmarks.IsEven(value))
+        .Take(128u);
+    IEnumerable<int> interfaceListFilterTake = listInterface
+        .Filter((int value) => QueryBenchmarks.IsEven(value))
+        .Take(128u);
+    long expectedListFilterTake =
+        QueryBenchmarks.HandwrittenListFilterTakeSum();
+    if (QueryBenchmarks.Sum(indexedListFilterTake) !=
+            expectedListFilterTake ||
+        QueryBenchmarks.Sum(interfaceListFilterTake) !=
+            expectedListFilterTake) {
+        return 54;
+    }
+    QueryBenchmarks.MeasurePaired(
+        55u, indexedListFilterTake,
+        56u, interfaceListFilterTake,
+        values, iterations, samples, 0, 0);
+
+    IEnumerable<int> indexedArraySkipTake = storage
+        .Skip(512u).Take(128u);
+    IEnumerable<int> interfaceArraySkipTake = values
+        .Skip(512u).Take(128u);
+    long expectedArraySkipTake = QueryBenchmarks.HandwrittenPageSum(values);
+    if (QueryBenchmarks.Sum(indexedArraySkipTake) != expectedArraySkipTake ||
+        QueryBenchmarks.Sum(interfaceArraySkipTake) != expectedArraySkipTake) {
+        return 57;
+    }
+    QueryBenchmarks.MeasurePaired(
+        57u, indexedArraySkipTake,
+        58u, interfaceArraySkipTake,
+        values, iterations, samples, 0, 0);
+
+    IEnumerable<int> indexedListSkipTake = list
+        .Skip(512u).Take(128u);
+    IEnumerable<int> interfaceListSkipTake = listInterface
+        .Skip(512u).Take(128u);
+    long expectedListSkipTake = QueryBenchmarks.HandwrittenListPageSum();
+    if (QueryBenchmarks.Sum(indexedListSkipTake) != expectedListSkipTake ||
+        QueryBenchmarks.Sum(interfaceListSkipTake) != expectedListSkipTake) {
+        return 58;
+    }
+    QueryBenchmarks.MeasurePaired(
+        59u, indexedListSkipTake,
+        60u, interfaceListSkipTake,
+        values, iterations, samples, 0, 0);
+
+    IEnumerable<int> indexedArrayFilterSkipTake = storage
+        .Filter((int value) => QueryBenchmarks.IsEven(value))
+        .Skip(128u).Take(128u);
+    IEnumerable<int> interfaceArrayFilterSkipTake = values
+        .Filter((int value) => QueryBenchmarks.IsEven(value))
+        .Skip(128u).Take(128u);
+    IEnumerable<int> indexedListFilterSkipTake = list
+        .Filter((int value) => QueryBenchmarks.IsEven(value))
+        .Skip(128u).Take(128u);
+    IEnumerable<int> interfaceListFilterSkipTake = listInterface
+        .Filter((int value) => QueryBenchmarks.IsEven(value))
+        .Skip(128u).Take(128u);
+    long expectedFilterSkipTake = 49024L;
+    if (QueryBenchmarks.Sum(indexedArrayFilterSkipTake) !=
+            expectedFilterSkipTake ||
+        QueryBenchmarks.Sum(interfaceArrayFilterSkipTake) !=
+            expectedFilterSkipTake ||
+        QueryBenchmarks.Sum(indexedListFilterSkipTake) !=
+            expectedFilterSkipTake ||
+        QueryBenchmarks.Sum(interfaceListFilterSkipTake) !=
+            expectedFilterSkipTake) {
+        return 810;
+    }
+    QueryBenchmarks.MeasurePaired(
+        61u, indexedArrayFilterSkipTake,
+        62u, interfaceArrayFilterSkipTake,
+        values, iterations, samples, 0, 0);
+    QueryBenchmarks.MeasurePaired(
+        63u, indexedListFilterSkipTake,
+        64u, interfaceListFilterSkipTake,
+        values, iterations, samples, 0, 0);
+
+    int threshold = 512;
+    int multiplier = 3;
+    IEnumerable<int> capturedFiltered = values
+        .Filter((int value) => value > threshold);
+    IEnumerable<int> captured = capturedFiltered
+        .Map<int>((int value) => value * multiplier);
+    if (QueryBenchmarks.Sum(captured) !=
+        QueryBenchmarks.HandwrittenCapturedSum(values, threshold, multiplier)) {
+        return 4;
+    }
+    QueryBenchmarks.Measure(
+        8u, captured, values, iterations, samples, threshold, multiplier);
+    QueryBenchmarks.Measure(
+        9u, captured, values, iterations, samples, threshold, multiplier);
+
+    IEnumerable<int> noncapturedFilterMap = values
+        .Filter((int value) => QueryBenchmarks.GreaterThan512(value))
+        .Map<int>((int value) => QueryBenchmarks.Triple(value));
+    if (QueryBenchmarks.Sum(noncapturedFilterMap) !=
+        QueryBenchmarks.HandwrittenNoncapturedFilterMapSum(values)) {
+        return 196;
+    }
+    QueryBenchmarks.Measure(
+        41u, noncapturedFilterMap, values, iterations, samples, 0, 0);
+    QueryBenchmarks.Measure(
+        42u, noncapturedFilterMap, values, iterations, samples, 0, 0);
+
+    SortEnumerable<int, int> sorted = values.Sort<int>(
+        (int value) => value,
+        (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    long expectedSortSum = (long)valueCount * (long)(valueCount - 1u) / 2L;
+    if (QueryBenchmarks.Sum(sorted) != expectedSortSum) { return 5; }
+    QueryBenchmarks.Measure(10u, sorted, values, 20u, samples, 0, 0);
+
+    IEnumerable<int> concreteArraySource = storage;
+    SortEnumerable<int, int> concreteArraySorted = concreteArraySource.Sort<int>(
+        (int value) => value,
+        (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    if (!QueryBenchmarks.VerifySorted(
+            concreteArraySorted, valueCount, expectedSortSum)) {
+        return 16;
+    }
+    QueryBenchmarks.Measure(
+        25u, concreteArraySorted, values, 10u, samples, 0, 0);
+
+    IEnumerable<int> concreteListSource = list;
+    SortEnumerable<int, int> concreteListSorted = concreteListSource.Sort<int>(
+        (int value) => value,
+        (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    if (!QueryBenchmarks.VerifySorted(
+            concreteListSorted, valueCount, expectedSortSum)) {
+        return 17;
+    }
+    QueryBenchmarks.Measure(
+        26u, concreteListSorted, values, 10u, samples, 0, 0);
+
+    SortEnumerable<int, int> oneKeyBucketArraySorted =
+        concreteArraySource.Sort<int>(
+            (int value) => QueryBenchmarks.SortBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    if (!QueryBenchmarks.VerifyBucketSorted(
+            oneKeyBucketArraySorted, valueCount, expectedSortSum)) {
+        return 30;
+    }
+    QueryBenchmarks.Measure(
+        43u, oneKeyBucketArraySorted, values, 10u, samples, 0, 0);
+
+    SortEnumerable<int, int> oneKeyBucketListSorted =
+        concreteListSource.Sort<int>(
+            (int value) => QueryBenchmarks.SortBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    if (!QueryBenchmarks.VerifyBucketSorted(
+            oneKeyBucketListSorted, valueCount, expectedSortSum)) {
+        return 31;
+    }
+    QueryBenchmarks.Measure(
+        44u, oneKeyBucketListSorted, values, 10u, samples, 0, 0);
+
+    ThenSortEnumerable<int, int, int> multiKeyArraySorted =
+        concreteArraySource.Sort<int>(
+            (int value) => QueryBenchmarks.SortBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortSecondaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    if (!QueryBenchmarks.VerifyMultiKeySorted(
+            multiKeyArraySorted, valueCount, expectedSortSum)) {
+        return 18;
+    }
+    QueryBenchmarks.Measure(
+        27u, multiKeyArraySorted, values, 10u, samples, 0, 0);
+
+    ThenSortEnumerable<int, int, int> multiKeyListSorted =
+        concreteListSource.Sort<int>(
+            (int value) => QueryBenchmarks.SortBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortSecondaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    if (!QueryBenchmarks.VerifyMultiKeySorted(
+            multiKeyListSorted, valueCount, expectedSortSum)) {
+        return 19;
+    }
+    QueryBenchmarks.Measure(
+        28u, multiKeyListSorted, values, 10u, samples, 0, 0);
+
+    ThenSort3Enumerable<int, int, int, int> tripleKeyArraySorted =
+        concreteArraySource.Sort<int>(
+            (int value) => QueryBenchmarks.SortBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortSecondaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortTertiaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    if (!QueryBenchmarks.VerifyTripleKeySorted(
+            tripleKeyArraySorted, valueCount, expectedSortSum)) {
+        return 20;
+    }
+    QueryBenchmarks.Measure(
+        29u, tripleKeyArraySorted, values, 10u, samples, 0, 0);
+
+    ThenSort3Enumerable<int, int, int, int> tripleKeyListSorted =
+        concreteListSource.Sort<int>(
+            (int value) => QueryBenchmarks.SortBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortSecondaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortTertiaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    if (!QueryBenchmarks.VerifyTripleKeySorted(
+            tripleKeyListSorted, valueCount, expectedSortSum)) {
+        return 21;
+    }
+    QueryBenchmarks.Measure(
+        30u, tripleKeyListSorted, values, 10u, samples, 0, 0);
+
+    ThenSort4Enumerable<int, int, int, int, int> fourKeyArraySorted =
+        concreteArraySource.Sort<int>(
+            (int value) => QueryBenchmarks.SortBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortSecondaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortTertiaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => value,
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    if (!QueryBenchmarks.VerifyFourKeySorted(
+            fourKeyArraySorted, valueCount, expectedSortSum)) {
+        return 22;
+    }
+    QueryBenchmarks.Measure(
+        31u, fourKeyArraySorted, values, 10u, samples, 0, 0);
+
+    ThenSort4Enumerable<int, int, int, int, int> fourKeyListSorted =
+        concreteListSource.Sort<int>(
+            (int value) => QueryBenchmarks.SortBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortSecondaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortTertiaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => value,
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    if (!QueryBenchmarks.VerifyFourKeySorted(
+            fourKeyListSorted, valueCount, expectedSortSum)) {
+        return 23;
+    }
+    QueryBenchmarks.Measure(
+        32u, fourKeyListSorted, values, 10u, samples, 0, 0);
+
+    ThenSort5Enumerable<int, int, int, int, int, int> fiveKeyArraySorted =
+        concreteArraySource.Sort<int>(
+            (int value) => QueryBenchmarks.SortBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortSecondaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortTertiaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortQuaternaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => value,
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    if (!QueryBenchmarks.VerifyFiveKeySorted(
+            fiveKeyArraySorted, valueCount, expectedSortSum)) {
+        return 24;
+    }
+    QueryBenchmarks.Measure(
+        33u, fiveKeyArraySorted, values, 10u, samples, 0, 0);
+
+    ThenSort5Enumerable<int, int, int, int, int, int> fiveKeyListSorted =
+        concreteListSource.Sort<int>(
+            (int value) => QueryBenchmarks.SortBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortSecondaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortTertiaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortQuaternaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => value,
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    if (!QueryBenchmarks.VerifyFiveKeySorted(
+            fiveKeyListSorted, valueCount, expectedSortSum)) {
+        return 25;
+    }
+    QueryBenchmarks.Measure(
+        34u, fiveKeyListSorted, values, 10u, samples, 0, 0);
+
+    ThenSort6Enumerable<int, int, int, int, int, int, int> sixKeyArraySorted =
+        concreteArraySource.Sort<int>(
+            (int value) => QueryBenchmarks.SortBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortSecondaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortTertiaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortQuaternaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortQuinaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => value,
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    if (!QueryBenchmarks.VerifySixKeySorted(
+            sixKeyArraySorted, valueCount, expectedSortSum)) {
+        return 26;
+    }
+    QueryBenchmarks.Measure(
+        35u, sixKeyArraySorted, values, 10u, samples, 0, 0);
+
+    ThenSort6Enumerable<int, int, int, int, int, int, int> sixKeyListSorted =
+        concreteListSource.Sort<int>(
+            (int value) => QueryBenchmarks.SortBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortSecondaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortTertiaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortQuaternaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortQuinaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => value,
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    if (!QueryBenchmarks.VerifySixKeySorted(
+            sixKeyListSorted, valueCount, expectedSortSum)) {
+        return 27;
+    }
+    QueryBenchmarks.Measure(
+        36u, sixKeyListSorted, values, 10u, samples, 0, 0);
+
+    ThenSort7Enumerable<int, int, int, int, int, int, int, int> sevenKeyArraySorted =
+        concreteArraySource.Sort<int>(
+            (int value) => QueryBenchmarks.SortBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortSecondaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortTertiaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortQuaternaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortQuinaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortSixthBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => value,
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    if (!QueryBenchmarks.VerifySevenKeySorted(
+            sevenKeyArraySorted, valueCount, expectedSortSum)) {
+        return 26;
+    }
+    QueryBenchmarks.Measure(
+        37u, sevenKeyArraySorted, values, 10u, samples, 0, 0);
+
+    ThenSort7Enumerable<int, int, int, int, int, int, int, int> sevenKeyListSorted =
+        concreteListSource.Sort<int>(
+            (int value) => QueryBenchmarks.SortBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortSecondaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortTertiaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortQuaternaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortQuinaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortSixthBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => value,
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    if (!QueryBenchmarks.VerifySevenKeySorted(
+            sevenKeyListSorted, valueCount, expectedSortSum)) {
+        return 27;
+    }
+    QueryBenchmarks.Measure(
+        38u, sevenKeyListSorted, values, 10u, samples, 0, 0);
+
+    ThenSort8Enumerable<int, int, int, int, int, int, int, int, int> eightKeyArraySorted =
+        concreteArraySource.Sort<int>(
+            (int value) => QueryBenchmarks.SortBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortSecondaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortTertiaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortQuaternaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortQuinaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortSixthBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortSeventhBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => value,
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    if (!QueryBenchmarks.VerifyEightKeySorted(
+            eightKeyArraySorted, valueCount, expectedSortSum)) {
+        return 28;
+    }
+    QueryBenchmarks.Measure(
+        39u, eightKeyArraySorted, values, 10u, samples, 0, 0);
+
+    ThenSort8Enumerable<int, int, int, int, int, int, int, int, int> eightKeyListSorted =
+        concreteListSource.Sort<int>(
+            (int value) => QueryBenchmarks.SortBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortSecondaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortTertiaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortQuaternaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortQuinaryBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortSixthBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => QueryBenchmarks.SortSeventhBucket(value),
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right))
+        .ThenSort<int>(
+            (int value) => value,
+            (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    if (!QueryBenchmarks.VerifyEightKeySorted(
+            eightKeyListSorted, valueCount, expectedSortSum)) {
+        return 29;
+    }
+    QueryBenchmarks.Measure(
+        40u, eightKeyListSorted, values, 10u, samples, 0, 0);
+
+    BenchmarkArraySequence sort128Values =
+        QueryBenchmarks.CreateSortInput(128u);
+    IEnumerable<int> sort128 = sort128Values.Sort<int>(
+        (int value) => value,
+        (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    long sort128Sum = 128L * 127L / 2L;
+    if (!QueryBenchmarks.VerifySorted(sort128, 128u, sort128Sum)) {
+        return 11;
+    }
+    QueryBenchmarks.Measure(
+        19u, sort128, sort128Values, 500u, samples, 0, 0);
+
+    BenchmarkArraySequence sort512Values =
+        QueryBenchmarks.CreateSortInput(512u);
+    IEnumerable<int> sort512 = sort512Values.Sort<int>(
+        (int value) => value,
+        (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    long sort512Sum = 512L * 511L / 2L;
+    if (!QueryBenchmarks.VerifySorted(sort512, 512u, sort512Sum)) {
+        return 12;
+    }
+    QueryBenchmarks.Measure(
+        20u, sort512, sort512Values, 50u, samples, 0, 0);
+
+    BenchmarkArraySequence sort2048Values =
+        QueryBenchmarks.CreateSortInput(2048u);
+    IEnumerable<int> sort2048 = sort2048Values.Sort<int>(
+        (int value) => value,
+        (int left, int right) => QueryBenchmarks.CompareInt(left, right));
+    long sort2048Sum = 2048L * 2047L / 2L;
+    if (!QueryBenchmarks.VerifySorted(sort2048, 2048u, sort2048Sum)) {
+        return 13;
+    }
+    QueryBenchmarks.Measure(
+        21u, sort2048, sort2048Values, 10u, samples, 0, 0);
+    BenchmarkNativeClock.WriteRetained(
+        0u, QueryBenchmarks.MeasureStaticRetention(values));
+    BenchmarkNativeClock.WriteRetained(
+        1u, QueryBenchmarks.MeasureCapturedRetention(values));
+    BenchmarkNativeClock.WriteRetained(
+        2u, QueryBenchmarks.MeasureDisposedSortScratchRetention(values));
+    BenchmarkNativeClock.WriteRetained(
+        3u, QueryBenchmarks.MeasureDisposedEightKeySortScratchRetention(values));
+    long arrayMapTakeReleased =
+        QueryBenchmarks.MeasureDisposedArrayMapTakeRetention();
+    BenchmarkNativeClock.WriteRetained(4u, arrayMapTakeReleased);
+    long listMapTakeReleased =
+        QueryBenchmarks.MeasureDisposedListMapTakeRetention();
+    BenchmarkNativeClock.WriteRetained(5u, listMapTakeReleased);
+    long listFilterMapTakeReleased =
+        QueryBenchmarks.MeasureDisposedListFilterMapTakeRetention();
+    long arrayFilterMapTakeReleased =
+        QueryBenchmarks.MeasureDisposedArrayFilterMapTakeRetention();
+    BenchmarkNativeClock.WriteRetained(6u, arrayFilterMapTakeReleased);
+    BenchmarkNativeClock.WriteRetained(7u, listFilterMapTakeReleased);
+    long arrayFilterTakeReleased =
+        QueryBenchmarks.MeasureArrayFilterTakeCompletionRelease();
+    BenchmarkNativeClock.WriteRetained(8u, arrayFilterTakeReleased);
+    long listFilterTakeReleased =
+        QueryBenchmarks.MeasureListFilterTakeCompletionRelease();
+    BenchmarkNativeClock.WriteRetained(9u, listFilterTakeReleased);
+    long arrayFilterSkipTakeReleased =
+        QueryBenchmarks.MeasureArrayFilterSkipTakeCompletionRelease();
+    BenchmarkNativeClock.WriteRetained(10u, arrayFilterSkipTakeReleased);
+    long listFilterSkipTakeReleased =
+        QueryBenchmarks.MeasureListFilterSkipTakeCompletionRelease();
+    BenchmarkNativeClock.WriteRetained(11u, listFilterSkipTakeReleased);
+    long arrayMapSkipTakeReleased =
+        QueryBenchmarks.MeasureArrayMapSkipTakeCompletionRelease();
+    BenchmarkNativeClock.WriteRetained(12u, arrayMapSkipTakeReleased);
+    long listMapSkipTakeReleased =
+        QueryBenchmarks.MeasureListMapSkipTakeCompletionRelease();
+    BenchmarkNativeClock.WriteRetained(13u, listMapSkipTakeReleased);
+    if (BenchmarkNativeClock.SupportsRetainedReleaseBudget() != 0u &&
+        (arrayMapTakeReleased < 245000L ||
+        listMapTakeReleased < 245000L ||
+        arrayFilterMapTakeReleased < 245000L ||
+        listFilterMapTakeReleased < 245000L)) {
+        return 14;
+    }
+    if (BenchmarkNativeClock.SupportsPrefixCompletionReleaseBudget() != 0u &&
+        (arrayFilterTakeReleased < 245000L ||
+        listFilterTakeReleased < 245000L ||
+        arrayFilterSkipTakeReleased < 245000L ||
+        listFilterSkipTakeReleased < 245000L ||
+        arrayMapSkipTakeReleased < 245000L ||
+        listMapSkipTakeReleased < 245000L)) {
+        return 15;
+    }
+    return 0;
+}

@@ -1,0 +1,76 @@
+name: CXDATA scheduled fuzzing
+
+on:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+jobs:
+  native-fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out cxc
+        uses: actions/checkout@v4
+        with:
+          path: cxc
+
+      - name: Check out cxcore
+        uses: actions/checkout@v4
+        with:
+          repository: cx-pl/cxcore
+          path: cxcore
+
+      - name: Check out cxdata
+        uses: actions/checkout@v4
+        with:
+          repository: cx-pl/cxdata
+          path: cxdata
+
+      - name: Check out cxdata-json-generator
+        uses: actions/checkout@v4
+        with:
+          repository: cx-pl/cxdata-json-generator
+          path: cxdata-json-generator
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install Clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang libclang-rt-dev
+
+      - name: Build compiler and CXDATA headers
+        run: |
+          dotnet build cxc/src/CxCompiler/CxCompiler.csproj --configuration Release
+          dotnet cxc/src/CxCompiler/bin/Release/net10.0/CxCompiler.dll \
+            --compile --cxcore-dir cxcore --verbosity quiet cxdata/src/cxdata.cxproj
+
+      - name: Build CXDATA mapping generator
+        run: |
+          dotnet cxc/src/CxCompiler/bin/Release/net10.0/CxCompiler.dll \
+            --compile --cxcore-dir cxcore --verbosity quiet \
+            cxdata-json-generator/src/JsonGenerator.cxproj
+
+      - name: Fuzz JSON backend
+        run: bash cxdata/tests/native/run-json-fuzz.sh 250000
+
+      - name: Fuzz XML backend
+        run: bash cxdata/tests/native/run-xml-fuzz.sh 250000
+
+      - name: Fuzz YAML backend
+        run: bash cxdata/tests/native/run-yaml-fuzz.sh 250000
+
+      - name: Fuzz generated typed mappings
+        run: bash cxdata/tests/native/run-mapping-fuzz.sh 50000
+
+      - name: Preserve libFuzzer crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cxdata-libfuzzer-crashes
+          path: crash-*
+          if-no-files-found: ignore

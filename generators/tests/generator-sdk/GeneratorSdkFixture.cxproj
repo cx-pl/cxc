@@ -1,0 +1,7 @@
+name: GeneratorSdkFixture
+type: Library
+version: 0.1.0-alpha
+description: Cross-project CX generator SDK contract fixture
+licence: MIT
+project_references:
+  - ../../CxCompilerGenerators.cxproj

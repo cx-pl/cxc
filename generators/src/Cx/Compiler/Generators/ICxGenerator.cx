@@ -1,0 +1,10 @@
+import System.Interop;
+
+namespace Cx.Compiler.Generators;
+
+// Direct snapshot generator used by small host tools that do not need provider
+// composition. Incremental generators continue to implement ICxIncrementalGenerator.
+public interface ICxGenerator {
+    @NoEscape void Generate(GeneratorInputSnapshot snapshot, AdditionalText[] additionalFiles,
+        GeneratorOutputContext output);
+}

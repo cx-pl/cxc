@@ -1,0 +1,55 @@
+import System;
+import System.Interop;
+
+namespace Cx.Compiler.Generators;
+
+public static class GeneratorWorkerMessages {
+    public static AdditionalText DecodeAdditionalFile(NativeBuffer payload, uint length) {
+        var reader = new GeneratorPayloadReader(payload, length);
+        var path = reader.ReadString();
+        var contentHash = reader.ReadString();
+        var content = reader.ReadString(true);
+        reader.EnsureEnd();
+        return new AdditionalText(path, content, contentHash);
+    }
+
+    public static NativeBuffer EncodeSourceOutput(string hintName, string source) {
+        if (hintName == null || source == null) {
+            throw new Exception("A source output requires a hint name and source text.");
+        }
+        var writer = new GeneratorPayloadWriter();
+        try {
+            writer.WriteString(hintName);
+            writer.WriteString(source, true);
+            return writer.Build();
+        } finally {
+            writer.Dispose();
+        }
+    }
+
+    public static NativeBuffer EncodeDiagnostic(GeneratorDiagnostic diagnostic) {
+        if (diagnostic == null) throw new Exception("A generator diagnostic is required.");
+        var writer = new GeneratorPayloadWriter();
+        try {
+            writer.WriteString(diagnostic.Id);
+            writer.WriteString(diagnostic.Message);
+            writer.WriteString(SeverityName(diagnostic.Severity));
+            writer.WriteLocation(diagnostic.Location);
+            return writer.Build();
+        } finally {
+            writer.Dispose();
+        }
+    }
+
+    public static NativeBuffer EncodeFailure(string message) {
+        if (message == null) message = "Generator failed without a message.";
+        return NativeBuffer.FromUtf8(message, false);
+    }
+
+    private static string SeverityName(DiagnosticSeverity severity) {
+        if (severity == DiagnosticSeverity.Info) return "info";
+        if (severity == DiagnosticSeverity.Warning) return "warning";
+        if (severity == DiagnosticSeverity.Error) return "error";
+        throw new Exception("Unknown generator diagnostic severity.");
+    }
+}

@@ -1,4 +1,4 @@
-# Concepts design (Milestone 15)
+# Concepts design
 
 ## Purpose
 
@@ -6,7 +6,7 @@ Concepts provide compile-time structural constraints for generic parameters.
 They let a generic body use operators and methods that a concrete type supplies
 without adding an interface table or other runtime representation. The initial
 scope is the operator-based syntax already shown in
-`examples/9. Concepts/Concepts.cx`, now including const instance method
+`examples/09-concepts/Concepts.cx`, now including const instance method
 requirements described below.
 
 The declaration and generic-suffix grammar, semantic validation, structural

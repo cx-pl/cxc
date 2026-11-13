@@ -1,0 +1,19 @@
+namespace Cx.Compiler.Generators;
+
+public final class SyntaxCandidate {
+    private string _kind;
+    private string _text;
+    private string _identity;
+    private SourceLocation _location;
+    public string Kind { const get => _kind; }
+    public string Text { const get => _text; }
+    public string Identity { const get => _identity; }
+    public SourceLocation Location { const get => _location; }
+
+    public constructor(string kind, string text, string identity, SourceLocation location) {
+        _kind = kind;
+        _text = text;
+        _identity = identity;
+        _location = location;
+    }
+}

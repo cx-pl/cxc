@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/CxCompiler/CxCompiler.csproj" />
+  <Project Path="tests\CxCompiler.Tests\CxCompiler.Tests.csproj" />
+</Solution>

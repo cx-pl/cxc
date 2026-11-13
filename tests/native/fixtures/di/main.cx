@@ -1,0 +1,913 @@
+import System;
+import System.Collections;
+import System.DependencyInjection;
+import System.Interop;
+
+namespace Di;
+
+public extern void ForceCollection();
+public extern bool ProviderReferencesCleared(ServiceProvider provider);
+@NoEscape public extern uint ResolveSingletonUnderArena(
+    ServiceProvider provider, TypeInfo serviceType);
+
+public interface ILeft { }
+public interface IRight { }
+public interface IName { string Name { const get; } }
+public interface IUnregisteredName { }
+public interface IScopedMarker { }
+public interface ISingletonMarker { }
+public interface ICycleA { }
+public interface ICycleB { }
+public interface ISequenceCycle { }
+public interface IMarker<T> { }
+
+public static class ProbeState {
+    public static uint Constructed;
+    public static uint Disposed;
+    public static uint FirstDisposed;
+    public static uint SecondDisposed;
+    public static uint OwnedDisposeCount;
+    public static uint FirstOwnedDisposed;
+    public static uint SecondOwnedDisposed;
+    public static uint FactoryCalls;
+    public static uint GcIdentityCounter;
+    public static uint GcIdentity;
+    public static uint GcScopedDisposed;
+}
+
+public class Left : ILeft { }
+public class Right : IRight { }
+public class CycleBoth : ICycleA, ICycleB { }
+public class LeftMarker : IMarker<ILeft> { }
+public class RightMarker : IMarker<IRight> { }
+
+public class NamedFirst : IName {
+    public string Name { const get { return "first"; } }
+}
+
+public class NamedSecond : IName {
+    public string Name { const get { return "second"; } }
+}
+
+public class GenericNameConsumer<T> where T : class {
+    public T Value;
+    public constructor(T value) { Value = value; }
+}
+
+public interface IGcService { }
+public interface IArenaCreatedSingleton { }
+
+public class ArenaSingletonPayload {
+    public uint Value;
+    public constructor() { Value = 73u; }
+}
+
+public class ArenaCreatedSingleton : IArenaCreatedSingleton {
+    public ArenaSingletonPayload Payload;
+    public uint Identity;
+    public static uint Created;
+    public constructor(ArenaSingletonPayload payload) {
+        Payload = payload;
+        Created += 1u;
+        Identity = Created;
+    }
+}
+
+public class GcScopedService : IGcService, IDisposable {
+    public uint Identity;
+    public constructor() {
+        ProbeState.GcIdentityCounter += 1u;
+        Identity = ProbeState.GcIdentityCounter;
+    }
+    public void Dispose() { ProbeState.GcScopedDisposed += 1u; }
+}
+
+public class GcFactoryCapture {
+    public uint Value;
+    public constructor() { Value = 41u; }
+}
+
+public class GcFactoryService {
+    public GcFactoryCapture Capture;
+    public constructor(GcFactoryCapture capture) { Capture = capture; }
+}
+
+public static class GcScenario {
+    public static ServiceProvider CreateFactoryProvider() {
+        GcFactoryCapture capture = new GcFactoryCapture();
+        IServiceCollection services = new ServiceCollection();
+        services.AddTransient(typeof(GcFactoryService), (IServiceProvider current) => {
+            capture.Value += 1u;
+            return (object)new GcFactoryService(capture);
+        });
+        return services.BuildServiceProvider();
+    }
+
+    public static void RememberScopedIdentity(IServiceProvider provider) {
+        GcScopedService service = (GcScopedService)provider.GetRequiredService<IGcService>();
+        ProbeState.GcIdentity = service.Identity;
+    }
+}
+
+public class ScopedMarker : IScopedMarker, IDisposable {
+    public void Dispose() { ProbeState.Disposed += 1u; }
+}
+
+public class SingletonMarker : ISingletonMarker, IDisposable {
+    public void Dispose() { ProbeState.Disposed += 1u; }
+}
+
+public class RootProviderConsumer {
+    public IServiceProvider Provider;
+    public constructor(IServiceProvider provider) { Provider = provider; }
+}
+
+public class ScopedProviderConsumer {
+    public IServiceProvider Provider;
+    public constructor(IServiceProvider provider) { Provider = provider; }
+}
+
+public class InjectedPair {
+    public ILeft Left;
+    public IRight Right;
+    public constructor(ILeft left, IRight right) {
+        Left = left;
+        Right = right;
+    }
+}
+
+public class SelectedConstructor {
+    public uint Arity;
+    public constructor(ILeft left) { Arity = 1u; }
+    public constructor(ILeft left, IRight right) { Arity = 2u; }
+}
+
+public class EnumerableNameConsumer {
+    public uint Count;
+    public constructor(IEnumerable<IName> names) {
+        IEnumerator<IName> enumerator = names.GetEnumerator();
+        while (enumerator.MoveNext()) {
+            if (enumerator.Current == null) return;
+            Count += 1u;
+        }
+        enumerator.Dispose();
+    }
+}
+
+public class EmptyEnumerableConsumer {
+    public uint Count;
+    public constructor(IEnumerable<IUnregisteredName> names) {
+        IEnumerator<IUnregisteredName> enumerator = names.GetEnumerator();
+        while (enumerator.MoveNext()) Count += 1u;
+        enumerator.Dispose();
+    }
+}
+
+public class DisposableDependency : IDisposable {
+    public constructor() { ProbeState.Constructed += 1u; }
+    public void Dispose() {
+        if (ProbeState.OwnedDisposeCount == 0u) {
+            ProbeState.FirstOwnedDisposed = 1u;
+        } else {
+            ProbeState.SecondOwnedDisposed = 1u;
+        }
+        ProbeState.OwnedDisposeCount += 1u;
+    }
+}
+
+public class DisposableConsumer : IDisposable {
+    public DisposableDependency Dependency;
+    public constructor(DisposableDependency dependency) { Dependency = dependency; }
+    public void Dispose() {
+        if (ProbeState.OwnedDisposeCount == 0u) {
+            ProbeState.FirstOwnedDisposed = 2u;
+        } else {
+            ProbeState.SecondOwnedDisposed = 2u;
+        }
+        ProbeState.OwnedDisposeCount += 1u;
+    }
+}
+
+public class RetryMarker { }
+public class FirstCycle {
+    public constructor(SecondCycle dependency) { }
+}
+public class SecondCycle {
+    public constructor(FirstCycle dependency) { }
+}
+public class SequenceCycle : ISequenceCycle {
+    public constructor(IEnumerable<ISequenceCycle> dependencies) { }
+}
+public class MissingDependency { }
+public class MissingConsumer {
+    public constructor(MissingDependency missing) { }
+}
+
+public static class DiProgram {
+    public static int Run() {
+        Array<TypeInfo> enumerableArguments = typeof(EnumerableNameConsumer)
+            .GetModule().GetGenericArguments(typeof(IEnumerable<IName>));
+        if (enumerableArguments.Length != 1u ||
+            enumerableArguments.Get(0u).IsSameType(typeof(IName)) == false) return 90;
+        IServiceCollection services = new ServiceCollection();
+        services.AddTransient<ILeft, Left>();
+        services.AddTransient<IRight, Right>();
+        services.AddTransient<InjectedPair>();
+        services.AddTransient<SelectedConstructor>();
+        services.AddTransient<EnumerableNameConsumer>();
+        services.AddTransient<EmptyEnumerableConsumer>();
+        services.AddTransient<NamedFirst>();
+        services.AddTransient<GenericNameConsumer<NamedFirst>>();
+        services.AddTransient<IMarker<ILeft>, LeftMarker>();
+        services.AddTransient<IMarker<IRight>, RightMarker>();
+        services.AddScoped<IScopedMarker, ScopedMarker>();
+        services.AddSingleton<ISingletonMarker, SingletonMarker>();
+        services.AddSingleton<IName, NamedFirst>();
+        services.AddSingleton<IName, NamedSecond>();
+        services.AddSingleton<RootProviderConsumer>();
+        services.AddScoped<ScopedProviderConsumer>();
+        services.AddSingleton<DisposableDependency>();
+        services.AddSingleton<DisposableConsumer>();
+
+        IEnumerator<ServiceDescriptor> descriptorEnumerator = services.GetEnumerator();
+        uint descriptorCount = 0u;
+        while (descriptorEnumerator.MoveNext()) {
+            if (descriptorEnumerator.Current == null) return 24;
+            descriptorCount += 1u;
+        }
+        descriptorEnumerator.Dispose();
+        if (descriptorCount != services.Count) return 25;
+
+        ServiceProvider provider = services.BuildServiceProvider();
+        InjectedPair pair = provider.GetRequiredService<InjectedPair>();
+        if (pair.Left == null || pair.Right == null) return 1;
+        if (provider.GetRequiredService<SelectedConstructor>().Arity != 2u) return 2;
+        if (provider.GetRequiredService<EnumerableNameConsumer>().Count != 2u) return 28;
+        if (provider.GetRequiredService<EmptyEnumerableConsumer>().Count != 0u) return 29;
+        if (provider.GetService(typeof(NamedFirst)) == null) return 57;
+        if (provider.GetService(typeof(GenericNameConsumer<NamedFirst>)) == null) return 58;
+        if (provider.GetRequiredService<GenericNameConsumer<NamedFirst>>() == null) return 30;
+        if (provider.GetRequiredService<IMarker<ILeft>>() == null ||
+            provider.GetRequiredService<IMarker<IRight>>() == null) return 26;
+
+        IEnumerable<IName> names = provider.GetServices<IName>();
+        IEnumerator<IName> nameEnumerator = names.GetEnumerator();
+        if (!nameEnumerator.MoveNext() || nameEnumerator.Current.Name != "first") return 3;
+        if (!nameEnumerator.MoveNext() || nameEnumerator.Current.Name != "second") return 4;
+        if (nameEnumerator.MoveNext()) return 5;
+        nameEnumerator.Dispose();
+        if (provider.GetRequiredService<IName>().Name != "second") return 6;
+        if (provider.GetRequiredService<DisposableConsumer>() == null) return 21;
+
+        IServiceScope firstScope = provider.CreateScope();
+        IServiceScope secondScope = provider.CreateScope();
+        IScopedMarker firstScoped = firstScope.ServiceProvider.GetRequiredService<IScopedMarker>();
+        if (!Object.ReferenceEquals((object)firstScoped,
+                (object)firstScope.ServiceProvider.GetRequiredService<IScopedMarker>())) return 7;
+        if (Object.ReferenceEquals((object)firstScoped,
+                (object)secondScope.ServiceProvider.GetRequiredService<IScopedMarker>())) return 8;
+        if (!Object.ReferenceEquals((object)provider,
+                (object)provider.GetRequiredService<RootProviderConsumer>().Provider)) return 9;
+        ScopedProviderConsumer scopedConsumer =
+            (ScopedProviderConsumer)firstScope.ServiceProvider.GetRequiredService(
+                typeof(ScopedProviderConsumer));
+        if (!Object.ReferenceEquals((object)firstScope.ServiceProvider,
+                (object)scopedConsumer.Provider)) return 22;
+
+        provider.Dispose();
+        if (ProbeState.Disposed != 2u) return 10;
+        if (ProbeState.OwnedDisposeCount != 2u ||
+            ProbeState.FirstOwnedDisposed != 2u ||
+            ProbeState.SecondOwnedDisposed != 1u) return 23;
+        bool rejectedDisposedRoot = false;
+        try {
+            provider.GetService(typeof(IName));
+        } catch (ServiceResolutionException) {
+            rejectedDisposedRoot = true;
+        }
+        if (!rejectedDisposedRoot) return 94;
+        bool rejectedDisposedScope = false;
+        try {
+            firstScope.ServiceProvider.GetService(typeof(IScopedMarker));
+        } catch (ServiceResolutionException) {
+            rejectedDisposedScope = true;
+        }
+        if (!rejectedDisposedScope) return 11;
+        firstScope.Dispose();
+        secondScope.Dispose();
+        ForceCollection();
+        ServiceProvider gcFactoryProvider = GcScenario.CreateFactoryProvider();
+        ForceCollection();
+        GcFactoryService gcFactoryService =
+            gcFactoryProvider.GetRequiredService<GcFactoryService>();
+        if (gcFactoryService.Capture == null || gcFactoryService.Capture.Value != 42u) return 31;
+        gcFactoryProvider.Dispose();
+
+        IServiceCollection gcServices = new ServiceCollection();
+        gcServices.AddScoped<IGcService, GcScopedService>();
+        ServiceProvider gcProvider = gcServices.BuildServiceProvider();
+        IServiceScope gcScope = gcProvider.CreateScope();
+        GcScenario.RememberScopedIdentity(gcScope.ServiceProvider);
+        ForceCollection();
+        GcScopedService retainedGcService =
+            (GcScopedService)gcScope.ServiceProvider.GetRequiredService<IGcService>();
+        if (retainedGcService.Identity != ProbeState.GcIdentity) return 32;
+        gcScope.Dispose();
+        if (ProbeState.GcScopedDisposed != 1u) return 33;
+        gcProvider.Dispose();
+
+        IServiceCollection snapshotSource = new ServiceCollection();
+        ServiceProvider snapshot = snapshotSource.BuildServiceProvider();
+        IEnumerable<IName> emptyNames = snapshot.GetServices<IName>();
+        IEnumerator<IName> emptyNameEnumerator = emptyNames.GetEnumerator();
+        if (emptyNameEnumerator.MoveNext()) return 27;
+        emptyNameEnumerator.Dispose();
+        snapshotSource.AddTransient<ILeft, Left>();
+        if (snapshot.GetService(typeof(ILeft)) != null) return 12;
+        ServiceProvider laterSnapshot = snapshotSource.BuildServiceProvider();
+        if (laterSnapshot.GetRequiredService<ILeft>() == null) return 13;
+        snapshot.Dispose();
+        laterSnapshot.Dispose();
+
+        IServiceCollection mutableServices = new ServiceCollection();
+        mutableServices.Add(new ServiceDescriptor(
+            typeof(TransientCounter), ServiceLifetime.Transient, typeof(TransientCounter)));
+        if (mutableServices.Count != 1u) return 95;
+        mutableServices.RemoveAt(0u);
+        if (mutableServices.Count != 0u) return 96;
+        mutableServices.Add(new ServiceDescriptor(
+            typeof(TransientCounter), ServiceLifetime.Transient, typeof(TransientCounter)));
+        mutableServices.Clear();
+        if (mutableServices.Count != 0u) return 97;
+
+        IServiceCollection rootScopedServices = new ServiceCollection();
+        rootScopedServices.AddScoped<IScopedMarker, ScopedMarker>();
+        ServiceProvider rootScopedProvider = rootScopedServices.BuildServiceProvider();
+        bool rejectedRootScoped = false;
+        try {
+            rootScopedProvider.GetService(typeof(IScopedMarker));
+        } catch (ServiceResolutionException) {
+            rejectedRootScoped = true;
+        }
+        if (!rejectedRootScoped) return 14;
+        rootScopedProvider.Dispose();
+
+        ServiceProviderOptions relaxedOptions = new ServiceProviderOptions();
+        relaxedOptions.ValidateScopes = false;
+        ServiceProvider relaxedProvider = rootScopedServices.BuildServiceProvider(relaxedOptions);
+        IScopedMarker relaxedScoped = relaxedProvider.GetRequiredService<IScopedMarker>();
+        if (!Object.ReferenceEquals((object)relaxedScoped,
+                (object)relaxedProvider.GetRequiredService<IScopedMarker>())) return 15;
+        relaxedProvider.Dispose();
+
+        IServiceCollection invalidGraph = new ServiceCollection();
+        invalidGraph.AddTransient<MissingConsumer>();
+        bool rejectedMissing = false;
+        try {
+            invalidGraph.BuildServiceProvider();
+        } catch (ServiceResolutionException) {
+            rejectedMissing = true;
+        }
+        if (!rejectedMissing) return 16;
+
+        IServiceCollection runtimeGraph = new ServiceCollection();
+        runtimeGraph.AddTransient<MissingConsumer>();
+        ServiceProviderOptions runtimeOptions = new ServiceProviderOptions();
+        runtimeOptions.ValidateOnBuild = false;
+        ServiceProvider runtimeProvider = runtimeGraph.BuildServiceProvider(runtimeOptions);
+        bool failedAtResolve = false;
+        try {
+            runtimeProvider.GetService(typeof(MissingConsumer));
+        } catch (ServiceResolutionException) {
+            failedAtResolve = true;
+        }
+        if (!failedAtResolve) return 17;
+        runtimeProvider.Dispose();
+
+        IServiceCollection captiveServices = new ServiceCollection();
+        captiveServices.AddScoped<IScopedMarker, ScopedMarker>();
+        captiveServices.AddSingleton<RootProviderConsumer>();
+        ServiceProvider captiveProvider = captiveServices.BuildServiceProvider();
+        captiveProvider.Dispose();
+
+        IServiceCollection captiveGraph = new ServiceCollection();
+        captiveGraph.AddScoped<IScopedMarker, ScopedMarker>();
+        captiveGraph.AddSingleton<BadCaptive>();
+        bool rejectedCaptive = false;
+        try {
+            captiveGraph.BuildServiceProvider();
+        } catch (ServiceResolutionException) {
+            rejectedCaptive = true;
+        }
+        if (!rejectedCaptive) return 18;
+
+        IServiceCollection cycleServices = new ServiceCollection();
+        cycleServices.AddTransient(typeof(ICycleA), (IServiceProvider current) => {
+            current.GetRequiredService<ICycleB>();
+            return (object)new CycleBoth();
+        });
+        cycleServices.AddTransient(typeof(ICycleB), (IServiceProvider current) => {
+            current.GetRequiredService<ICycleA>();
+            return (object)new CycleBoth();
+        });
+        ServiceProvider cycleProvider = cycleServices.BuildServiceProvider();
+        bool rejectedCycle = false;
+        try {
+            cycleProvider.GetService(typeof(ICycleA));
+        } catch (ServiceResolutionException error) {
+            rejectedCycle = error != null;
+        }
+        if (!rejectedCycle) return 19;
+        cycleProvider.Dispose();
+
+        IServiceCollection constructorCycleServices = new ServiceCollection();
+        constructorCycleServices.AddTransient<FirstCycle>();
+        constructorCycleServices.AddTransient<SecondCycle>();
+        bool rejectedConstructorCycleAtBuild = false;
+        try {
+            constructorCycleServices.BuildServiceProvider();
+        } catch (ServiceResolutionException error) {
+            Exception cycleError = error;
+            rejectedConstructorCycleAtBuild = cycleError.Message ==
+                "Circular service dependency: Di.FirstCycle -> Di.SecondCycle -> Di.FirstCycle.";
+        }
+        if (!rejectedConstructorCycleAtBuild) return 103;
+
+        ServiceProviderOptions constructorCycleRuntimeOptions = new ServiceProviderOptions();
+        constructorCycleRuntimeOptions.ValidateOnBuild = false;
+        ServiceProvider constructorCycleProvider =
+            constructorCycleServices.BuildServiceProvider(constructorCycleRuntimeOptions);
+        bool rejectedConstructorCycleAtResolve = false;
+        try {
+            constructorCycleProvider.GetService(typeof(FirstCycle));
+        } catch (ServiceResolutionException error) {
+            Exception cycleError = error;
+            rejectedConstructorCycleAtResolve = cycleError.Message ==
+                "Circular service dependency: Di.FirstCycle -> Di.SecondCycle -> Di.FirstCycle.";
+        }
+        if (!rejectedConstructorCycleAtResolve) return 104;
+        constructorCycleProvider.Dispose();
+
+        IServiceCollection sequenceCycleServices = new ServiceCollection();
+        sequenceCycleServices.AddTransient<ISequenceCycle, SequenceCycle>();
+        bool rejectedSequenceCycleAtBuild = false;
+        try {
+            sequenceCycleServices.BuildServiceProvider();
+        } catch (ServiceResolutionException error) {
+            Exception cycleError = error;
+            rejectedSequenceCycleAtBuild = cycleError.Message ==
+                "Circular service dependency: Di.ISequenceCycle -> Di.ISequenceCycle.";
+        }
+        if (!rejectedSequenceCycleAtBuild) return 105;
+
+        ServiceProviderOptions sequenceCycleRuntimeOptions = new ServiceProviderOptions();
+        sequenceCycleRuntimeOptions.ValidateOnBuild = false;
+        ServiceProvider sequenceCycleProvider =
+            sequenceCycleServices.BuildServiceProvider(sequenceCycleRuntimeOptions);
+        bool rejectedSequenceCycleAtResolve = false;
+        try {
+            sequenceCycleProvider.GetService(typeof(ISequenceCycle));
+        } catch (ServiceResolutionException error) {
+            Exception cycleError = error;
+            rejectedSequenceCycleAtResolve = cycleError.Message ==
+                "Circular service dependency: Di.ISequenceCycle -> Di.ISequenceCycle.";
+        }
+        if (!rejectedSequenceCycleAtResolve) return 106;
+        sequenceCycleProvider.Dispose();
+
+        IServiceCollection retryServices = new ServiceCollection();
+        retryServices.AddTransient(typeof(RetryMarker), (IServiceProvider current) => {
+            ProbeState.FactoryCalls += 1u;
+            if (ProbeState.FactoryCalls == 1u) return null;
+            return (object)new RetryMarker();
+        });
+        ServiceProvider retryProvider = retryServices.BuildServiceProvider();
+        bool failedFactory = false;
+        try {
+            retryProvider.GetService(typeof(RetryMarker));
+        } catch (ServiceResolutionException) {
+            failedFactory = true;
+        }
+        if (!failedFactory || retryProvider.GetService(typeof(RetryMarker)) == null) return 20;
+        retryProvider.Dispose();
+
+        return AdditionalDiTests.Run();
+    }
+}
+
+public static class ArenaSingletonActivationScenario {
+    public static int Run() {
+        IServiceCollection services = new ServiceCollection();
+        services.AddSingleton<ArenaSingletonPayload>();
+        services.AddSingleton<IArenaCreatedSingleton, ArenaCreatedSingleton>();
+        ServiceProviderOptions options = new ServiceProviderOptions();
+        options.ValidateOnBuild = false;
+        ServiceProvider provider = services.BuildServiceProvider(options);
+        uint identity = ResolveSingletonUnderArena(
+            provider, typeof(IArenaCreatedSingleton));
+        if (identity != 1u || ArenaCreatedSingleton.Created != 1u) return 103;
+        provider.Dispose();
+        return 0;
+    }
+}
+
+public class BadCaptive {
+    public constructor(IScopedMarker marker) { }
+}
+
+public interface IAdditionalSingleton { }
+public interface IUniqueProbe { uint Id { const get; } }
+public interface IExternalResource { }
+public interface IAliasFirst { }
+public interface IAliasSecond { }
+public interface IExtraDependency { }
+public interface IAlienDependency { }
+public interface IShadowService { }
+
+public class TransientCounter {
+    private static uint _nextId;
+    public uint Id;
+    public constructor() { _nextId += 1u; Id = _nextId; }
+}
+
+public class AdditionalSingleton : IAdditionalSingleton, IDisposable {
+    public static uint DisposeCount;
+    public void Dispose() { DisposeCount += 1u; }
+}
+
+public class AdditionalScoped : IDisposable {
+    public static uint DisposeCount;
+    public void Dispose() { DisposeCount += 1u; }
+}
+
+public class SingletonProviderCapture {
+    public IServiceProvider Provider;
+    public constructor(IServiceProvider provider) { Provider = provider; }
+}
+
+public class ScopeFactoryCapture {
+    public IServiceScopeFactory Factory;
+    public constructor(IServiceScopeFactory factory) { Factory = factory; }
+}
+
+public class UniqueProbe : IUniqueProbe {
+    private static uint _nextId;
+    private uint _id;
+    public uint Id { const get { return _id; } }
+    public constructor() { _nextId += 1u; _id = _nextId; }
+}
+
+public class ExternalResource : IExternalResource, IDisposable {
+    public static uint DisposeCount;
+    public void Dispose() { DisposeCount += 1u; }
+}
+
+public class AliasResource : IAliasFirst, IAliasSecond, IDisposable {
+    public static uint DisposeCount;
+    public void Dispose() { DisposeCount += 1u; }
+}
+
+public class TransientResource : IDisposable {
+    public static uint DisposeCount;
+    public void Dispose() { DisposeCount += 1u; }
+}
+
+public class CleanupThrower : IDisposable {
+    public static uint DisposeCount;
+    public void Dispose() {
+        DisposeCount += 1u;
+        throw new Exception("expected cleanup failure");
+    }
+}
+
+public class CleanupSurvivor : IDisposable {
+    public static uint DisposeCount;
+    public void Dispose() { DisposeCount += 1u; }
+}
+
+public class ReentrantCleanup : IDisposable {
+    public static uint DisposeCount;
+    private ServiceProvider _provider;
+    public constructor(IServiceProvider provider) { _provider = (ServiceProvider)provider; }
+    public void Dispose() {
+        DisposeCount += 1u;
+        _provider.Dispose();
+    }
+}
+
+public class OwnedBeforeFailure : IDisposable {
+    public static uint DisposeCount;
+    public void Dispose() { DisposeCount += 1u; }
+}
+
+public class FailingConsumer {
+    public constructor(OwnedBeforeFailure dependency) {
+        throw new Exception("expected constructor failure");
+    }
+}
+
+public class ExtraDependency : IExtraDependency { }
+public class AlienDependency : IAlienDependency { }
+public class AmbiguousSelection {
+    public constructor(ILeft left) { }
+    public constructor(IRight right) { }
+}
+public class IncomparableSelection {
+    public constructor(ILeft left, IRight right, IExtraDependency extra) { }
+    public constructor(ILeft left, IAlienDependency alien) { }
+}
+public class BadShadowImplementation : IShadowService {
+    public constructor(MissingDependency missing) { }
+}
+public class GoodShadowImplementation : IShadowService { }
+
+public class FactoryProbe {
+    public static uint CallCount;
+    public uint Id;
+    public constructor(uint id) { Id = id; }
+}
+
+public class WrongFactoryService { }
+
+public static class AdditionalDiTests {
+    public static int Run() {
+        IServiceCollection services = new ServiceCollection();
+        IServiceCollection chained = services.AddTransient<TransientCounter>();
+        if (!Object.ReferenceEquals((object)services, (object)chained)) return 83;
+        services.AddScoped<AdditionalScoped>();
+        services.AddSingleton<IAdditionalSingleton, AdditionalSingleton>();
+        services.AddSingleton<SingletonProviderCapture>();
+        services.AddScoped<ScopeFactoryCapture>();
+        ServiceProvider provider = services.BuildServiceProvider();
+        if (provider.GetService(typeof(NamedSecond)) != null) return 84;
+        bool requiredMissingFailed = false;
+        try {
+            provider.GetRequiredService<IUnregisteredName>();
+        } catch (ServiceResolutionException) {
+            requiredMissingFailed = true;
+        }
+        if (!requiredMissingFailed) return 85;
+
+        TransientCounter transientFirst = provider.GetRequiredService<TransientCounter>();
+        TransientCounter transientSecond = provider.GetRequiredService<TransientCounter>();
+        if (Object.ReferenceEquals((object)transientFirst, (object)transientSecond) ||
+            transientFirst.Id == transientSecond.Id) return 60;
+
+        IServiceScope first = provider.CreateScope();
+        IServiceScope second = provider.CreateScope();
+        AdditionalScoped scopedFirst = first.ServiceProvider.GetRequiredService<AdditionalScoped>();
+        if (!Object.ReferenceEquals((object)scopedFirst,
+                (object)first.ServiceProvider.GetRequiredService<AdditionalScoped>())) return 61;
+        if (Object.ReferenceEquals((object)scopedFirst,
+                (object)second.ServiceProvider.GetRequiredService<AdditionalScoped>())) return 62;
+
+        IAdditionalSingleton singleton = first.ServiceProvider.GetRequiredService<IAdditionalSingleton>();
+        if (!Object.ReferenceEquals((object)singleton,
+                (object)second.ServiceProvider.GetRequiredService<IAdditionalSingleton>())) return 63;
+        if (!Object.ReferenceEquals((object)singleton,
+                (object)provider.GetRequiredService<IAdditionalSingleton>())) return 64;
+        SingletonProviderCapture singletonCapture =
+            first.ServiceProvider.GetRequiredService<SingletonProviderCapture>();
+        if (!Object.ReferenceEquals((object)provider, (object)singletonCapture.Provider)) return 65;
+
+        ScopeFactoryCapture scopeFactoryCapture =
+            first.ServiceProvider.GetRequiredService<ScopeFactoryCapture>();
+        if (!Object.ReferenceEquals((object)provider, (object)scopeFactoryCapture.Factory)) return 66;
+        IServiceScope sibling = first.ServiceProvider.CreateScope();
+        if (Object.ReferenceEquals((object)scopedFirst,
+                (object)sibling.ServiceProvider.GetRequiredService<AdditionalScoped>())) return 67;
+
+        ServiceProvider independentProvider = services.BuildServiceProvider();
+        IAdditionalSingleton independentSingleton =
+            independentProvider.GetRequiredService<IAdditionalSingleton>();
+        if (Object.ReferenceEquals((object)singleton, (object)independentSingleton)) return 68;
+        independentProvider.Dispose();
+        sibling.Dispose();
+        first.Dispose();
+        second.Dispose();
+        provider.Dispose();
+        if (AdditionalSingleton.DisposeCount != 2u || AdditionalScoped.DisposeCount != 3u) return 69;
+
+        IServiceCollection duplicateServices = new ServiceCollection();
+        ServiceDescriptor duplicate = new ServiceDescriptor(
+            typeof(IUniqueProbe), ServiceLifetime.Singleton, typeof(UniqueProbe));
+        duplicateServices.Add(duplicate);
+        duplicateServices.Add(duplicate);
+        ServiceProvider duplicateProvider = duplicateServices.BuildServiceProvider();
+        IEnumerable<IUniqueProbe> duplicateValues = duplicateProvider.GetServices<IUniqueProbe>();
+        IEnumerator<IUniqueProbe> duplicateEnumerator = duplicateValues.GetEnumerator();
+        if (!duplicateEnumerator.MoveNext()) return 70;
+        IUniqueProbe firstDuplicate = duplicateEnumerator.Current;
+        if (!duplicateEnumerator.MoveNext()) return 71;
+        IUniqueProbe secondDuplicate = duplicateEnumerator.Current;
+        if (duplicateEnumerator.MoveNext()) return 72;
+        duplicateEnumerator.Dispose();
+        if (firstDuplicate.Id == secondDuplicate.Id ||
+            Object.ReferenceEquals((object)firstDuplicate, (object)secondDuplicate)) return 73;
+        if (!Object.ReferenceEquals((object)secondDuplicate,
+                (object)duplicateProvider.GetRequiredService<IUniqueProbe>())) return 74;
+        duplicateProvider.Dispose();
+
+        ExternalResource external = new ExternalResource();
+        IServiceCollection externalServices = new ServiceCollection();
+        externalServices.AddSingleton<IExternalResource>(external);
+        ServiceProvider externalProvider = externalServices.BuildServiceProvider();
+        if (!Object.ReferenceEquals((object)external,
+                (object)externalProvider.GetRequiredService<IExternalResource>())) return 75;
+        externalProvider.Dispose();
+        if (ExternalResource.DisposeCount != 0u) return 76;
+
+        AliasResource aliasValue = new AliasResource();
+        IServiceCollection aliasServices = new ServiceCollection();
+        delegate(IServiceProvider) => object aliasFactory =
+            (IServiceProvider current) => (object)aliasValue;
+        aliasServices.AddSingleton(typeof(IAliasFirst), aliasFactory);
+        aliasServices.AddSingleton(typeof(IAliasSecond), aliasFactory);
+        ServiceProvider aliasProvider = aliasServices.BuildServiceProvider();
+        aliasProvider.GetRequiredService<IAliasFirst>();
+        aliasProvider.GetRequiredService<IAliasSecond>();
+        aliasProvider.Dispose();
+        if (AliasResource.DisposeCount != 1u) return 77;
+
+        IServiceCollection transientDisposalServices = new ServiceCollection();
+        transientDisposalServices.AddTransient<TransientResource>();
+        ServiceProvider transientDisposalProvider = transientDisposalServices.BuildServiceProvider();
+        transientDisposalProvider.GetRequiredService<TransientResource>();
+        transientDisposalProvider.GetRequiredService<TransientResource>();
+        transientDisposalProvider.Dispose();
+        if (TransientResource.DisposeCount != 2u) return 78;
+
+        IServiceCollection cleanupServices = new ServiceCollection();
+        cleanupServices.AddSingleton<CleanupThrower>();
+        cleanupServices.AddSingleton<CleanupSurvivor>();
+        ServiceProvider cleanupProvider = cleanupServices.BuildServiceProvider();
+        cleanupProvider.GetRequiredService<CleanupThrower>();
+        cleanupProvider.GetRequiredService<CleanupSurvivor>();
+        bool aggregatedCleanup = false;
+        try {
+            cleanupProvider.Dispose();
+        } catch (ServiceProviderDisposalException error) {
+            aggregatedCleanup = error.ErrorCount == 1u;
+        }
+        if (!aggregatedCleanup || CleanupThrower.DisposeCount != 1u ||
+            CleanupSurvivor.DisposeCount != 1u) return 79;
+        cleanupProvider.Dispose();
+
+        IServiceCollection reentrantServices = new ServiceCollection();
+        reentrantServices.AddSingleton<ReentrantCleanup>();
+        ServiceProvider reentrantProvider = reentrantServices.BuildServiceProvider();
+        reentrantProvider.GetRequiredService<ReentrantCleanup>();
+        reentrantProvider.Dispose();
+        reentrantProvider.Dispose();
+        if (ReentrantCleanup.DisposeCount != 1u) return 80;
+
+        IServiceCollection failedConstructionServices = new ServiceCollection();
+        failedConstructionServices.AddTransient<OwnedBeforeFailure>();
+        failedConstructionServices.AddTransient<FailingConsumer>();
+        ServiceProvider failedConstructionProvider = failedConstructionServices.BuildServiceProvider();
+        bool constructorFailed = false;
+        try {
+            failedConstructionProvider.GetService(typeof(FailingConsumer));
+        } catch (Exception) {
+            constructorFailed = true;
+        }
+        if (!constructorFailed || OwnedBeforeFailure.DisposeCount != 0u) return 81;
+        failedConstructionProvider.Dispose();
+        if (OwnedBeforeFailure.DisposeCount != 1u) return 82;
+
+        FactoryProbe.CallCount = 0u;
+        delegate(IServiceProvider) => object singletonFactory = (IServiceProvider current) => {
+            FactoryProbe.CallCount += 1u;
+            return (object)new FactoryProbe(FactoryProbe.CallCount);
+        };
+        IServiceCollection factoryServices = new ServiceCollection();
+        factoryServices.AddSingleton(typeof(FactoryProbe), singletonFactory);
+        ServiceProvider factoryProvider = factoryServices.BuildServiceProvider();
+        if (FactoryProbe.CallCount != 0u) return 86;
+        FactoryProbe firstFactoryService = factoryProvider.GetRequiredService<FactoryProbe>();
+        FactoryProbe secondFactoryService = factoryProvider.GetRequiredService<FactoryProbe>();
+        if (FactoryProbe.CallCount != 1u ||
+            !Object.ReferenceEquals((object)firstFactoryService, (object)secondFactoryService)) return 87;
+        factoryProvider.Dispose();
+
+        FactoryProbe.CallCount = 0u;
+        delegate(IServiceProvider) => FactoryProbe typedFactory =
+            (IServiceProvider current) => {
+                FactoryProbe.CallCount += 1u;
+                return new FactoryProbe(FactoryProbe.CallCount);
+            };
+        IServiceCollection typedFactoryServices = new ServiceCollection();
+        typedFactoryServices.AddSingleton<FactoryProbe>(typedFactory);
+        ServiceProvider typedFactoryProvider = typedFactoryServices.BuildServiceProvider();
+        FactoryProbe typedSingletonFirst = typedFactoryProvider.GetRequiredService<FactoryProbe>();
+        FactoryProbe typedSingletonSecond = typedFactoryProvider.GetRequiredService<FactoryProbe>();
+        if (!Object.ReferenceEquals((object)typedSingletonFirst, (object)typedSingletonSecond) ||
+            FactoryProbe.CallCount != 1u) return 98;
+        typedFactoryProvider.Dispose();
+
+        FactoryProbe.CallCount = 0u;
+        IServiceCollection typedScopedServices = new ServiceCollection();
+        typedScopedServices.AddScoped<FactoryProbe>(typedFactory);
+        ServiceProvider typedScopedProvider = typedScopedServices.BuildServiceProvider();
+        IServiceScope typedScopedFirst = typedScopedProvider.CreateScope();
+        IServiceScope typedScopedSecond = typedScopedProvider.CreateScope();
+        FactoryProbe typedScopedValue = typedScopedFirst.ServiceProvider.GetRequiredService<FactoryProbe>();
+        if (!Object.ReferenceEquals((object)typedScopedValue,
+                (object)typedScopedFirst.ServiceProvider.GetRequiredService<FactoryProbe>()) ||
+            Object.ReferenceEquals((object)typedScopedValue,
+                (object)typedScopedSecond.ServiceProvider.GetRequiredService<FactoryProbe>()) ||
+            FactoryProbe.CallCount != 2u) return 99;
+        typedScopedProvider.Dispose();
+
+        FactoryProbe.CallCount = 0u;
+        IServiceCollection typedTransientServices = new ServiceCollection();
+        typedTransientServices.AddTransient<FactoryProbe>(typedFactory);
+        ServiceProvider typedTransientProvider = typedTransientServices.BuildServiceProvider();
+        FactoryProbe typedTransientFirst = typedTransientProvider.GetRequiredService<FactoryProbe>();
+        FactoryProbe typedTransientSecond = typedTransientProvider.GetRequiredService<FactoryProbe>();
+        if (Object.ReferenceEquals((object)typedTransientFirst, (object)typedTransientSecond) ||
+            FactoryProbe.CallCount != 2u) return 100;
+        typedTransientProvider.Dispose();
+        if (!ProviderReferencesCleared(typedTransientProvider)) return 101;
+
+        ServiceProvider disposedScopeProvider =
+            (ServiceProvider)typedScopedFirst.ServiceProvider;
+        if (!ProviderReferencesCleared(disposedScopeProvider)) return 102;
+
+        delegate(IServiceProvider) => object wrongFactory =
+            (IServiceProvider current) => (object)new Right();
+        IServiceCollection wrongFactoryServices = new ServiceCollection();
+        wrongFactoryServices.Add(new ServiceDescriptor(
+            typeof(ILeft), ServiceLifetime.Singleton, wrongFactory));
+        ServiceProvider wrongFactoryProvider = wrongFactoryServices.BuildServiceProvider();
+        bool invalidFactoryFailed = false;
+        try {
+            wrongFactoryProvider.GetService(typeof(ILeft));
+        } catch (ServiceResolutionException) {
+            invalidFactoryFailed = true;
+        }
+        if (!invalidFactoryFailed) return 88;
+        wrongFactoryProvider.Dispose();
+
+        IServiceCollection ambiguousServices = new ServiceCollection();
+        ambiguousServices.AddTransient<ILeft, Left>();
+        ambiguousServices.AddTransient<IRight, Right>();
+        ambiguousServices.AddTransient<AmbiguousSelection>();
+        bool rejectedTie = false;
+        try {
+            ambiguousServices.BuildServiceProvider();
+        } catch (ServiceResolutionException error) {
+            rejectedTie = error != null;
+        }
+        if (!rejectedTie) return 89;
+
+        IServiceCollection incomparableServices = new ServiceCollection();
+        incomparableServices.AddTransient<ILeft, Left>();
+        incomparableServices.AddTransient<IRight, Right>();
+        incomparableServices.AddTransient<IExtraDependency, ExtraDependency>();
+        incomparableServices.AddTransient<IAlienDependency, AlienDependency>();
+        incomparableServices.AddTransient<IncomparableSelection>();
+        bool rejectedIncomparable = false;
+        try {
+            incomparableServices.BuildServiceProvider();
+        } catch (ServiceResolutionException error) {
+            rejectedIncomparable = error != null;
+        }
+        if (!rejectedIncomparable) return 90;
+
+        IServiceCollection shadowedServices = new ServiceCollection();
+        shadowedServices.AddTransient(typeof(IShadowService), typeof(BadShadowImplementation));
+        shadowedServices.AddTransient(typeof(IShadowService), typeof(GoodShadowImplementation));
+        bool rejectedShadowedInvalidGraph = false;
+        try {
+            shadowedServices.BuildServiceProvider();
+        } catch (ServiceResolutionException) {
+            rejectedShadowedInvalidGraph = true;
+        }
+        if (!rejectedShadowedInvalidGraph) return 91;
+
+        IServiceCollection reservedServices = new ServiceCollection();
+        bool rejectedReservedKey = false;
+        try {
+            reservedServices.Add(new ServiceDescriptor(
+                typeof(IServiceProvider), ServiceLifetime.Singleton, typeof(RootProviderConsumer)));
+        } catch (Exception) {
+            rejectedReservedKey = true;
+        }
+        if (!rejectedReservedKey) return 92;
+
+        IServiceCollection invalidMappingServices = new ServiceCollection();
+        bool rejectedInvalidMapping = false;
+        try {
+            invalidMappingServices.Add(new ServiceDescriptor(
+                typeof(ILeft), ServiceLifetime.Transient, typeof(Right)));
+        } catch (Exception) {
+            rejectedInvalidMapping = true;
+        }
+        if (!rejectedInvalidMapping) return 93;
+
+        return 0;
+    }
+}
+
+

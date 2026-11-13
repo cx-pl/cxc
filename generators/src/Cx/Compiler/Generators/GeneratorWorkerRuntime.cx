@@ -1,0 +1,108 @@
+import System;
+
+namespace Cx.Compiler.Generators;
+
+// Entry point for a CX-authored generator executable. It consumes one compiler
+// request, runs the generator against decoded semantic inputs, and emits frames.
+public static class GeneratorWorkerRuntime {
+    public static unsafe int Run(ICxGenerator generator) {
+        ulong requestId = 0uL;
+        bool hasRequestId = false;
+        try {
+            if (generator == null) throw new Exception("A CX generator instance is required.");
+            AdditionalText[] additionalFiles = new AdditionalText[0u];
+            GeneratorInputSnapshot snapshot = null;
+            bool receivedHandshake = false;
+            bool receivedGenerate = false;
+
+            while (!receivedGenerate) {
+                var frame = GeneratorProtocolTransport.ReadFrame();
+                try {
+                    if (!hasRequestId) {
+                        if (frame.Kind != GeneratorMessageKind.Handshake || frame.PayloadLength != 0u) {
+                            throw new Exception("Generator request must begin with an empty handshake.");
+                        }
+                        requestId = frame.RequestId;
+                        hasRequestId = true;
+                        receivedHandshake = true;
+                        continue;
+                    }
+                    if (frame.RequestId != requestId) {
+                        throw new Exception("Generator request contains mixed request identifiers.");
+                    }
+                    if (!receivedHandshake) throw new Exception("Generator handshake is missing.");
+
+                    if (frame.Kind == GeneratorMessageKind.Snapshot) {
+                        if (snapshot != null || frame.PayloadLength == 0u) {
+                            throw new Exception("Generator request contains an invalid snapshot frame.");
+                        }
+                        snapshot = GeneratorSnapshotCodec.Decode(frame.Payload, frame.PayloadLength);
+                    } else if (frame.Kind == GeneratorMessageKind.AdditionalFile) {
+                        if (snapshot == null) {
+                            throw new Exception("Additional files must follow the snapshot frame.");
+                        }
+                        additionalFiles = Append(additionalFiles,
+                            GeneratorWorkerMessages.DecodeAdditionalFile(frame.Payload,
+                                frame.PayloadLength));
+                    } else if (frame.Kind == GeneratorMessageKind.Generate) {
+                        if (snapshot == null || frame.PayloadLength != 0u) {
+                            throw new Exception("Generate requires a snapshot and an empty payload.");
+                        }
+                        receivedGenerate = true;
+                    } else if (frame.Kind == GeneratorMessageKind.Cancellation) {
+                        throw new Exception("Generator request was cancelled.");
+                    } else {
+                        throw new Exception("Unexpected message in generator request.");
+                    }
+                } finally {
+                    frame.Dispose();
+                }
+            }
+
+            WriteEmptyFrame(GeneratorMessageKind.Handshake, requestId);
+            // Generator execution and source-frame writes are synchronous, so
+            // their temporary managed allocations share one request lifetime.
+            Memory.WithArena(() => {
+                var output = new GeneratorWorkerOutputContext(requestId);
+                generator.Generate(snapshot, additionalFiles, output);
+            });
+            WriteEmptyFrame(GeneratorMessageKind.Complete, requestId);
+            return 0;
+        } catch (Exception exception) {
+            if (hasRequestId) {
+                try {
+                    var payload = GeneratorWorkerMessages.EncodeFailure(exception.Message);
+                    var failure = new GeneratorProtocolFrame(GeneratorProtocolTransport.CurrentVersion,
+                        GeneratorMessageKind.Failure, requestId, payload);
+                    try {
+                        GeneratorProtocolTransport.WriteFrame(failure);
+                    } finally {
+                        failure.Dispose();
+                    }
+                } catch (Exception) {
+                    // The parent process reports a worker exit or timeout if framing also fails.
+                }
+            }
+            return 1;
+        }
+    }
+
+    private static AdditionalText[] Append(AdditionalText[] values, AdditionalText value) {
+        if (values.Length == 4096u) throw new Exception("Too many generator additional files.");
+        var result = new AdditionalText[values.Length + 1u];
+        for (uint index = 0u; index < values.Length; index += 1u) result[index] = values[index];
+        result[values.Length] = value;
+        return result;
+    }
+
+    private static unsafe void WriteEmptyFrame(GeneratorMessageKind kind, ulong requestId) {
+        var payload = System.Interop.NativeBuffer.Allocate(0uL);
+        var frame = new GeneratorProtocolFrame(GeneratorProtocolTransport.CurrentVersion,
+            kind, requestId, payload);
+        try {
+            GeneratorProtocolTransport.WriteFrame(frame);
+        } finally {
+            frame.Dispose();
+        }
+    }
+}

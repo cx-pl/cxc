@@ -1,0 +1,40 @@
+import Cx.Compiler.Generators;
+
+namespace GeneratorSdkFixture;
+
+public final class SmokeGenerator : ICxIncrementalGenerator {
+    public void Initialize(IncrementalGeneratorInitializationContext context) {
+        var annotations = context.ForAnnotation("System.Data.Serializable");
+        var types = context.Types.Where(new TypeDescriptorProbe());
+        var syntax = context.SyntaxProvider;
+        var closedGenerics = context.ClosedGenericRequests;
+        var additionalFiles = context.AdditionalFiles;
+    }
+}
+
+public final class TypeDescriptorProbe : IGeneratorPredicate<TypeDescriptor> {
+    public bool Invoke(TypeDescriptor value) {
+        var baseTypes = value.BaseTypeIdentities;
+        var constraints = value.GenericConstraints;
+        if (constraints.Length > 0u) {
+            var firstConstraint = constraints[0u];
+            var parameterName = firstConstraint.ParameterName;
+            var constrainedTypes = firstConstraint.TypeIdentities;
+            var constrainedConcepts = firstConstraint.ConceptNames;
+            if (parameterName == null || constrainedTypes.Length > 0u ||
+                constrainedConcepts.Length > 0u) return true;
+        }
+        var members = value.Members;
+        for (uint index = 0u; index < members.Length; index += 1u) {
+            var member = members[index];
+            var constantValue = member.ConstantValue;
+            var parameters = member.Parameters;
+            if (parameters.Length > 0u) {
+                var firstParameter = parameters[0u];
+                var defaultValue = firstParameter.DefaultValue;
+                return defaultValue != null || constantValue != null;
+            }
+        }
+        return value.IsGenericDefinition || baseTypes.Length > 0u;
+    }
+}

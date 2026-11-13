@@ -1,0 +1,30 @@
+namespace Cx.Compiler.Generators;
+
+public final class ClosedGenericRequest {
+    private string _definitionIdentity;
+    private string _closedIdentity;
+    private string _ownerModule;
+    private string[] _typeArguments;
+    private SourceLocation _location;
+
+    public string DefinitionIdentity { const get => _definitionIdentity; }
+    public string ClosedIdentity { const get => _closedIdentity; }
+    public string OwnerModule { const get => _ownerModule; }
+    public string[] TypeArguments { get => CopyStrings(_typeArguments); }
+    public SourceLocation Location { const get => _location; }
+
+    public constructor(string definitionIdentity, string closedIdentity, string ownerModule,
+        string[] typeArguments, SourceLocation location) {
+        _definitionIdentity = definitionIdentity;
+        _closedIdentity = closedIdentity;
+        _ownerModule = ownerModule;
+        _typeArguments = CopyStrings(typeArguments);
+        _location = location;
+    }
+
+    private string[] CopyStrings(string[] values) {
+        var result = new string[values.Length];
+        for (uint index = 0u; index < values.Length; index += 1u) result[index] = values[index];
+        return result;
+    }
+}

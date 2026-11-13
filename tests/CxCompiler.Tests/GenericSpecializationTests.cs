@@ -12,6 +12,51 @@ namespace CxCompiler.Tests;
 public sealed class GenericSpecializationTests
 {
     [Fact]
+    public void SpecializesConstructedReturnWhenMethodTypeIsOnlyInForwardedArgument()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_constructed_return_parameter_only");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Input<T> { }
+            public class Box<T> {
+                public object Value;
+                public constructor(object value) { Value = value; }
+            }
+            public Box<int> Wrap<T>(Input<T> value) {
+                return new Box<int>(value);
+            }
+            public int Run() {
+                Input<int> input = new Input<int>();
+                Box<int> result = Wrap<int>(input);
+                return result.Value == null ? 0 : 1;
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+        var wrap = project.CompilationContexts.Single().DeclarationScope.Declarations
+            .OfType<FunctionDeclaration>().Single(function => function.Name == "Wrap");
+        Assert.Contains(project.GenericFunctionInstances, instance =>
+            ReferenceEquals(instance.Declaration, wrap) &&
+            instance.GenericTypeArguments.ContainsKey("T"));
+
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-constructed-return-parameter-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(
+                directory, "generic_constructed_return_parameter_only.c"));
+            Assert.NotEmpty(source);
+            Assert.DoesNotContain("_unknowntype_", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ClassifiesFunctionGenericListsDuringSemanticBinding()
     {
         var project = CxProject.CreateDefaultApplicationProject("generic_list_classification");

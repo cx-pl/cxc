@@ -34,4 +34,34 @@ public sealed class NativeFunctionTests
             """);
         Assert.Contains("non-capturing", Assert.Throws<CompilationErrorException>(() => new SemanticBinder().Bind(project)).Message);
     }
+
+    [Fact]
+    public void NativeFunctionFieldsUseRawByteLayoutInReflectedValueCopies()
+    {
+        var project = NativeInteropTests.Project("""
+            import System.Interop;
+            @NativeFunction public delegate int Callback(int number);
+            public class Node { public constructor() { } }
+            public struct Payload {
+                public Callback Function;
+                public Node Reference;
+            }
+            public Payload Copy(Payload value) {
+                Payload result = value;
+                return result;
+            }
+            """);
+        new SemanticBinder().Bind(project);
+        var generated = NativeInteropTests.Generate(project);
+
+        var callbackFields = generated.Source.Split('\n').Where(line =>
+            line.Contains("\"Function\"", StringComparison.Ordinal)).ToArray();
+        Assert.NotEmpty(callbackFields);
+        Assert.All(callbackFields, callbackField =>
+        {
+            Assert.Contains("CX_REFLECTION_FLAG_FIELD_RAW_BYTES", callbackField);
+            Assert.DoesNotContain("CX_REFLECTION_FLAG_FIELD_FUNCTION_VALUE", callbackField);
+        });
+        Assert.Contains("cx_gc_copy_value", generated.Source);
+    }
 }

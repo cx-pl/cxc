@@ -1,0 +1,90 @@
+import System;
+import System.Collections;
+import System.Threading.Tasks;
+
+public class ArenaAsyncFallbackPayload {
+    public int Value;
+}
+
+public async Task MutateChildAfterDelay(
+    ArenaAsyncFallbackPayload payload, uint delay) {
+    await TaskHandle.Delay(delay);
+    payload.Value += 1;
+}
+
+public async Task JoinInlineChildrenOnSelectedBranch(
+    ArenaAsyncFallbackPayload payload, bool firstBranch) {
+    if (firstBranch) {
+        await TaskHandle.WhenAll(
+            MutateChildAfterDelay(payload, 1u),
+            MutateChildAfterDelay(payload, 20u));
+    } else {
+        await TaskHandle.WhenAll(
+            MutateChildAfterDelay(payload, 1u),
+            MutateChildAfterDelay(payload, 30u));
+    }
+}
+
+public async Task JoinCanceledChildWithSibling(
+    ArenaAsyncFallbackPayload payload, CancellationToken cancellationToken) {
+    Task canceled = TaskHandle.Delay(1u, cancellationToken);
+    Task sibling = MutateChildAfterDelay(payload, 20u);
+    await TaskHandle.WhenAll(canceled, sibling);
+}
+
+public int Main() {
+    List<int> list = new List<int>();
+    if (list.Count != 0u) return 4;
+    list.Add(17);
+    if (list.Count != 1u) return 5;
+
+    Dictionary<string, int> dictionary =
+        new Dictionary<string, int>();
+    if (dictionary.Count != 0u) return 6;
+    dictionary.Set("key", 42);
+    if (dictionary.Count != 1u) return 7;
+
+    Queue<int> queue = new Queue<int>();
+    if (queue.Count != 0u) return 8;
+    queue.Enqueue(19);
+    if (queue.Count != 1u) return 9;
+
+    Stack<int> stack = new Stack<int>();
+    if (stack.Count != 0u) return 10;
+    stack.Push(23);
+    if (stack.Count != 1u) return 11;
+
+    ArenaAsyncFallbackPayload truePayload =
+        new ArenaAsyncFallbackPayload();
+    TaskHandle trueOperation = Memory.WithArenaAsync(() =>
+        JoinInlineChildrenOnSelectedBranch(truePayload, true));
+    GC.Collect();
+    TaskScheduler.RunUntil(trueOperation);
+    trueOperation.GetResult();
+    if (truePayload.Value != 2) return 1;
+
+    ArenaAsyncFallbackPayload falsePayload =
+        new ArenaAsyncFallbackPayload();
+    TaskHandle falseOperation = Memory.WithArenaAsync(() =>
+        JoinInlineChildrenOnSelectedBranch(falsePayload, false));
+    GC.Collect();
+    TaskScheduler.RunUntil(falseOperation);
+    falseOperation.GetResult();
+    if (falsePayload.Value != 2) return 2;
+
+    CancellationTokenSource cancellationSource = new CancellationTokenSource();
+    cancellationSource.Cancel();
+    ArenaAsyncFallbackPayload canceledPayload =
+        new ArenaAsyncFallbackPayload();
+    TaskHandle canceledOperation = Memory.WithArenaAsync(() =>
+        JoinCanceledChildWithSibling(
+            canceledPayload, cancellationSource.Token));
+    GC.Collect();
+    TaskScheduler.RunUntil(canceledOperation);
+    bool cancellationObserved = false;
+    try { canceledOperation.GetResult(); }
+    catch (OperationCanceledException) { cancellationObserved = true; }
+    if (!cancellationObserved || canceledPayload.Value != 1) return 3;
+
+    return 0;
+}

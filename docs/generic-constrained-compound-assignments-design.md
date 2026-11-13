@@ -2,11 +2,11 @@
 
 ## Scope
 
-Milestone 15 already permits a generic function to assign built-in expressions
-to properties and indexers exposed by a class or interface constraint. This
-slice extends that body form to built-in compound assignment operators on the
-same constrained members. It uses the existing assignment and getter/setter
-lowering, and does not add syntax or change runtime ABI 1.
+Generic functions can assign built-in expressions to properties and indexers
+exposed by a class or interface constraint. They also support built-in compound
+assignment operators on the same constrained members. These operations use
+the existing assignment and getter/setter lowering without adding syntax or
+changing runtime ABI 1.
 
 The first supported operators are `+=`, `-=`, `*=`, `/=`, and `%=`. Targets
 must be a writable non-indexed property or an indexer on the constrained

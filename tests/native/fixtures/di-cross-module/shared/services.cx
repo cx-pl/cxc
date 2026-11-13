@@ -1,0 +1,53 @@
+import System;
+import System.DependencyInjection;
+
+namespace Shared;
+
+public interface IForeignService {
+    int Value { const get; }
+}
+
+public class ForeignService : IForeignService {
+    public static int ConstructionCount;
+
+    public constructor() {
+        ConstructionCount += 1;
+    }
+
+    public int Value { const get { return 41; } }
+}
+
+public static class CrossModuleDi {
+    public static TypeInfo GetServiceType() {
+        return typeof(IForeignService);
+    }
+
+    public static int Verify(
+        TypeInfo serviceType,
+        TypeInfo sameNameOtherModuleType,
+        TypeInfo collisionType) {
+        if (serviceType.IsSameType(sameNameOtherModuleType)) return 5;
+        if (serviceType.Name != collisionType.Name ||
+            serviceType.Namespace != collisionType.Namespace) return 4;
+        if (serviceType.IsSameType(collisionType)) return 8;
+
+        IServiceCollection services = new ServiceCollection();
+        services.AddSingleton<IForeignService, ForeignService>();
+
+        ServiceProvider provider = services.BuildServiceProvider();
+        try {
+            IForeignService genericResult = provider.GetRequiredService<IForeignService>();
+            if (genericResult == null || genericResult.Value != 41) return 1;
+
+            object runtimeResult = provider.GetRequiredService(serviceType);
+            IForeignService runtimeService = (IForeignService)runtimeResult;
+            if (runtimeService == null || runtimeService.Value != 41) return 2;
+            if (provider.GetService(sameNameOtherModuleType) != null) return 6;
+            if (provider.GetService(collisionType) != null) return 7;
+            if (ForeignService.ConstructionCount != 1) return 3;
+            return 0;
+        } finally {
+            provider.Dispose();
+        }
+    }
+}

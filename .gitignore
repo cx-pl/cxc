@@ -223,3 +223,10 @@ machine-learning/tutorials/**/MovieRecommenderModel.zip
 /.bin/
 
 /src/Grammars/*.interp
+
+**/.obj/
+**/.bin/
+**/.dist/
+**/.packages/
+.build/
+**/.build-*/

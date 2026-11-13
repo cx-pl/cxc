@@ -1,0 +1,294 @@
+import System;
+import System.Collections;
+
+delegate int Transform(int value);
+
+public class InvocationListTarget {
+    public int Calls;
+
+    public int AddTwo(int value) { return value + 2; }
+    public void Touch() { Calls += 1; }
+}
+
+public class CallbackHolder {
+    public Transform Callback;
+}
+
+public class GenericArrayStorePayload {
+    public int Value;
+}
+
+public static class GenericArrayStoreCache {
+    private static GenericArrayStorePayload[] _values =
+        new GenericArrayStorePayload[1];
+
+    public static GenericArrayStorePayload[] GetValues() {
+        return _values;
+    }
+}
+
+public class GenericFieldStoreBox<T> {
+    public T Value;
+}
+
+public struct GenericFieldStoreEnvelope {
+    public GenericArrayStorePayload Value;
+}
+
+public static class GenericFieldStoreCache {
+    private static GenericFieldStoreBox<GenericArrayStorePayload> _box =
+        null;
+
+    public static GenericFieldStoreBox<GenericArrayStorePayload> GetBox() {
+        if (_box == null) {
+            _box = new GenericFieldStoreBox<GenericArrayStorePayload>();
+        }
+        return _box;
+    }
+}
+
+public static class GenericEnvelopeStoreCache {
+    private static GenericFieldStoreBox<GenericFieldStoreEnvelope> _box = null;
+
+    public static GenericFieldStoreBox<GenericFieldStoreEnvelope> GetBox() {
+        if (_box == null) {
+            _box = new GenericFieldStoreBox<GenericFieldStoreEnvelope>();
+        }
+        return _box;
+    }
+}
+
+public void StoreGeneric<T>(T[] values, T value) {
+    values[0] = value;
+}
+
+public GenericArrayStorePayload CreateGenericArrayStorePayload() {
+    return new GenericArrayStorePayload();
+}
+
+public void StoreConcreteGenericPayload(
+    GenericArrayStorePayload[] values,
+    GenericArrayStorePayload value) {
+    StoreGeneric<GenericArrayStorePayload>(values, value);
+}
+
+public void StoreGenericField<T>(GenericFieldStoreBox<T> box, T value) {
+    box.Value = value;
+}
+
+public void StoreConcreteGenericFieldPayload(
+    GenericFieldStoreBox<GenericArrayStorePayload> box,
+    GenericArrayStorePayload value) {
+    StoreGenericField<GenericArrayStorePayload>(box, value);
+}
+
+public void CreateAndStoreGenericEnvelope(
+    GenericFieldStoreBox<GenericFieldStoreEnvelope> box) {
+    GenericFieldStoreEnvelope value;
+    value.Value = new GenericArrayStorePayload();
+    value.Value.Value = 67;
+    StoreGenericField<GenericFieldStoreEnvelope>(box, value);
+}
+
+public extern void NativeStoreGenericArrayEscape();
+public extern void NativeStoreGenericFieldEscape();
+public extern void NativeStoreGenericStructFieldEscape();
+public extern int NativeGenericArrayEscapeRequested();
+
+public void StoreTemporaryGenericPayload(GenericArrayStorePayload[] values) {
+    GenericArrayStorePayload value = new GenericArrayStorePayload();
+    value.Value = 57;
+    StoreGeneric<GenericArrayStorePayload>(values, value);
+    value = null;
+}
+
+public static class LinkedListOwnerProbe {
+    public static int Run() {
+        List<int> durableList = new List<int>();
+        durableList.Add(5);
+        int durableSnapshotValue = 0;
+        Memory.WithArena(() => {
+            Array<int> snapshot = durableList.ToArray();
+            durableSnapshotValue = snapshot.Get(0u);
+        });
+        if (durableSnapshotValue != 5) return 1;
+
+        List<GenericArrayStorePayload> growingDurableList =
+            new List<GenericArrayStorePayload>();
+        GenericArrayStorePayload[] growthValues =
+            new GenericArrayStorePayload[9];
+        for (uint index = 0u; index < 9u; index += 1u) {
+            GenericArrayStorePayload value = new GenericArrayStorePayload();
+            value.Value = 70 + (int)index;
+            growthValues[index] = value;
+        }
+        int growthCheck = 0;
+        Memory.WithArena(() => {
+            for (uint index = 0u; index < 9u; index += 1u) {
+                growingDurableList.Add(growthValues[index]);
+            }
+            growthValues = null;
+            GC.Collect();
+            growthCheck = (int)growingDurableList.Count;
+            for (uint index = 0u; index < 9u; index += 1u) {
+                if (growingDurableList.Get(index).Value != 70 + (int)index) {
+                    growthCheck = -1;
+                }
+            }
+        });
+        if (growthCheck != 9) return 11;
+
+        Dictionary<string, GenericArrayStorePayload>
+            growingDurableDictionary =
+                new Dictionary<string, GenericArrayStorePayload>();
+        string[] dictionaryKeys = new string[9];
+        GenericArrayStorePayload[] dictionaryValues =
+            new GenericArrayStorePayload[9];
+        for (uint index = 0u; index < 9u; index += 1u) {
+            GenericArrayStorePayload value = new GenericArrayStorePayload();
+            value.Value = 200 + (int)index;
+            dictionaryValues[index] = value;
+        }
+        dictionaryKeys[0u] = "owner-payload-0";
+        dictionaryKeys[1u] = "owner-payload-1";
+        dictionaryKeys[2u] = "owner-payload-2";
+        dictionaryKeys[3u] = "owner-payload-3";
+        dictionaryKeys[4u] = "owner-payload-4";
+        dictionaryKeys[5u] = "owner-payload-5";
+        dictionaryKeys[6u] = "owner-payload-6";
+        dictionaryKeys[7u] = "owner-payload-7";
+        dictionaryKeys[8u] = "owner-payload-8";
+        string dictionaryLookupKey = dictionaryKeys[8u];
+        Memory.WithArena(() => {
+            for (uint index = 0u; index < 9u; index += 1u) {
+                growingDurableDictionary.Set(
+                    dictionaryKeys[index], dictionaryValues[index]);
+            }
+            dictionaryKeys = null;
+            dictionaryValues = null;
+            GC.Collect();
+        });
+        GenericArrayStorePayload dictionaryLookupValue =
+            growingDurableDictionary.GetValueOrDefault(dictionaryLookupKey);
+        if (growingDurableDictionary.Count != 9u ||
+            dictionaryLookupKey != "owner-payload-8" ||
+            dictionaryLookupValue == null ||
+            dictionaryLookupValue.Value != 208) return 12;
+        IEnumerator<KeyValuePair<string, GenericArrayStorePayload>>
+            dictionaryEnumerator = growingDurableDictionary.GetEnumerator();
+        uint dictionaryEntryCount = 0u;
+        int dictionaryValueSum = 0;
+        while (dictionaryEnumerator.MoveNext()) {
+            KeyValuePair<string, GenericArrayStorePayload> entry =
+                dictionaryEnumerator.Current;
+            if (entry.Key == null || entry.Value == null) return 13;
+            dictionaryEntryCount += 1u;
+            dictionaryValueSum += entry.Value.Value;
+        }
+        dictionaryEnumerator.Dispose();
+        if (dictionaryEntryCount != 9u || dictionaryValueSum != 1836) return 14;
+
+        int scopedSnapshotCount = 0;
+        Memory.WithArena(() => {
+            List<int> scopedList = new List<int>();
+            scopedList.Add(6);
+            Memory.WithDurable(() => {
+                Array<int> snapshot = scopedList.ToArray();
+                scopedSnapshotCount = (int)snapshot.Length;
+            });
+        });
+        if (scopedSnapshotCount != 1) return 2;
+
+        int invocationListValue = 0;
+        Memory.WithArena(() => {
+            InvocationListTarget target = new InvocationListTarget();
+            Transform callback = target.AddTwo;
+            Array<Transform> handlers = callback.GetInvocationList();
+            invocationListValue = handlers[0](10);
+
+            delegate() => void action = target.Touch;
+            Array<delegate() => void> actions = action.GetInvocationList();
+            actions[0]();
+            if (target.Calls != 1) invocationListValue = 0;
+        });
+        if (invocationListValue != 12) return 3;
+
+        int nestedOwnerValue = 0;
+        Memory.WithArena(() => {
+            InvocationListTarget target = new InvocationListTarget();
+            CallbackHolder holder = new CallbackHolder();
+            Memory.WithArena(() => { holder.Callback = target.AddTwo; });
+            Transform callback = holder.Callback;
+            nestedOwnerValue = callback(40);
+        });
+        if (nestedOwnerValue != 42) return 6;
+
+        int genericArrayStoreValue = 0;
+        Memory.WithArena(() => {
+            GenericArrayStorePayload[] values =
+                new GenericArrayStorePayload[1];
+            StoreTemporaryGenericPayload(values);
+            GC.Collect();
+            genericArrayStoreValue = values[0].Value;
+        });
+        if (genericArrayStoreValue != 57) return 7;
+
+        int genericFieldStoreValue = 0;
+        Memory.WithArena(() => {
+            GenericFieldStoreBox<GenericArrayStorePayload> box =
+                new GenericFieldStoreBox<GenericArrayStorePayload>();
+            GenericArrayStorePayload value = new GenericArrayStorePayload();
+            value.Value = 61;
+            StoreGenericField<GenericArrayStorePayload>(box, value);
+            value = null;
+            GC.Collect();
+            genericFieldStoreValue = box.Value.Value;
+        });
+        if (genericFieldStoreValue != 61) return 8;
+
+        int genericStructFieldStoreValue = 0;
+        Memory.WithArena(() => {
+            GenericFieldStoreBox<GenericFieldStoreEnvelope> box =
+                new GenericFieldStoreBox<GenericFieldStoreEnvelope>();
+            CreateAndStoreGenericEnvelope(box);
+            GC.Collect();
+            genericStructFieldStoreValue = box.Value.Value.Value;
+        });
+        if (genericStructFieldStoreValue != 67) return 10;
+
+        LinkedList<int> durable = new LinkedList<int>();
+        Memory.WithArena(() => {
+            durable.AddFirst(7);
+            durable.AddLast(8);
+        });
+        if (durable.Count != 2u) return 4;
+
+        int arenaCount = 0;
+        Memory.WithArena(() => {
+            LinkedList<int> scoped = new LinkedList<int>();
+            Memory.WithDurable(() => {
+                scoped.AddFirst(9);
+                scoped.AddLast(10);
+            });
+            arenaCount = (int)scoped.Count;
+        });
+        if (arenaCount != 2) return 5;
+
+        return 0;
+    }
+}
+
+public static int Main() {
+    int nativeEscapeMode = NativeGenericArrayEscapeRequested();
+    if (nativeEscapeMode != 0) {
+        if (nativeEscapeMode == 2) GenericFieldStoreCache.GetBox();
+        if (nativeEscapeMode == 3) GenericEnvelopeStoreCache.GetBox();
+        Memory.WithArena(() => {
+            if (nativeEscapeMode == 1) NativeStoreGenericArrayEscape();
+            else if (nativeEscapeMode == 2) NativeStoreGenericFieldEscape();
+            else NativeStoreGenericStructFieldEscape();
+        });
+        return 9;
+    }
+    return LinkedListOwnerProbe.Run();
+}

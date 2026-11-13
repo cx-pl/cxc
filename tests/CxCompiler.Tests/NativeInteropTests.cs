@@ -177,6 +177,39 @@ public sealed class NativeInteropTests
         Assert.True(header.IndexOf("cx_interop_capture_errno();") < header.IndexOf("return result;"));
     }
 
+    [Fact]
+    public void BlockingNativeImportRootsItsNativeCallContext()
+    {
+        var project = Project("""
+            import System.Interop;
+            @NativeImport("fixture", blocking = true)
+            public extern void Wait(ptr<const byte> value);
+            public unsafe void Call(ptr<const byte> value) { Wait(value); }
+            """);
+        new SemanticBinder().Bind(project);
+        var generated = Generate(project);
+
+        Assert.Contains("cx_gc_run_native_call_with_roots(__cx_native_INTEROP_WAIT_run, context, context, sizeof(*context));",
+            generated.Header);
+        Assert.DoesNotContain("cx_gc_run_native_call(__cx_native_INTEROP_WAIT_run, context);", generated.Header);
+    }
+
+    [Fact]
+    public void BlockingVoidImportWithoutArgumentsDoesNotEmitUnusedContext()
+    {
+        var project = Project("""
+            import System.Interop;
+            @NativeImport("fixture", entryPoint = "glFinish", blocking = true)
+            public extern void Finish();
+            public unsafe void Call() { Finish(); }
+            """);
+        new SemanticBinder().Bind(project);
+        var generated = Generate(project);
+
+        Assert.Contains("(void)storage;", generated.Header);
+        Assert.DoesNotContain("*context = storage", generated.Header);
+    }
+
     internal static (string Source, string Header, string CMake) Generate(CxProject project)
     {
         var directory = Path.Combine(Path.GetTempPath(), "cxc-interop-" + Guid.NewGuid().ToString("N"));

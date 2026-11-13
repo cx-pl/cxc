@@ -137,7 +137,7 @@ public sealed class NullExpressionTests
             }
             """);
 
-        Assert.Contains("cxcore_System_Nullable_CreateValueStorage(", generatedSource);
+        Assert.Contains("cxcore_System_Nullable_CreateTypedValueStorage(", generatedSource);
         Assert.Contains("(cx_uint)sizeof(cx_int)", generatedSource);
         Assert.Contains("(cx_ptr)(&unnamed___string_", generatedSource);
     }

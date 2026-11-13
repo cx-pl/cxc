@@ -1,0 +1,111 @@
+import System;
+import System.Interop;
+
+namespace Cx.Compiler.Generators;
+
+// Bounded little-endian payload writer. Build returns an exact-sized owned buffer.
+public final class GeneratorPayloadWriter : IDisposable {
+    private static const uint MaximumFieldBytes = 1048576u;
+    private static const uint MaximumPayloadBytes = 67108864u;
+    private NativeBuffer _buffer;
+    private uint _length;
+    private bool _disposed;
+
+    public constructor() {
+        _buffer = NativeBuffer.Allocate(256uL);
+        _length = 0u;
+        _disposed = false;
+    }
+
+    public void WriteBoolean(bool value) {
+        EnsureCapacity(1u);
+        _buffer.WriteByte((ulong)_length, value ? (byte)1u : (byte)0u);
+        _length += 1u;
+    }
+
+    public void WriteInt32(int value) {
+        WriteUInt32((uint)value);
+    }
+
+    public void WriteNonNegativeInt32(uint value) {
+        if (value > 2147483647u) throw new Exception("Source location exceeds Int32 range.");
+        WriteUInt32(value);
+    }
+
+    public void WriteString(string value, bool allowLarge = false) {
+        if (value == null) throw new Exception("A generator payload string cannot be null.");
+        var bytes = NativeBuffer.FromUtf8(value, false);
+        try {
+            var byteLength = bytes.ByteLength;
+            var maximum = allowLarge ? MaximumPayloadBytes : MaximumFieldBytes;
+            if (byteLength > (ulong)maximum) {
+                throw new Exception("Generator payload string exceeds its configured limit.");
+            }
+            var count = (uint)byteLength;
+            EnsureCapacity(4u + count);
+            WriteUInt32(count);
+            bytes.CopyTo(_buffer, 0uL, (ulong)_length, byteLength);
+            _length += count;
+        } finally {
+            bytes.Dispose();
+        }
+    }
+
+    public void WriteLocation(SourceLocation location) {
+        WriteString(location.Path);
+        WriteNonNegativeInt32(location.StartLine);
+        WriteNonNegativeInt32(location.StartColumn);
+        WriteNonNegativeInt32(location.EndLine);
+        WriteNonNegativeInt32(location.EndColumn);
+    }
+
+    public NativeBuffer Build() {
+        EnsureAlive();
+        var result = NativeBuffer.Allocate((ulong)_length);
+        if (_length > 0u) _buffer.CopyTo(result, 0uL, 0uL, (ulong)_length);
+        return result;
+    }
+
+    public void Dispose() {
+        if (!_disposed) {
+            _buffer.Dispose();
+            _buffer = null;
+            _disposed = true;
+        }
+    }
+
+    private void WriteUInt32(uint value) {
+        EnsureCapacity(4u);
+        var remaining = value;
+        for (uint index = 0u; index < 4u; index += 1u) {
+            _buffer.WriteByte((ulong)(_length + index), (byte)(remaining % 256u));
+            remaining /= 256u;
+        }
+        _length += 4u;
+    }
+
+    private void EnsureCapacity(uint additional) {
+        EnsureAlive();
+        if (additional > MaximumPayloadBytes - _length) {
+            throw new Exception("Generator payload exceeds the 64 MiB limit.");
+        }
+        var required = _length + additional;
+        if (required <= (uint)_buffer.ByteLength) return;
+        var capacity = (uint)_buffer.ByteLength;
+        while (capacity < required) {
+            if (capacity > MaximumPayloadBytes / 2u) {
+                capacity = MaximumPayloadBytes;
+                break;
+            }
+            capacity *= 2u;
+        }
+        var replacement = NativeBuffer.Allocate((ulong)capacity);
+        if (_length > 0u) _buffer.CopyTo(replacement, 0uL, 0uL, (ulong)_length);
+        _buffer.Dispose();
+        _buffer = replacement;
+    }
+
+    private void EnsureAlive() const {
+        if (_disposed) throw new Exception("The generator payload writer has been disposed.");
+    }
+}

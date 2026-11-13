@@ -78,6 +78,34 @@ public sealed class LocalFunctionCaptureTests
     }
 
     [Fact]
+    public void CapturedStructReceiverUsesTypedCopyForClosureEnvironment()
+    {
+        var project = CreateProject("""
+            public class CaptureNode { }
+            public delegate CaptureNode NodeReader();
+            public struct CaptureValue {
+                public CaptureNode Value;
+                public NodeReader Capture() { return () => Value; }
+            }
+            """);
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-struct-closure-capture-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(directory, "local_capture.c"));
+            Assert.Contains("cx_gc_copy_value(&__cx_result->capture_0", source);
+            Assert.Contains("__cx_capture_type_0", source);
+            Assert.DoesNotContain(".capture_0 = *(", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void LocalFunctionCapturesEnclosingParameterAndItsFunctionRemainsCallable()
     {
         var project = CreateProject("""
@@ -98,6 +126,99 @@ public sealed class LocalFunctionCaptureTests
         var run = Assert.Single(declarations, function => function.Name == "Run");
         Assert.IsType<CxCompiler.Model.Expressions.InvocationExpression>(
             Assert.IsType<ReturnStatement>(Assert.Single(run.Body!)).Expression);
+    }
+
+    [Fact]
+    public void CapturedReferenceParameterInitializesItsCellThroughTheStoreBarrier()
+    {
+        var project = CreateProject("""
+            public class CaptureNode { }
+            public CaptureNode Capture(CaptureNode value) {
+                CaptureNode Read() { return value; }
+                return Read();
+            }
+            """);
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-local-capture-store-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var generatedSource = File.ReadAllText(
+                Path.Combine(directory, "local_capture.c"));
+            var cellStore = generatedSource.Split('\n').Single(line =>
+                line.Contains("cx_gc_store_reference(", StringComparison.Ordinal) &&
+                line.Contains("__cx_generated_cell_", StringComparison.Ordinal));
+            Assert.Contains("value", cellStore);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CapturedReferenceLocalInitializesItsCellThroughTheStoreBarrier()
+    {
+        var project = CreateProject("""
+            public class CaptureNode { }
+            public CaptureNode Capture(CaptureNode value) {
+                CaptureNode local = value;
+                CaptureNode Read() { return local; }
+                return Read();
+            }
+            """);
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-local-capture-local-store-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var generatedSource = File.ReadAllText(
+                Path.Combine(directory, "local_capture.c"));
+            var cellStore = generatedSource.Split('\n').Single(line =>
+                line.Contains("cx_gc_store_reference(", StringComparison.Ordinal) &&
+                line.Contains("__cx_generated_cell_", StringComparison.Ordinal) &&
+                line.Contains("value", StringComparison.Ordinal));
+            Assert.Contains("*__cx_generated_cell_", cellStore);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CapturedReferenceForeachValueInitializesItsCellThroughTheStoreBarrier()
+    {
+        var project = CreateProject("""
+            public class CaptureNode { }
+            public CaptureNode CaptureEach(CaptureNode[] values) {
+                foreach (CaptureNode value in values) {
+                    CaptureNode Read() { return value; }
+                    return Read();
+                }
+                return null;
+            }
+            """);
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-local-capture-foreach-store-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var generatedSource = File.ReadAllText(
+                Path.Combine(directory, "local_capture.c"));
+            var cellStore = generatedSource.Split('\n').Single(line =>
+                line.Contains("cx_gc_store_reference(", StringComparison.Ordinal) &&
+                line.Contains("__cx_generated_cell_", StringComparison.Ordinal) &&
+                line.Contains("__cx_foreach_collection_value", StringComparison.Ordinal));
+            Assert.Contains("_data", cellStore);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]

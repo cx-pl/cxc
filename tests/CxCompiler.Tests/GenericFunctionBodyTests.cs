@@ -11,12 +11,146 @@ namespace CxCompiler.Tests;
 
 public sealed class GenericFunctionBodyTests
 {
+    [Fact]
+    public void EmitsForwardCallThroughConstructedGenericReceiver()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_constructed_receiver_forward");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public final class GenericEcho<T> {
+                public T Echo(T value) { return value; }
+            }
+            public T Forward<T>(T value) {
+                return new GenericEcho<T>().Echo(value);
+            }
+            public int RunInt() { return Forward(42); }
+            public string RunString() { return Forward("cx"); }
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        Assert.NotEmpty(project.GenericFunctionInstances);
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-constructed-forward-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(
+                project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(
+                Path.Combine(directory, "generic_constructed_receiver_forward.c"));
+            foreach (var instance in project.GenericFunctionInstances)
+            {
+                Assert.Contains(instance.SpecializationName!, source);
+            }
+            Assert.DoesNotContain("_unknowntype_", source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private const string Source = """
         public T Identity<T>(T value) { return value; }
         public int RunInt() { return Identity(7); }
         public long RunLong() { return Identity(9L); }
         public int RunIntAgain() { return Identity(11); }
         """;
+
+    [Fact]
+    public void ExplicitGenericFunctionArgumentsCloseLambdaResultType()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_lambda_closed_result");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class ProbeTask<T> { }
+            public static class Probe {
+                public static extern ProbeTask<T> Scope<T>(
+                    delegate() => ProbeTask<T> action);
+                public static ProbeTask<int> Create() {
+                    return new ProbeTask<int>();
+                }
+                public static ProbeTask<int> Direct() {
+                    return Scope<int>(() => Create());
+                }
+                public static ProbeTask<int> DirectMember() {
+                    return Probe.Scope<int>(() => Create());
+                }
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+    }
+
+    [Fact]
+    public void GenericFunctionCanReturnConstructedTypeUsingItsTypeParameters()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_constructed_return");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Pair<TLeft, TRight> {
+                public TLeft Left;
+                public TRight Right;
+                public constructor(TLeft left, TRight right) {
+                    Left = left;
+                    Right = right;
+                }
+            }
+            public Pair<TLeft, TRight> CreatePair<TLeft, TRight>(
+                TLeft left, TRight right) {
+                return new Pair<TLeft, TRight>(left, right);
+            }
+            public int Main() {
+                Pair<int, string> pair = CreatePair(37, "answer");
+                return pair.Left + (pair.Right == "answer" ? 5 : 0);
+            }
+            """));
+
+        var createPair = project.CompilationContexts.Single()
+            .DeclarationScope.Declarations.OfType<FunctionDeclaration>()
+            .Single(function => function.Name == "CreatePair");
+        var creation = Assert.IsType<ObjectCreationExpression>(
+            Assert.IsType<ReturnStatement>(createPair.Body!.Single()).Expression);
+        var declaredReturn = Assert.IsType<NamedType>(createPair.ReturnType);
+        var createdReturn = Assert.IsType<NamedType>(creation.RequestedType);
+        Assert.Equal(declaredReturn.Name, createdReturn.Name);
+        Assert.Equal(declaredReturn.TypeArguments.Count, createdReturn.TypeArguments.Count);
+        Assert.All(declaredReturn.TypeArguments.Zip(createdReturn.TypeArguments), pair =>
+            Assert.Equal(((NamedType)pair.First).Name,
+                ((NamedType)pair.Second).Name));
+        Assert.All(creation.Arguments, argument =>
+            Assert.IsType<IdentifierExpression>(argument));
+
+        new SemanticBinder().Bind(project);
+
+        var specialization = Assert.Single(project.GenericFunctionInstances,
+            instance => instance.Declaration?.Name == "CreatePair");
+        Assert.Contains(project.GenericFunctionInstances, instance =>
+            instance.Declaration is ConstructorDeclaration &&
+            instance.ClosedContainingType is NamedType
+            {
+                TypeArguments.Count: 2,
+                TypeArguments: [IntType, StringType],
+            });
+
+        var output = Path.Combine(Path.GetTempPath(),
+            $"cxc-generic-constructed-return-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(output);
+            CCodeOutputGenerator.GenerateOutput(project,
+                Path.Combine(output, "input.cx"));
+            var generated = File.ReadAllText(
+                Path.Combine(output, "generic_constructed_return.c"));
+            Assert.Contains(specialization.SpecializationName!, generated);
+            Assert.DoesNotContain("_unknowntype_", generated);
+        }
+        finally
+        {
+            if (Directory.Exists(output)) Directory.Delete(output, recursive: true);
+        }
+    }
 
     [Fact]
     public void ForwardsGenericCallThroughMatchingLocal()
@@ -414,9 +548,11 @@ public sealed class GenericFunctionBodyTests
             Assert.Contains("return ((cx_int){ 0 });", GetSpecializedBody(defaultInt));
             Assert.Contains("return ((struct ", GetSpecializedBody(defaultBox));
             Assert.Contains("cx_long value = ((cx_long){ 0 });", GetSpecializedBody(localLong));
-            Assert.Contains("value = ((struct ", GetSpecializedBody(localPoint));
+            Assert.Contains("cx_gc_copy_value((cx_ptr)&(value)",
+                GetSpecializedBody(localPoint));
             Assert.Contains("return ((struct ", GetSpecializedBody(defaultArray));
-            Assert.Contains("values = ((struct ", GetSpecializedBody(defaultArrayLocal));
+            Assert.Contains("cx_gc_store_reference((cx_ptr*)&(values)",
+                GetSpecializedBody(defaultArrayLocal));
         }
         finally
         {

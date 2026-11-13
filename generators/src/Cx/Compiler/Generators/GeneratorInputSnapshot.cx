@@ -1,0 +1,25 @@
+namespace Cx.Compiler.Generators;
+
+public final class GeneratorInputSnapshot {
+    private string _projectName;
+    private SyntaxCandidate[] _syntax;
+    private AnnotationDescriptor[] _annotations;
+    private TypeDescriptor[] _types;
+    private ClosedGenericRequest[] _closedGenericRequests;
+
+    public string ProjectName { const get => _projectName; }
+    public SyntaxCandidate[] SyntaxCandidates { const get => _syntax; }
+    public AnnotationDescriptor[] Annotations { const get => _annotations; }
+    public TypeDescriptor[] Types { const get => _types; }
+    public ClosedGenericRequest[] ClosedGenericRequests { const get => _closedGenericRequests; }
+
+    public constructor(string projectName, SyntaxCandidate[] syntax,
+        AnnotationDescriptor[] annotations, TypeDescriptor[] types,
+        ClosedGenericRequest[] closedGenericRequests) {
+        _projectName = projectName;
+        _syntax = syntax;
+        _annotations = annotations;
+        _types = types;
+        _closedGenericRequests = closedGenericRequests;
+    }
+}

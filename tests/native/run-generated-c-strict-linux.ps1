@@ -17,27 +17,27 @@ if ($LASTEXITCODE -ne 0) { throw "Could not create Linux object directory: $($cr
 
 # Keep cxcore/platform off the include path: its stdlib.h shadows the C standard header.
 $coreIncludes = @(
-    "$repoLinux/cxcore/src/.obj", "$repoLinux/cxcore/src", "$repoLinux/cxcore/inc",
+    "$repoLinux/cxcore/src/.obj", "$repoLinux/cxcore/src", "$repoLinux/cxcore/include",
     "$repoLinux/cxcore/platform/common",
     "$repoLinux/cxcore/platform/linux"
 )
 $cxnetIncludes = @(
-    "$repoLinux/cxnet/.obj", "$repoLinux/cxnet/include", "$repoLinux/cxnet/platform/common",
+    "$repoLinux/cxnet/src/.obj", "$repoLinux/cxnet/include", "$repoLinux/cxnet/platform/common",
     "$repoLinux/cxnet/platform/linux", "$repoLinux/cxcore/src/.obj", "$repoLinux/cxcore/src",
-    "$repoLinux/cxcore/inc", "$repoLinux/cxcore/platform/common",
+    "$repoLinux/cxcore/include", "$repoLinux/cxcore/platform/common",
     "$repoLinux/cxcore/platform/linux"
 )
 $consumerIncludes = @(
-    "$repoLinux/cxnet/examples/streaming-read/.obj", "$repoLinux/cxnet/.obj",
+    "$repoLinux/cxnet/examples/streaming-read/.obj", "$repoLinux/cxnet/src/.obj",
     "$repoLinux/cxnet/include", "$repoLinux/cxnet/platform/common", "$repoLinux/cxnet/platform/linux",
-    "$repoLinux/cxcore/src/.obj", "$repoLinux/cxcore/src", "$repoLinux/cxcore/inc",
+    "$repoLinux/cxcore/src/.obj", "$repoLinux/cxcore/src", "$repoLinux/cxcore/include",
     "$repoLinux/cxcore/platform/common", "$repoLinux/cxcore/platform/linux"
 )
 $cases = @(
     @{ Name = 'core-static'; Source = 'cxcore/src/.obj/cxcore.generated.c'; Includes = $coreIncludes; Defines = @('CX_CXCORE_BUILD', 'CX_STATIC_LINK') }
     @{ Name = 'core-shared'; Source = 'cxcore/src/.obj/cxcore.generated.c'; Includes = $coreIncludes; Defines = @('CX_CXCORE_BUILD', 'CX_DYNAMIC_MODULE') }
-    @{ Name = 'cxnet-static'; Source = 'cxnet/.obj/cxnet.c'; Includes = $cxnetIncludes; Defines = @('CX_CXNET_BUILD', 'CX_STATIC_LINK') }
-    @{ Name = 'cxnet-shared'; Source = 'cxnet/.obj/cxnet.c'; Includes = $cxnetIncludes; Defines = @('CX_CXNET_BUILD', 'CX_DYNAMIC_MODULE') }
+    @{ Name = 'cxnet-static'; Source = 'cxnet/src/.obj/cxnet.c'; Includes = $cxnetIncludes; Defines = @('CX_CXNET_BUILD', 'CX_STATIC_LINK') }
+    @{ Name = 'cxnet-shared'; Source = 'cxnet/src/.obj/cxnet.c'; Includes = $cxnetIncludes; Defines = @('CX_CXNET_BUILD', 'CX_DYNAMIC_MODULE') }
     @{ Name = 'consumer-static'; Source = 'cxnet/examples/streaming-read/.obj/streamingRead.c'; Includes = $consumerIncludes; Defines = @('CX_STREAMINGREAD_BUILD', 'CX_STATIC_LINK') }
     @{ Name = 'consumer-shared'; Source = 'cxnet/examples/streaming-read/.obj/streamingRead.c'; Includes = $consumerIncludes; Defines = @('CX_STREAMINGREAD_BUILD', 'CX_DYNAMIC_MODULE') }
 )

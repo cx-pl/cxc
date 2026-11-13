@@ -1,5 +1,6 @@
-#ifndef CX_TEST_NATIVE_FIXTURE_H
-#define CX_TEST_NATIVE_FIXTURE_H
+#ifndef __CX_TEST_NATIVE_FIXTURE_H__
+#define __CX_TEST_NATIVE_FIXTURE_H__
+
 #include <stdint.h>
 #include <stdlib.h>
 typedef struct fixture_point { int x; int y; } fixture_point;
@@ -19,4 +20,5 @@ fixture_owner *fixture_open(void);
 void fixture_close(fixture_owner *owner);
 int fixture_fail(void);
 int fixture_fail_last_error(void);
-#endif
+
+#endif // __CX_TEST_NATIVE_FIXTURE_H__

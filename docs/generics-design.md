@@ -1,6 +1,6 @@
-# Generic representation (Milestone 4)
+# Generic representation
 
-Milestone 4 uses **monomorphization**: each reachable closed generic type and
+CX uses **monomorphization**: each reachable closed generic type and
 function gets a concrete C declaration and definition. Closed generic types also
 get distinct runtime type metadata. Specialization names use deterministic
 canonical identities containing the defining module, qualified declaration,
@@ -14,8 +14,8 @@ Recursive construction is deduplicated by canonical identity. A project owns
 its closed definitions and emits each once across imported source modules and
 compilation contexts. An imported `Lib.Identity<T>` specialization called from
 `App` is emitted once by that project and used by the consumer. Separate-project
-ownership and imported project generic definitions are part of Milestone 5's
-separate-compilation boundary.
+ownership and imported project generic definitions follow the
+[project-reference contract](project-references.md).
 
 ## Explicit generic function specialization
 

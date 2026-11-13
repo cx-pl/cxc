@@ -1,0 +1,175 @@
+import System;
+
+public class DynamicStaticInitNode {
+    public int Value;
+    public DynamicStaticInitNode Next;
+
+    public constructor(int value, DynamicStaticInitNode next) {
+        Value = value;
+        Next = next;
+    }
+
+    public DynamicStaticInitNode SetNext(DynamicStaticInitNode next) {
+        Next = next;
+        return next;
+    }
+
+    public static DynamicStaticInitNode CreateScoped() {
+        return new DynamicStaticInitNode(29, null);
+    }
+
+    public static DynamicStaticInitNode CreateDurable() {
+        DynamicStaticInitNode result = null;
+        Memory.WithDurable(() => {
+            result = new DynamicStaticInitNode(31, null);
+        });
+        return result;
+    }
+
+}
+
+public static class DynamicStaticInitRoots {
+    public static DynamicStaticInitNode Root = CreateRoot();
+
+    private static DynamicStaticInitNode CreateRoot() {
+        DynamicStaticInitNode child = new DynamicStaticInitNode(17, null);
+        return new DynamicStaticInitNode(42, child);
+    }
+
+    public static int ReadChecksum() {
+        return Root.Value + Root.Next.Value;
+    }
+
+    public static int ExerciseReusableArena() {
+        MemoryArena arena = new MemoryArena(4096u);
+        int value = 0;
+        arena.Run(() => {
+            DynamicStaticInitNode temporary = new DynamicStaticInitNode(23, null);
+            value = temporary.Value;
+        });
+        if (value != 23) return 1;
+
+    arena.Run(() => {
+        MemoryArena nested = new MemoryArena(1024u);
+        nested.Dispose();
+    });
+
+    int nestedRunRejected = 0;
+    int disposeWhileRunningRejected = 0;
+    arena.Run(() => {
+        try {
+            arena.Run(() => { value = 0; });
+            value = 0;
+        } catch (Exception) {
+            nestedRunRejected = 1;
+        }
+        try {
+            arena.Dispose();
+            value = 0;
+        } catch (Exception) {
+            disposeWhileRunningRejected = 1;
+        }
+        value = 42;
+    });
+    if (nestedRunRejected != 1 || disposeWhileRunningRejected != 1 || value != 42) return 4;
+
+        try {
+            arena.Run(() => { throw new Exception(); });
+        } catch (Exception) {
+            value = 24;
+        }
+        int cleanupCount = 0;
+        int cleanupFailureCaught = 0;
+        try {
+            arena.Run(() => {
+                try {
+                    value = 100;
+                } finally {
+                    cleanupCount += 1;
+                    throw new Exception();
+                }
+            });
+        } catch (Exception) {
+            cleanupFailureCaught = 1;
+        }
+        if (cleanupCount != 1 || cleanupFailureCaught != 1) return 5;
+        arena.Run(() => {
+            DynamicStaticInitNode temporary = new DynamicStaticInitNode(42, null);
+            value = temporary.Value;
+        });
+        arena.Dispose();
+        IDisposable disposable = arena;
+        disposable.Dispose();
+
+        try {
+            arena.Run(() => { value = 0; });
+            return 2;
+        } catch (Exception) {
+            return value == 42 ? 0 : 3;
+        }
+    }
+
+    public static int ExerciseBoundedArena() {
+        MemoryArena bounded = new MemoryArena(4096u, 16384u);
+        int grew = 0;
+        int boundedOverflow = 0;
+        int reusedAfterOverflow = 0;
+        bounded.Run(() => {
+            ptr allocation = Memory.Alloc(5000u);
+            if (allocation != null) grew = 1;
+        });
+        if (grew != 1) return 1;
+        try {
+            bounded.Run(() => {
+                ptr allocation = Memory.Alloc(20000u);
+                if (allocation != null) boundedOverflow = 0;
+            });
+        } catch (Exception) {
+            boundedOverflow = 1;
+        }
+        if (boundedOverflow != 1) return 2;
+        bounded.Run(() => {
+            ptr allocation = Memory.Alloc(64u);
+            if (allocation != null) reusedAfterOverflow = 1;
+        });
+        bounded.Dispose();
+        if (reusedAfterOverflow != 1) return 3;
+
+        MemoryArena fixedArena = new MemoryArena(4096u, 4096u);
+        int fixedOverflow = 0;
+        int fixedReusable = 0;
+        try {
+            fixedArena.Run(() => {
+                ptr allocation = Memory.Alloc(5000u);
+                if (allocation != null) fixedOverflow = 0;
+            });
+        } catch (Exception) {
+            fixedOverflow = 1;
+        }
+        if (fixedOverflow != 1) return 4;
+        fixedArena.Run(() => {
+            ptr allocation = Memory.Alloc(64u);
+            if (allocation != null) fixedReusable = 1;
+        });
+        fixedArena.Dispose();
+        if (fixedReusable != 1) return 5;
+
+        int zeroInitialRejected = 0;
+        try {
+            MemoryArena invalid = new MemoryArena(0u, 4096u);
+            invalid.Dispose();
+        } catch (Exception) {
+            zeroInitialRejected = 1;
+        }
+        if (zeroInitialRejected != 1) return 6;
+
+        int reversedRangeRejected = 0;
+        try {
+            MemoryArena invalid = new MemoryArena(4096u, 2048u);
+            invalid.Dispose();
+        } catch (Exception) {
+            reversedRangeRejected = 1;
+        }
+        return reversedRangeRejected == 1 ? 0 : 7;
+    }
+}

@@ -1,0 +1,186 @@
+import System;
+import System.Interop;
+
+namespace Cx.Compiler.Generators;
+
+// Decoder for the exact versioned snapshot layout emitted by cxc.
+public static class GeneratorSnapshotCodec {
+    private static const uint MaximumCollectionLength = 1000000u;
+
+    public static GeneratorInputSnapshot Decode(NativeBuffer payload, uint length) {
+        var reader = new GeneratorPayloadReader(payload, length);
+        var projectName = reader.ReadString();
+        var syntax = ReadSyntaxArray(reader);
+        var annotations = ReadAnnotationArray(reader);
+        var types = ReadTypeArray(reader);
+        var closedGenericRequests = ReadClosedGenericArray(reader);
+        reader.EnsureEnd();
+        return new GeneratorInputSnapshot(projectName, syntax, annotations,
+            types, closedGenericRequests);
+    }
+
+    private static SyntaxCandidate[] ReadSyntaxArray(GeneratorPayloadReader reader) {
+        var count = reader.ReadCount(MaximumCollectionLength, "syntax candidate count");
+        var values = new SyntaxCandidate[count];
+        for (uint index = 0u; index < count; index += 1u) {
+            var kind = reader.ReadString();
+            var text = reader.ReadString();
+            var identity = reader.ReadString();
+            var location = ReadLocation(reader);
+            values[index] = new SyntaxCandidate(kind, text, identity, location);
+        }
+        return values;
+    }
+
+    private static AnnotationDescriptor[] ReadAnnotationArray(GeneratorPayloadReader reader) {
+        var count = reader.ReadCount(MaximumCollectionLength, "annotation count");
+        var values = new AnnotationDescriptor[count];
+        for (uint index = 0u; index < count; index += 1u) {
+            var metadataName = reader.ReadString();
+            var targetIdentity = reader.ReadString();
+            var argumentNames = ReadStringArray(reader);
+            var argumentValues = ReadStringArray(reader);
+            if (argumentNames.Length != argumentValues.Length) {
+                throw new Exception("Generator annotation argument arrays have different lengths.");
+            }
+            values[index] = new AnnotationDescriptor(metadataName, targetIdentity,
+                argumentNames, argumentValues, ReadLocation(reader));
+        }
+        return values;
+    }
+
+    private static TypeDescriptor[] ReadTypeArray(GeneratorPayloadReader reader) {
+        var count = reader.ReadCount(MaximumCollectionLength, "type count");
+        var values = new TypeDescriptor[count];
+        for (uint index = 0u; index < count; index += 1u) {
+            var identity = reader.ReadString();
+            var metadataName = reader.ReadString();
+            var moduleName = reader.ReadString();
+            var namespaceName = reader.ReadString();
+            var visibility = reader.ReadString();
+            var kindName = reader.ReadString();
+            var isPartial = reader.ReadBoolean();
+            var isAbstract = reader.ReadBoolean();
+            var isFinal = reader.ReadBoolean();
+            var isGenericDefinition = reader.ReadBoolean();
+            var genericParameters = ReadStringArray(reader);
+            var baseTypeIdentities = ReadStringArray(reader);
+            var genericConstraints = ReadGenericConstraintArray(reader);
+            var members = ReadMemberArray(reader);
+            var location = ReadLocation(reader);
+            values[index] = new TypeDescriptor(identity, metadataName, moduleName,
+                namespaceName, visibility, ParseTypeKind(kindName), isPartial,
+                isAbstract, isFinal, isGenericDefinition, genericParameters, baseTypeIdentities,
+                genericConstraints, members, location);
+        }
+        return values;
+    }
+
+    private static GenericConstraintDescriptor[] ReadGenericConstraintArray(
+        GeneratorPayloadReader reader) {
+        var count = reader.ReadCount(MaximumCollectionLength, "generic constraint count");
+        var values = new GenericConstraintDescriptor[count];
+        for (uint index = 0u; index < count; index += 1u) {
+            var parameterName = reader.ReadString();
+            var kind = reader.ReadString();
+            var typeIdentities = ReadStringArray(reader);
+            var conceptNames = ReadStringArray(reader);
+            values[index] = new GenericConstraintDescriptor(parameterName,
+                kind, typeIdentities, conceptNames);
+        }
+        return values;
+    }
+
+    private static MemberDescriptor[] ReadMemberArray(GeneratorPayloadReader reader) {
+        var count = reader.ReadCount(MaximumCollectionLength, "member count");
+        var values = new MemberDescriptor[count];
+        for (uint index = 0u; index < count; index += 1u) {
+            var identity = reader.ReadString();
+            var name = reader.ReadString();
+            var typeIdentity = reader.ReadString();
+            var visibility = reader.ReadString();
+            var kindName = reader.ReadString();
+            var isStatic = reader.ReadBoolean();
+            var isReadOnly = reader.ReadBoolean();
+            var isNullable = reader.ReadBoolean();
+            var parameters = ReadParameterArray(reader);
+            var location = ReadLocation(reader);
+            var constantValue = reader.ReadOptionalString();
+            values[index] = new MemberDescriptor(identity, name, typeIdentity,
+                visibility, ParseMemberKind(kindName), isStatic, isReadOnly,
+                isNullable, parameters, constantValue, location);
+        }
+        return values;
+    }
+
+    private static ParameterDescriptor[] ReadParameterArray(GeneratorPayloadReader reader) {
+        var count = reader.ReadCount(MaximumCollectionLength, "parameter count");
+        var values = new ParameterDescriptor[count];
+        for (uint index = 0u; index < count; index += 1u) {
+            var name = reader.ReadString();
+            var typeIdentity = reader.ReadString();
+            var isNullable = reader.ReadBoolean();
+            var defaultValue = reader.ReadOptionalString();
+            values[index] = new ParameterDescriptor(name, typeIdentity, isNullable,
+                defaultValue, ReadLocation(reader));
+        }
+        return values;
+    }
+
+    private static ClosedGenericRequest[] ReadClosedGenericArray(
+        GeneratorPayloadReader reader) {
+        var count = reader.ReadCount(MaximumCollectionLength, "closed generic request count");
+        var values = new ClosedGenericRequest[count];
+        for (uint index = 0u; index < count; index += 1u) {
+            var definitionIdentity = reader.ReadString();
+            var closedIdentity = reader.ReadString();
+            var ownerModule = reader.ReadString();
+            var typeArguments = ReadStringArray(reader);
+            var location = ReadLocation(reader);
+            values[index] = new ClosedGenericRequest(definitionIdentity,
+                closedIdentity, ownerModule, typeArguments, location);
+        }
+        return values;
+    }
+
+    private static string[] ReadStringArray(GeneratorPayloadReader reader) {
+        var count = reader.ReadCount(MaximumCollectionLength, "string array count");
+        var values = new string[count];
+        for (uint index = 0u; index < count; index += 1u) values[index] = reader.ReadString();
+        return values;
+    }
+
+    private static SourceLocation ReadLocation(GeneratorPayloadReader reader) {
+        var path = reader.ReadString();
+        var startLine = reader.ReadUInt32();
+        var startColumn = reader.ReadUInt32();
+        var endLine = reader.ReadUInt32();
+        var endColumn = reader.ReadUInt32();
+        return new SourceLocation(path, startLine, startColumn, endLine, endColumn);
+    }
+
+    private static GeneratorValueKind ParseTypeKind(string value) {
+        if (value == "Class") return GeneratorValueKind.Class;
+        if (value == "Struct") return GeneratorValueKind.Struct;
+        if (value == "Interface") return GeneratorValueKind.Interface;
+        if (value == "Enum") return GeneratorValueKind.Enum;
+        if (value == "Delegate" || IsDelegateSignature(value)) return GeneratorValueKind.Delegate;
+        throw new Exception("Unknown generator type kind.");
+    }
+
+    private static GeneratorValueKind ParseMemberKind(string value) {
+        if (value == "Field") return GeneratorValueKind.Field;
+        if (value == "Property") return GeneratorValueKind.Property;
+        if (value == "Constructor") return GeneratorValueKind.Constructor;
+        if (value == "Method") return GeneratorValueKind.Method;
+        if (value == "EnumValue") return GeneratorValueKind.EnumValue;
+        throw new Exception("Unknown generator member kind.");
+    }
+
+    private static bool IsDelegateSignature(string value) {
+        return value.Length >= 9u && value.Item[0u] == 'D' && value.Item[1u] == 'e' &&
+            value.Item[2u] == 'l' && value.Item[3u] == 'e' && value.Item[4u] == 'g' &&
+            value.Item[5u] == 'a' && value.Item[6u] == 't' && value.Item[7u] == 'e' &&
+            value.Item[8u] == ':';
+    }
+}

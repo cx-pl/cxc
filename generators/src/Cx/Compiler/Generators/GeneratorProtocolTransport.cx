@@ -1,0 +1,173 @@
+import System;
+import System.Interop;
+
+namespace Cx.Compiler.Generators;
+
+// CX implementation of protocol v3 framing. Integer fields are little-endian;
+// payloads remain opaque native bytes until a typed codec validates them.
+public static class GeneratorProtocolTransport {
+    public static const ushort CurrentVersion = (ushort)3u;
+    public static const uint HeaderLength = 20u;
+    public static const uint MaximumPayloadLength = 67108864u;
+
+    public static unsafe GeneratorProtocolFrame ReadFrame() {
+        var header = NativeBuffer.Allocate((ulong)HeaderLength);
+        try {
+            ReadExactly(header, HeaderLength);
+            if (header.ReadByte(0uL) != 67u || header.ReadByte(1uL) != 88u ||
+                header.ReadByte(2uL) != 71u || header.ReadByte(3uL) != 78u) {
+                throw new Exception("Invalid generator protocol magic.");
+            }
+
+            var version = ReadUInt16(header, 4uL);
+            if (version != CurrentVersion) {
+                throw new Exception("Unsupported generator protocol version.");
+            }
+            var kindValue = ReadUInt16(header, 6uL);
+            if (kindValue < 1u || kindValue > 9u) {
+                throw new Exception("Unknown generator protocol message kind.");
+            }
+            var requestId = ReadUInt64(header, 8uL);
+            var payloadLength = ReadUInt32(header, 16uL);
+            if (payloadLength > MaximumPayloadLength) {
+                throw new Exception("Generator protocol payload exceeds the 64 MiB limit.");
+            }
+
+            var payload = NativeBuffer.Allocate((ulong)payloadLength);
+            if (payloadLength > 0u) {
+                try {
+                    ReadExactly(payload, payloadLength);
+                } catch (Exception) {
+                    payload.Dispose();
+                    throw;
+                }
+            }
+            return new GeneratorProtocolFrame(version,
+                DecodeKind(kindValue), requestId, payload);
+        } finally {
+            header.Dispose();
+        }
+    }
+
+    public static unsafe void WriteFrame(GeneratorProtocolFrame frame) {
+        if (frame == null) throw new Exception("A generator protocol frame is required.");
+        if (frame.Version != CurrentVersion) {
+            throw new Exception("Unsupported generator protocol version.");
+        }
+        var kindValue = EncodeKind(frame.Kind);
+        if (kindValue < 1u || kindValue > 9u) {
+            throw new Exception("Unknown generator protocol message kind.");
+        }
+        var payloadLength = frame.PayloadLength;
+        if (payloadLength > MaximumPayloadLength) {
+            throw new Exception("Generator protocol payload exceeds the 64 MiB limit.");
+        }
+
+        var header = NativeBuffer.Allocate((ulong)HeaderLength);
+        try {
+            header.WriteByte(0uL, (byte)67u);
+            header.WriteByte(1uL, (byte)88u);
+            header.WriteByte(2uL, (byte)71u);
+            header.WriteByte(3uL, (byte)78u);
+            WriteUInt16(header, 4uL, frame.Version);
+            WriteUInt16(header, 6uL, kindValue);
+            WriteUInt64(header, 8uL, frame.RequestId);
+            WriteUInt32(header, 16uL, payloadLength);
+
+            if (header.WriteToStandardOutput(0uL, HeaderLength) != HeaderLength) {
+                throw new Exception("Unable to write generator protocol header.");
+            }
+            if (payloadLength > 0u &&
+                frame.Payload.WriteToStandardOutput(0uL, payloadLength) != payloadLength) {
+                throw new Exception("Unable to write generator protocol payload.");
+            }
+        } finally {
+            header.Dispose();
+        }
+    }
+
+    private static unsafe void ReadExactly(NativeBuffer buffer, uint length) {
+        uint offset = 0u;
+        while (offset < length) {
+            var count = buffer.ReadFromStandardInput((ulong)offset, length - offset);
+            if (count == 0u) {
+                var message = new System.StringBuilder();
+                message.Append("Truncated generator protocol frame after reading ");
+                message.Append(offset);
+                message.Append(" of ");
+                message.Append(length);
+                message.Append(" bytes.");
+                throw new Exception(message.ToString());
+            }
+            offset += count;
+        }
+    }
+
+    private static ushort ReadUInt16(NativeBuffer buffer, ulong offset) {
+        return (ushort)((uint)buffer.ReadByte(offset) +
+            (uint)buffer.ReadByte(offset + 1uL) * 256u);
+    }
+
+    private static GeneratorMessageKind DecodeKind(ushort value) {
+        if (value == 1u) return GeneratorMessageKind.Handshake;
+        if (value == 2u) return GeneratorMessageKind.Snapshot;
+        if (value == 3u) return GeneratorMessageKind.AdditionalFile;
+        if (value == 4u) return GeneratorMessageKind.Generate;
+        if (value == 5u) return GeneratorMessageKind.SourceOutput;
+        if (value == 6u) return GeneratorMessageKind.Diagnostic;
+        if (value == 7u) return GeneratorMessageKind.Cancellation;
+        if (value == 8u) return GeneratorMessageKind.Complete;
+        return GeneratorMessageKind.Failure;
+    }
+
+    private static ushort EncodeKind(GeneratorMessageKind value) {
+        if (value == GeneratorMessageKind.Handshake) return (ushort)1u;
+        if (value == GeneratorMessageKind.Snapshot) return (ushort)2u;
+        if (value == GeneratorMessageKind.AdditionalFile) return (ushort)3u;
+        if (value == GeneratorMessageKind.Generate) return (ushort)4u;
+        if (value == GeneratorMessageKind.SourceOutput) return (ushort)5u;
+        if (value == GeneratorMessageKind.Diagnostic) return (ushort)6u;
+        if (value == GeneratorMessageKind.Cancellation) return (ushort)7u;
+        if (value == GeneratorMessageKind.Complete) return (ushort)8u;
+        if (value == GeneratorMessageKind.Failure) return (ushort)9u;
+        return (ushort)0u;
+    }
+
+    private static uint ReadUInt32(NativeBuffer buffer, ulong offset) {
+        return (uint)buffer.ReadByte(offset) +
+            (uint)buffer.ReadByte(offset + 1uL) * 256u +
+            (uint)buffer.ReadByte(offset + 2uL) * 65536u +
+            (uint)buffer.ReadByte(offset + 3uL) * 16777216u;
+    }
+
+    private static ulong ReadUInt64(NativeBuffer buffer, ulong offset) {
+        ulong result = 0uL;
+        ulong scale = 1uL;
+        for (uint index = 0u; index < 8u; index += 1u) {
+            result += (ulong)buffer.ReadByte(offset + (ulong)index) * scale;
+            if (index < 7u) scale *= 256uL;
+        }
+        return result;
+    }
+
+    private static void WriteUInt16(NativeBuffer buffer, ulong offset, ushort value) {
+        buffer.WriteByte(offset, (byte)(value % 256u));
+        buffer.WriteByte(offset + 1uL, (byte)(value / 256u));
+    }
+
+    private static void WriteUInt32(NativeBuffer buffer, ulong offset, uint value) {
+        var remaining = value;
+        for (uint index = 0u; index < 4u; index += 1u) {
+            buffer.WriteByte(offset + (ulong)index, (byte)(remaining % 256u));
+            remaining /= 256u;
+        }
+    }
+
+    private static void WriteUInt64(NativeBuffer buffer, ulong offset, ulong value) {
+        var remaining = value;
+        for (uint index = 0u; index < 8u; index += 1u) {
+            buffer.WriteByte(offset + (ulong)index, (byte)(remaining % 256uL));
+            remaining /= 256uL;
+        }
+    }
+}

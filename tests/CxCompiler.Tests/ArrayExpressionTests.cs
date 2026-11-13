@@ -742,6 +742,52 @@ public sealed class ArrayExpressionTests
         }
     }
 
+    [Fact]
+    [Trait("Area", "Lowering")]
+    public void GenericArrayOwnerFactoryUsesTheClosedElementSize()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("cxcore");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            namespace System.Collections;
+            public final class Array<T> {
+                public constructor(uint length) {}
+                internal Array<T> CreateForOwner(uint length) {
+                    return new Array<T>(length);
+                }
+            }
+            public class Buffer<T> {
+                private Array<T> values;
+                public constructor() { values = new Array<T>(1u); }
+                public Array<T> Grow() { return values.CreateForOwner(3u); }
+            }
+            public class ArrayOwnerFactoryConsumer {
+                public Array<int> Grow() {
+                    Buffer<int> buffer = new Buffer<int>();
+                    return buffer.Grow();
+                }
+            }
+            """));
+        new SemanticBinder().Bind(project);
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-array-owner-factory-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(
+                project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(directory, "cxcore.c"));
+            Assert.Contains(
+                "cx_array_new_for_owner((cx_ptr)(__this), (cx_uint)(length), " +
+                "(cx_uint)sizeof(cx_int))",
+                source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+
     private static CxProject CreateProject(string source)
     {
         var project = CxProject.CreateDefaultApplicationProject();

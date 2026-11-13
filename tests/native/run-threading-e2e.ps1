@@ -1,5 +1,5 @@
 param(
-    [string] $CompilerDll = (Join-Path $PSScriptRoot '../../src/bin/Debug/net10.0/CxCompiler.dll'),
+    [string] $CompilerDll = (Join-Path $PSScriptRoot '../../src/CxCompiler/bin/Debug/net10.0/CxCompiler.dll'),
     [string] $CxCoreDir = (Join-Path $PSScriptRoot '../../../cxcore'),
     [string] $BuildRoot = (Join-Path $PSScriptRoot '../../../.build/cxcore-m16-managed-fixture'),
     [string] $Generator = 'Visual Studio 18 2026',

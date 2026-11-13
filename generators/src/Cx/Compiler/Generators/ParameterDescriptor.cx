@@ -1,0 +1,24 @@
+namespace Cx.Compiler.Generators;
+
+public final class ParameterDescriptor {
+    private string _name;
+    private string _typeIdentity;
+    private bool _isNullable;
+    private string? _defaultValue;
+    private SourceLocation _location;
+
+    public string Name { const get => _name; }
+    public string TypeIdentity { const get => _typeIdentity; }
+    public bool IsNullable { const get => _isNullable; }
+    public string? DefaultValue { const get => _defaultValue; }
+    public SourceLocation Location { const get => _location; }
+
+    public constructor(string name, string typeIdentity, bool isNullable,
+        string? defaultValue, SourceLocation location) {
+        _name = name;
+        _typeIdentity = typeIdentity;
+        _isNullable = isNullable;
+        _defaultValue = defaultValue;
+        _location = location;
+    }
+}

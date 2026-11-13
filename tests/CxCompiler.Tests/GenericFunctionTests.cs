@@ -108,6 +108,40 @@ public sealed class GenericFunctionTests
         }
     }
 
+    [Fact]
+    public void ChoosesGenericFunctionOverloadFromLambdaReturnType()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "generic_lambda_return_overload");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            import System.Threading.Tasks;
+            public interface ISource<T> { }
+            public class Sequence<T> : ISource<T> { }
+            public extern Task<bool> CheckAsync(int value);
+            public extension SourceExtensions<T> : ISource<T> {
+                public T Pick(delegate(T) => bool predicate, T value) {
+                    return value;
+                }
+                public T Pick(delegate(T) => Task<bool> predicate, T value) {
+                    return value;
+                }
+            }
+            public int Run(Sequence<int> source) {
+                return source.Pick((int value) => CheckAsync(value), 1);
+            }
+            """));
+        new SemanticBinder().Bind(project);
+
+        var run = project.CompilationContexts.Single().DeclarationScope.Declarations
+            .OfType<FunctionDeclaration>().Single(function => function.Name == "Run");
+        var call = Assert.IsType<InvocationExpression>(
+            Assert.IsType<ReturnStatement>(Assert.Single(run.Body!)).Expression);
+        var callbackType = Assert.IsType<FunctionType>(
+            call.TargetSymbol!.ParameterTypes[0]);
+        Assert.IsType<NamedType>(callbackType.ReturnType);
+        Assert.Equal("Task", callbackType.ReturnType.Name);
+    }
+
     [Theory]
     [InlineData("public T Identity<T>(T value) { return value; } public int Run() { return Identity<int, long>(1); }")]
     [InlineData("public T Identity<T>(T value) { return value; } public int Run() { return Identity<int>(1L); }")]

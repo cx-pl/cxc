@@ -1,0 +1,6 @@
+namespace Cx.Compiler.Generators;
+
+public interface GeneratorOutputContext {
+    void AddSource(string hintName, string cxSource);
+    void ReportDiagnostic(GeneratorDiagnostic diagnostic);
+}

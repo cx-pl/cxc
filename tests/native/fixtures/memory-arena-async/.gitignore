@@ -1,0 +1,9 @@
+/.obj/
+/.bin/
+/.obj-prefix-*/
+/.build-prefix-*/
+
+.build-m22-loop-*/
+.build-m22-loop-linux.sh
+.build-cancel-gc-*/
+.build-cancel-gc-linux.sh

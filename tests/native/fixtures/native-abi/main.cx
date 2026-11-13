@@ -38,7 +38,7 @@ public int ErrorChanging(int number, uint other) { unsafe { Fail(); } return num
 public extern int RetainedForeignCall(RetainedCallback callback, ptr context);
 @NativeImport("fixture", entryPoint = "fixture_make") public extern Point Make(int x, int y);
 @NativeImport("fixture", entryPoint = "fixture_sum") public extern int Sum(Point point);
-@NativeImport("fixture", entryPoint = "fixture_output") public extern void Output(ptr<int> value);
+@NativeImport("fixture", entryPoint = "fixture_output", noEscape = true) public extern void Output(ptr<int> value);
 @NativeImport("fixture", entryPoint = "fixture_open") public extern ptr<Owner> Open();
 @NativeImport("fixture", entryPoint = "fixture_close") public extern void Close(ptr<Owner> owner);
 @NativeImport("fixture", entryPoint = "fixture_fail", captureError = NativeErrorPolicy.Errno) public extern int Fail();

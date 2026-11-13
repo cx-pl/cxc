@@ -28,7 +28,7 @@ for negative in signature layout field; do
 cmake_minimum_required(VERSION 3.31)
 project(sdk_check C)
 add_library(badNative OBJECT "$source/.obj/badNative.c")
-target_include_directories(badNative PRIVATE "$source" "$core/src" "$core/inc" "$core/platform")
+target_include_directories(badNative PRIVATE "$source" "$core/src" "$core/include" "$core/platform")
 target_compile_features(badNative PRIVATE c_std_11)
 target_compile_definitions(badNative PRIVATE CX_STATIC_LINK CX_BADNATIVE_BUILD)
 EOF

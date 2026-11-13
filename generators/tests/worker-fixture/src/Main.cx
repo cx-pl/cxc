@@ -1,0 +1,5 @@
+import Cx.Compiler.Generators;
+
+public unsafe int Main(string[] args) {
+    return GeneratorWorkerRuntime.Run(new WorkerFixture.EchoGenerator());
+}

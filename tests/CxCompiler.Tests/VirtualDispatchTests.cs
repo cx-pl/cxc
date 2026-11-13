@@ -62,8 +62,26 @@ public sealed class VirtualDispatchTests
         Assert.Contains("CX_VTABLE_ENTRY(unnamed_Parent_Value)", source);
         Assert.Contains("CX_VTABLE_ENTRY(unnamed_Child_Value)", source);
         Assert.Contains("CX_GET_VTABLE(value))[4]", source);
-        Assert.Contains("unnamed_Parent* value = (", source);
+        Assert.Contains("unnamed_Parent* value;", source);
+        Assert.Contains("cx_gc_store_reference((cx_ptr*)&(value)", source);
         Assert.Contains("unnamed_Parent*)(", source);
+
+        var parentVTable = source.IndexOf(
+            "CX_BEGIN_VTABLE_DEF(unnamed_Parent)", StringComparison.Ordinal);
+        var warningGuard = source.LastIndexOf(
+            "#if defined(_MSC_VER) && defined(CX_DYNAMIC_MODULE)",
+            parentVTable, StringComparison.Ordinal);
+        var warningDisable = source.IndexOf(
+            "#pragma warning(disable:4232)", warningGuard, StringComparison.Ordinal);
+        var vTableEnd = source.IndexOf(
+            "CX_END_VTABLE_DEF;", parentVTable, StringComparison.Ordinal);
+        var warningRestore = source.IndexOf(
+            "#pragma warning(pop)", vTableEnd, StringComparison.Ordinal);
+
+        Assert.True(parentVTable >= 0);
+        Assert.True(warningGuard >= 0 && warningGuard < parentVTable);
+        Assert.True(warningDisable > warningGuard && warningDisable < parentVTable);
+        Assert.True(vTableEnd < warningRestore);
     }
 
     [Fact]

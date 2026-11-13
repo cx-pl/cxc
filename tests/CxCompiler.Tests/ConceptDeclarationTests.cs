@@ -1028,6 +1028,54 @@ public sealed class ConceptDeclarationTests
     }
 
     [Fact]
+    public void GenericConceptMutationStoresReferenceFieldsThroughTheBarrier()
+    {
+        var project = CxProject.CreateDefaultApplicationProject(
+            "concept_generic_reference_field_store");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            concept CValueSource {
+                object Value { const get; }
+            }
+            public class Source {
+                public object Value { const get; set; }
+                public constructor(object value) { Value = value; }
+            }
+            public class Box {
+                public object Value;
+                public constructor(object value) { Value = value; }
+                public void CopyFrom<T>(T source) : T = CValueSource {
+                    Value = source.Value;
+                }
+            }
+            public int Main() {
+                Box box = new Box(null);
+                Source source = new Source(null);
+                box.CopyFrom(source);
+                return 0;
+            }
+            """));
+
+        new SemanticBinder().Bind(project);
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-concept-reference-field-store-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(
+                directory, "concept_generic_reference_field_store.c"));
+
+            Assert.Contains(
+                "cx_gc_store_reference((cx_ptr*)&(__this->Value), (cx_ptr)(",
+                source);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void EnforcesGenericConceptMethodRequirementsConstraints()
     {
         var validProject = CxProject.CreateDefaultApplicationProject(
@@ -2263,6 +2311,12 @@ public sealed class ConceptDeclarationTests
     {
         var project = CxProject.CreateDefaultApplicationProject("class_concept_counted_loop");
         project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Node { public constructor() { } }
+            public struct Payload {
+                public Node Reference;
+                public int Count;
+                public constructor() { }
+            }
             public concept CAccumulator { void Add(int amount); }
             public class Accumulator {
                 public int Value;
@@ -2285,12 +2339,18 @@ public sealed class ConceptDeclarationTests
                         value.Add(index);
                     }
                 }
+                public void AddWithCheckedLocal(T value, Payload seed) {
+                    for (Payload local = seed; local.Count < 1; local.Count += 1) {
+                        value.Add(local.Count);
+                    }
+                }
             }
             public int Main() {
                 Accumulator value = new Accumulator();
                 AccumulatorRunner<Accumulator> runner = new AccumulatorRunner<Accumulator>();
                 runner.AddIndices(value, 4);
                 runner.AddDescending(value, 4);
+                runner.AddWithCheckedLocal(value, new Payload());
                 return value.Value;
             }
             """));
@@ -2309,8 +2369,9 @@ public sealed class ConceptDeclarationTests
             Assert.Contains("index++", source);
             Assert.Contains("index--", source);
             Assert.Contains("index = count;", source);
+            Assert.Contains("cx_gc_copy_value((cx_ptr)&(local)", source);
+            Assert.DoesNotContain("struct class_concept_counted_loop_Payload local = seed;", source);
             Assert.Contains("Add", source);
-            Assert.DoesNotContain("CAccumulator", source);
             Assert.DoesNotContain("_unknowntype_", source);
         }
         finally

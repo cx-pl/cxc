@@ -1,0 +1,17 @@
+namespace Cx.Compiler.Generators;
+
+public final class AdditionalText {
+    private string _path;
+    private string _content;
+    private string _contentHash;
+
+    public string Path { const get => _path; }
+    public string Content { const get => _content; }
+    public string ContentHash { const get => _contentHash; }
+
+    public constructor(string path, string content, string contentHash) {
+        _path = path;
+        _content = content;
+        _contentHash = contentHash;
+    }
+}

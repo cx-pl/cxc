@@ -84,6 +84,109 @@ public sealed class NativeTypeTests
         Assert.DoesNotContain("CX_TYPE_DEF(interop_Point)", generated.Header);
     }
 
+    [Fact]
+    public void TypedNativePointersResolveAcrossCompilationContexts()
+    {
+        var project = NativeInteropTests.Project("""
+            import System.Interop;
+            namespace WinApi;
+            @NativeType("PIXELFORMATDESCRIPTOR", header = "windows.h", size = 40, alignment = 4)
+            public struct PixelFormat { public ushort size; }
+            """);
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            import System.Interop;
+            namespace WinApi;
+            @NativeImport("fixture")
+            public extern int ChoosePixelFormat(ptr<const PixelFormat> format);
+            """));
+
+        new SemanticBinder().Bind(project);
+
+        var generated = NativeInteropTests.Generate(project);
+        Assert.Contains("PIXELFORMATDESCRIPTOR*", generated.Header);
+        Assert.Contains("sizeof(PIXELFORMATDESCRIPTOR) == 40", generated.Header);
+    }
+
+    [Fact]
+    public void NativeLayoutCopiesValidateNestedAndArrayPointerFields()
+    {
+        var project = NativeInteropTests.Project("""
+            import System.Interop;
+            @NativeLayout public struct Inner { public ptr<int> Value; }
+            @NativeLayout public struct Outer {
+                public Inner nested;
+                public ptr<int>[2] values;
+            }
+            public class Holder { public Outer Value; public constructor() {} }
+            public void Store(Holder holder, Outer value) { holder.Value = value; }
+            """);
+        new SemanticBinder().Bind(project);
+        var source = NativeInteropTests.Generate(project).Source;
+
+        Assert.Contains("cx_gc_copy_native_value", source);
+        Assert.Contains(
+            "offsetof(struct __cx_native_interop_Outer, nested)", source);
+        Assert.Contains(
+            "offsetof(struct __cx_native_interop_Inner, Value)", source);
+        Assert.Contains(
+            "offsetof(struct __cx_native_interop_Outer, values)", source);
+    }
+
+    [Fact]
+    public void SdkRecordCopiesStayOnTheCurrentStackWithoutACompleteNativeLayout()
+    {
+        var project = NativeInteropTests.Project("""
+            import System.Interop;
+            @NativeType("fixture_point", header = "fixture.h")
+            public struct Point { public ptr<int> Value; }
+            public class Holder { public Point Value; public constructor() {} }
+            public void Store(Holder holder, Point value) { holder.Value = value; }
+            """);
+        new SemanticBinder().Bind(project);
+        var source = NativeInteropTests.Generate(project).Source;
+
+        Assert.Contains("cx_gc_copy_native_value_unknown_layout", source);
+    }
+
+    [Fact]
+    public void ReflectedCopiesPreserveNativeLayoutsNestedInCxValues()
+    {
+        var project = NativeInteropTests.Project("""
+            import System.Interop;
+            @NativeLayout public struct NativeInner { public ptr<int> Value; }
+            public struct Outer { public NativeInner Nested; public int Count; }
+            public class Holder { public Outer Value; public constructor() {} }
+            public void Store(Holder holder, Outer value) { holder.Value = value; }
+            """);
+        new SemanticBinder().Bind(project);
+        var source = NativeInteropTests.Generate(project).Source;
+
+        Assert.Contains("CX_REFLECTION_FLAG_FIELD_NATIVE_LAYOUT", source);
+        Assert.Contains("struct cx_native_value_layout", source);
+        Assert.Contains("offsetof(struct __cx_native_interop_NativeInner, Value)", source);
+        Assert.True(source.Split("static const struct cx_native_value_layout",
+            StringSplitOptions.None).Length >= 2,
+            "Expected a native-value layout descriptor for the nested NativeInner field.");
+    }
+
+    [Fact]
+    public void ClosedGenericReflectionPreservesNestedNativeLayoutDescriptors()
+    {
+        var project = NativeInteropTests.Project("""
+            import System.Interop;
+            @NativeLayout public struct NativeInner { public ptr<int> Value; }
+            public class Outer<T> { public NativeInner Nested; public T Value; public constructor() {} }
+            public class Holder { public Outer<int> Value; public constructor() {} }
+            public void Store(Holder holder, Outer<int> value) { holder.Value = value; }
+            """);
+        new SemanticBinder().Bind(project);
+        var source = NativeInteropTests.Generate(project).Source;
+
+        Assert.Contains("CX_REFLECTION_FLAG_FIELD_NATIVE_LAYOUT", source);
+        Assert.Contains("struct cx_native_value_layout", source);
+        Assert.Contains("offsetof(struct __cx_native_interop_NativeInner, Value)", source);
+    }
+
     [Theory]
     [InlineData("public unsafe int Run(ptr<Owner> p) { Owner value = *p; return 0; }", "Opaque")]
     [InlineData("public unsafe int Run(ptr<Owner> p) { Owner value = p[0]; return 0; }", "Opaque")]

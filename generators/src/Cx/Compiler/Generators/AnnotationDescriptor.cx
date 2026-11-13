@@ -1,0 +1,31 @@
+namespace Cx.Compiler.Generators;
+
+public final class AnnotationDescriptor {
+    private string _metadataName;
+    private string _targetIdentity;
+    private string[] _argumentNames;
+    private string[] _argumentValues;
+    private SourceLocation _location;
+
+    public string MetadataName { const get => _metadataName; }
+    public string TargetIdentity { const get => _targetIdentity; }
+    public string[] ArgumentNames { get => CopyStrings(_argumentNames); }
+    public string[] ArgumentValues { get => CopyStrings(_argumentValues); }
+    public SourceLocation Location { const get => _location; }
+
+    public constructor(string metadataName, string targetIdentity,
+        string[] argumentNames, string[] argumentValues,
+        SourceLocation location) {
+        _metadataName = metadataName;
+        _targetIdentity = targetIdentity;
+        _argumentNames = CopyStrings(argumentNames);
+        _argumentValues = CopyStrings(argumentValues);
+        _location = location;
+    }
+
+    private string[] CopyStrings(string[] values) {
+        var result = new string[values.Length];
+        for (uint index = 0u; index < values.Length; index += 1u) result[index] = values[index];
+        return result;
+    }
+}

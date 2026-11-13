@@ -1,5 +1,5 @@
 param(
-    [string]$Cxc = "$PSScriptRoot/../../src/bin/Release/net10.0/CxCompiler.dll",
+    [string]$Cxc = "$PSScriptRoot/../../src/CxCompiler/bin/Release/net10.0/CxCompiler.dll",
     [string]$CxCoreDir = "$PSScriptRoot/../../../cxcore",
     [string]$Configuration = 'Debug',
     [string]$Generator = '',

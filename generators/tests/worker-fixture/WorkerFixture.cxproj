@@ -1,0 +1,7 @@
+name: CxGeneratorWorkerFixture
+type: Executable
+version: 0.1.0-alpha
+description: CX-authored generator worker protocol fixture
+licence: MIT
+project_references:
+  - ../../CxCompilerGenerators.cxproj

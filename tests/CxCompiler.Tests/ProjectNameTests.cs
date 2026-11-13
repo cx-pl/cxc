@@ -82,6 +82,29 @@ public sealed class ProjectNameTests
         });
     }
 
+    [Fact]
+    public void CustomOutputDirectoryInsideProjectIsNotTreatedAsSource()
+    {
+        WithDirectory(directory =>
+        {
+            var manifest = Path.Combine(directory, "app.cxproj");
+            var output = Path.Combine(directory, "generated");
+            Directory.CreateDirectory(output);
+            File.WriteAllText(manifest, "name: app\ntype: Library\n");
+            File.WriteAllText(Path.Combine(directory, "main.cx"),
+                "public class IncludedSource {}\n");
+            File.WriteAllText(Path.Combine(output, "stale.cx"),
+                "public class GeneratedOutputMustBeIgnored {}\n");
+
+            new Compiler().Compile(["--emit-only", "-o", output, manifest]);
+
+            var header = File.ReadAllText(Path.Combine(output, "app.h"));
+            Assert.Contains("IncludedSource", header, StringComparison.Ordinal);
+            Assert.DoesNotContain("GeneratedOutputMustBeIgnored", header,
+                StringComparison.Ordinal);
+        });
+    }
+
     private static void WithDirectory(Action<string> test)
     {
         var directory = Directory.CreateTempSubdirectory("cxc-project-name-").FullName;

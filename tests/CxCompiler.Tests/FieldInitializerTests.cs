@@ -35,6 +35,39 @@ public sealed class FieldInitializerTests
     }
 
     [Fact]
+    public void ChecksReferenceStoresFromInstanceFieldInitializers()
+    {
+        var project = CreateProject("""
+            public class InitializerValue { }
+            public InitializerValue CreateInitializerValue() {
+                return new InitializerValue();
+            }
+            public class InitializerHolder {
+                public InitializerValue Value = CreateInitializerValue();
+                public constructor() {}
+            }
+            public int Main() { return new InitializerHolder().Value == null ? 0 : 1; }
+            """);
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-instance-reference-field-init-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(directory, "field_initializer.c"));
+            var initializerStore = source.Split('\n').First(line =>
+                line.Contains("CreateInitializerValue", StringComparison.Ordinal));
+
+            Assert.Contains("cx_gc_store_reference", initializerStore);
+            Assert.Contains("__this->Value", initializerStore);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void AllowsDefaultInitializerOnClosedGenericValueField()
     {
         var project = CreateProject("""
@@ -148,6 +181,37 @@ public sealed class FieldInitializerTests
             Assert.Contains(" = field_initializer_CreateInitialValue();", source);
             Assert.True(source.IndexOf("CreateInitialValue();", StringComparison.Ordinal) <
                 source.LastIndexOf("cx_runtime_once_complete", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ChecksReferenceStoresFromDynamicInitializersIntoStaticFields()
+    {
+        var project = CreateProject("""
+            public class StaticReferenceValue { }
+            public StaticReferenceValue CreateStaticReferenceValue() {
+                return new StaticReferenceValue();
+            }
+            public static class StaticReferenceHolder {
+                public static StaticReferenceValue Value = CreateStaticReferenceValue();
+            }
+            public int Main() { return StaticReferenceHolder.Value == null ? 0 : 1; }
+            """);
+        var directory = Path.Combine(Path.GetTempPath(),
+            $"cxc-static-reference-field-init-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(directory, "field_initializer.c"));
+            var staticStore = source.Split('\n').First(line =>
+                line.Contains("CreateStaticReferenceValue", StringComparison.Ordinal));
+
+            Assert.Contains("cx_gc_store_reference", staticStore);
         }
         finally
         {
@@ -311,9 +375,10 @@ public sealed class FieldInitializerTests
             var source = File.ReadAllText(Path.Combine(directory, "field_initializer.c"));
 
             var fieldInitializer = source.IndexOf(
-                "__this->SeedValue =", StringComparison.Ordinal);
+                "__this->SeedValue", StringComparison.Ordinal);
             var constructorAssignment = source.LastIndexOf(
-                "__this->SeedValue =", StringComparison.Ordinal);
+                "__this->SeedValue", StringComparison.Ordinal);
+            Assert.Contains("cx_gc_store_reference(", source);
             Assert.True(fieldInitializer >= 0);
             Assert.True(constructorAssignment > fieldInitializer);
         }
@@ -353,9 +418,10 @@ public sealed class FieldInitializerTests
             var source = File.ReadAllText(Path.Combine(directory, "field_initializer.c"));
 
             var fieldInitializer = source.IndexOf(
-                "__this->SeedValue =", StringComparison.Ordinal);
+                "__this->SeedValue", StringComparison.Ordinal);
             var constructorAssignment = source.LastIndexOf(
-                "__this->SeedValue =", StringComparison.Ordinal);
+                "__this->SeedValue", StringComparison.Ordinal);
+            Assert.Contains("cx_gc_store_reference(", source);
             Assert.True(fieldInitializer >= 0);
             Assert.True(constructorAssignment > fieldInitializer);
             Assert.Contains("GenericSeed", source);
@@ -437,7 +503,7 @@ public sealed class FieldInitializerTests
 
             var seedInitializer = source.IndexOf("__this->Seed =", StringComparison.Ordinal);
             var copyInitializer = source.IndexOf("__this->Copy =", StringComparison.Ordinal);
-            var readerInitializer = source.IndexOf("__this->Reader =", StringComparison.Ordinal);
+            var readerInitializer = source.IndexOf("__this->Reader", StringComparison.Ordinal);
             var methodInitializer = source.IndexOf("__this->MethodResult =", StringComparison.Ordinal);
             Assert.True(seedInitializer >= 0);
             Assert.True(copyInitializer > seedInitializer);
@@ -493,7 +559,7 @@ public sealed class FieldInitializerTests
             var source = File.ReadAllText(Path.Combine(directory, "field_initializer.c"));
 
             var seedInitializer = source.IndexOf("__this->Seed = 40", StringComparison.Ordinal);
-            var valueInitializer = source.IndexOf("__this->SeedValue =", StringComparison.Ordinal);
+            var valueInitializer = source.IndexOf("__this->SeedValue", StringComparison.Ordinal);
             Assert.True(seedInitializer >= 0);
             Assert.True(valueInitializer > seedInitializer);
             Assert.Contains("__this->Seed + 2", source);
