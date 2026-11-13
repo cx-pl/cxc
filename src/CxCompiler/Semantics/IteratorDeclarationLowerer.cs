@@ -1272,7 +1272,8 @@ internal static class IteratorDeclarationLowerer
             new IfStatement(
                 new UnaryExpression("!", Member("__cx_hasCurrent")),
                 new BlockStatement([new ThrowStatement(
-                    new ObjectCreationExpression(new NamedType("System.Exception", []), []))]),
+                    new ObjectCreationExpression(
+                        new NamedType("System.InvalidOperationException", []), []))]),
                 null),
             new ReturnStatement(Member("__cx_current")),
         ]);

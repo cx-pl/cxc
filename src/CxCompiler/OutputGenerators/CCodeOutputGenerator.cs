@@ -1697,6 +1697,11 @@ public static partial class CCodeOutputGenerator
             .Where(function => function.Body is not null)
             .SelectMany(function => function.Body!)
             .SelectMany(EnumerateStringLiterals)
+            .Concat(EnumerateFunctions(declarations)
+                .OfType<ConstructorDeclaration>()
+                .Where(constructor => constructor.Initializer is not null)
+                .SelectMany(constructor => constructor.Initializer!.Arguments)
+                .SelectMany(EnumerateStringLiterals))
             .Concat(genericFunctionInstances
                 .Where(instance => instance.SpecializationName is not null &&
                     instance.Declaration?.Body is not null)
@@ -8449,8 +8454,8 @@ public static partial class CCodeOutputGenerator
                 var elementType = GenericTypeSubstitution.Substitute(
                     accessor.ParentPropertyDeclaration.Type, classArguments);
                 var elementCType = elementType.ToCIdentifier(false);
-                call = $"(*({elementCType}*)cx_array_at({array}, " +
-                    $"(cx_uint)({index}), (cx_uint)sizeof({elementCType})))";
+                call = $"(*({elementCType}*)cx_array_at_checked({array}, " +
+                    $"(cx_uint)({index}), (cx_uint)sizeof({elementCType}), __FILE__, __LINE__))";
             }
             else if (IsClosedGenericConcreteExpressionAccessor(
                 accessor,

@@ -593,7 +593,7 @@ public sealed class GenericFunctionBodyTests
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var source = File.ReadAllText(Path.Combine(directory, "generic_array_first.c"));
             Assert.Contains("return (*", source);
-            Assert.Contains("cx_array_at(values", source);
+            Assert.Contains("cx_array_at_checked(values", source);
             Assert.Contains("sizeof(cx_int)", source);
             Assert.Contains("sizeof(cx_long)", source);
             Assert.DoesNotContain("_unknowntype_", source);
@@ -786,8 +786,8 @@ public sealed class GenericFunctionBodyTests
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var source = File.ReadAllText(Path.Combine(directory, "generic_jagged_array_first.c"));
             Assert.Contains("cx_array_new((cx_uint)(3)", source);
-            Assert.Contains("cx_array_at(values", source);
-            Assert.True(source.Split("cx_array_at(").Length - 1 >= 8);
+            Assert.Contains("cx_array_at_checked(values", source);
+            Assert.True(source.Split("cx_array_at_checked(").Length - 1 >= 8);
             Assert.Contains("sizeof(cx_int)", source);
             Assert.DoesNotContain("_unknowntype_", source);
         }
@@ -875,7 +875,7 @@ public sealed class GenericFunctionBodyTests
                 directory, "generic_array_length_predicates.c"));
             Assert.Contains("&&", source);
             Assert.Contains("?", source);
-            Assert.Contains("cx_array_at(values", source);
+            Assert.Contains("cx_array_at_checked(values", source);
             Assert.DoesNotContain("_unknowntype_", source);
         }
         finally
@@ -1121,7 +1121,7 @@ public sealed class GenericFunctionBodyTests
             Directory.CreateDirectory(directory);
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var source = File.ReadAllText(Path.Combine(directory, "generic_array_set.c"));
-            Assert.Contains("cx_array_at(values, (cx_uint)(index), (cx_uint)sizeof(cx_int))) = value;", source);
+            Assert.Contains("cx_array_at_checked(values, (cx_uint)(index), (cx_uint)sizeof(cx_int), __FILE__, __LINE__)) = value;", source);
             Assert.DoesNotContain("_unknowntype_", source);
         }
         finally
@@ -1156,8 +1156,8 @@ public sealed class GenericFunctionBodyTests
             Directory.CreateDirectory(directory);
             CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
             var source = File.ReadAllText(Path.Combine(directory, "generic_array_element_copy.c"));
-            Assert.Contains("cx_array_at(target, (cx_uint)(targetIndex)", source);
-            Assert.Contains("cx_array_at(source, (cx_uint)(sourceIndex)", source);
+            Assert.Contains("cx_array_at_checked(target, (cx_uint)(targetIndex)", source);
+            Assert.Contains("cx_array_at_checked(source, (cx_uint)(sourceIndex)", source);
             Assert.DoesNotContain("_unknowntype_", source);
         }
         finally
@@ -1194,7 +1194,7 @@ public sealed class GenericFunctionBodyTests
             Assert.Equal(2, source.Split("cx_array_new(").Length - 1);
             Assert.Contains("sizeof(cx_int)", source);
             Assert.Contains("sizeof(cx_long)", source);
-            Assert.Contains("cx_array_at(values", source);
+            Assert.Contains("cx_array_at_checked(values", source);
             Assert.DoesNotContain("_unknowntype_", source);
         }
         finally
@@ -1818,7 +1818,7 @@ public sealed class GenericFunctionBodyTests
             Assert.Contains("for (cx_uint i = 0u;", source);
             Assert.Contains("sizeof(cx_int)", source);
             Assert.Contains("sizeof(cx_long)", source);
-            Assert.Contains("cx_array_at(source", source);
+            Assert.Contains("cx_array_at_checked(source", source);
             Assert.DoesNotContain("_unknowntype_", source);
         }
         finally

@@ -1,0 +1,6 @@
+namespace Cx.Compiler.Generators;
+// Providers are values in a deferred graph. Implementations should retain the
+// transformation and evaluate it only when an input snapshot changes.
+public interface IGeneratorPredicate<T> {
+    bool Invoke(T value);
+}

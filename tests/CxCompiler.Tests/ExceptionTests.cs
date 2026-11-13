@@ -8,6 +8,17 @@ namespace CxCompiler.Tests;
 public sealed class ExceptionTests
 {
     [Fact]
+    public void EmitsCheckedManagedArrayAccess()
+    {
+        const string source = "int Read(int[] values, uint index) { return values[index]; }";
+
+        var generatedSource = GenerateSource(source);
+
+        Assert.Contains("cx_array_at_checked(", generatedSource);
+        Assert.Contains("__FILE__, __LINE__", generatedSource);
+    }
+
+    [Fact]
     public void EmitsThrowCatchFilterRethrowAndFinally()
     {
         const string source = """
@@ -198,6 +209,41 @@ public sealed class ExceptionTests
         Assert.Contains(
             "cxcore_System_Exception_Matches(cx_exception_current(), cxcore_System_Exception___typeinfo)",
             generatedSource);
+    }
+
+    [Fact]
+    public void BindsStandardExceptionHierarchyAndContextConstructors()
+    {
+        const string source = """
+            import System;
+            import System.IO;
+
+            class ApplicationException : Exception {
+                public constructor() : base("user failure", null) {}
+            }
+
+            void Main() {
+                try {
+                    throw new FileNotFoundException("missing", "data.txt", null);
+                }
+                catch (FileNotFoundException exception) {
+                    string path = exception.FileName;
+                }
+                catch (IOException exception) {
+                    string operation = exception.Operation;
+                }
+                catch (Exception exception) {
+                    string message = exception.Message;
+                }
+            }
+            """;
+
+        var generatedSource = GenerateSource(source);
+
+        Assert.Contains("cxcore_System_IO_FileNotFoundException___typeinfo", generatedSource);
+        Assert.Contains("cxcore_System_IO_IOException___typeinfo", generatedSource);
+        Assert.Contains("cxcore_System_Exception___typeinfo", generatedSource);
+        Assert.Contains("cxcore_System_IO_FileNotFoundException_FileName___const_get", generatedSource);
     }
 
     private static string GenerateSource(string source)

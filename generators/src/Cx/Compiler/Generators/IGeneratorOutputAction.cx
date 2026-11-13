@@ -1,0 +1,4 @@
+namespace Cx.Compiler.Generators;
+public interface IGeneratorOutputAction<T> {
+    void Execute(GeneratorOutputContext context, T value);
+}

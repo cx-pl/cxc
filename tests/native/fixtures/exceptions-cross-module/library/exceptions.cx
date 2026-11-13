@@ -1,0 +1,12 @@
+namespace Library;
+
+public class CrossModuleException : Exception {
+    public constructor(const string message) : base(message) { }
+}
+
+public static class ExceptionFactory {
+    public static void Throw() {
+        throw new CrossModuleException("cross-project failure");
+    }
+
+}

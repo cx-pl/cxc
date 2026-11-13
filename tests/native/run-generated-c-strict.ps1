@@ -45,8 +45,8 @@ $includeSets = @{
     )
 }
 $cases = @(
-    @{ Name = 'core-static'; Source = 'cxcore/src/.obj/cxcore.generated.c'; Includes = $includeSets.core; Defines = @('CX_CXCORE_BUILD', 'CX_STATIC_LINK') }
-    @{ Name = 'core-shared'; Source = 'cxcore/src/.obj/cxcore.generated.c'; Includes = $includeSets.core; Defines = @('CX_CXCORE_BUILD', 'CX_DYNAMIC_MODULE') }
+    @{ Name = 'core-static'; Source = 'cxcore/src/.obj/cxcore.c'; Includes = $includeSets.core; Defines = @('CX_CXCORE_BUILD', 'CX_STATIC_LINK') }
+    @{ Name = 'core-shared'; Source = 'cxcore/src/.obj/cxcore.c'; Includes = $includeSets.core; Defines = @('CX_CXCORE_BUILD', 'CX_DYNAMIC_MODULE') }
     @{ Name = 'cxnet-static'; Source = 'cxnet/src/.obj/cxnet.c'; Includes = $includeSets.cxnet; Defines = @('CX_CXNET_BUILD', 'CX_STATIC_LINK') }
     @{ Name = 'cxnet-shared'; Source = 'cxnet/src/.obj/cxnet.c'; Includes = $includeSets.cxnet; Defines = @('CX_CXNET_BUILD', 'CX_DYNAMIC_MODULE') }
     @{ Name = 'consumer-static'; Source = 'cxnet/examples/streaming-read/.obj/streamingRead.c'; Includes = $includeSets.consumer; Defines = @('CX_STREAMINGREAD_BUILD', 'CX_STATIC_LINK') }

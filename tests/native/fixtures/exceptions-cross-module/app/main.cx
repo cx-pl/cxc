@@ -1,0 +1,167 @@
+import Library;
+import System;
+import System.IO;
+
+namespace App;
+
+public class LocalException : Exception {
+    public constructor(const string message) : base(message) { }
+}
+
+public class NestedException : LocalException {
+    public constructor(const string message) : base(message) { }
+}
+
+public static class FixtureState {
+    public static int CleanupCount;
+}
+
+public static int ReturnThroughFinally(int value) {
+    try {
+        return value;
+    } finally {
+        FixtureState.CleanupCount += 1;
+    }
+}
+
+public int Run() {
+    bool caughtInReferencedProject = false;
+    try {
+        ExceptionFactory.Throw();
+    } catch (CrossModuleException error) {
+        caughtInReferencedProject = error.Message == "cross-project failure";
+    } catch (Exception) {
+        return 1;
+    }
+    if (!caughtInReferencedProject) return 2;
+
+    // Exact matching and source-order matching both select the first clause.
+    int selected = 0;
+    try {
+        throw new NestedException("nested failure");
+    } catch (NestedException error) {
+        selected = 1;
+    } catch (LocalException error) {
+        selected = 2;
+    } catch (Exception error) {
+        selected = 3;
+    }
+    if (selected != 1) return 3;
+
+    selected = 0;
+    try {
+        throw new NestedException("ancestor failure");
+    } catch (LocalException error) {
+        selected = 1;
+    } catch (Exception error) {
+        selected = 2;
+    }
+    if (selected != 1) return 13;
+
+    selected = 0;
+    try {
+        throw new LocalException("unrelated handler");
+    } catch (ArgumentNullException error) {
+        selected = 1;
+    } catch (Exception error) {
+        selected = 2;
+    }
+    if (selected != 2) return 15;
+
+    // Filters can reject one handler and allow the next matching handler.
+    selected = 0;
+    try {
+        throw new LocalException("filtered failure");
+    } catch (LocalException error) when (error.Message == "reject") {
+        selected = 4;
+    } catch (Exception error) {
+        selected = 5;
+    }
+    if (selected != 5) return 4;
+
+    // Bare rethrow keeps the object and its original source location.
+    Exception original = new LocalException("rethrow identity");
+    bool rethrownByIdentity = false;
+    try {
+        try {
+            throw original;
+        } catch (LocalException error) {
+            throw;
+        }
+    } catch (Exception error) {
+        rethrownByIdentity = error == original && error.StackTrace != null;
+    }
+    if (!rethrownByIdentity) return 5;
+
+    // Nested handlers and typed failures run each finally exactly once.
+    FixtureState.CleanupCount = 0;
+    try {
+        try {
+            throw new LocalException("finally");
+        } catch (LocalException error) {
+            FixtureState.CleanupCount += 10;
+        } finally {
+            FixtureState.CleanupCount += 1;
+        }
+    } catch (Exception error) {
+        return 6;
+    }
+    if (FixtureState.CleanupCount != 11) return 7;
+    if (ReturnThroughFinally(9) != 9 || FixtureState.CleanupCount != 12) return 8;
+    for (int index = 0; index < 2; index += 1) {
+        try {
+            continue;
+        } finally {
+            FixtureState.CleanupCount += 1;
+        }
+    }
+    while (true) {
+        try {
+            break;
+        } finally {
+            FixtureState.CleanupCount += 1;
+        }
+    }
+    if (FixtureState.CleanupCount != 15) return 16;
+
+    // Constructor defaults, null inner causes, contextual values and metadata.
+    ArgumentNullException argument = new ArgumentNullException("buffer");
+    bool caughtArgument = false;
+    try {
+        throw argument;
+    } catch (ArgumentNullException error) {
+        caughtArgument = error == argument;
+    } catch (Exception error) {
+        return 9;
+    }
+    if (!caughtArgument) return 14;
+    if (argument.ParamName != "buffer" || argument.Message == null ||
+        argument.RuntimeType.Name != "ArgumentNullException") return 17;
+    ArgumentOutOfRangeException range = new ArgumentOutOfRangeException(
+        "outside", "offset", 23);
+    if (range.ParamName != "offset" || range.Message != "outside" ||
+        range.RuntimeType.Name != "ArgumentOutOfRangeException") return 18;
+    Exception cause = new Exception("cause");
+    FileNotFoundException missing = new FileNotFoundException(null, "not-present.cx", cause);
+    if (missing.FileName != "not-present.cx" || missing.Message == null ||
+        missing.InnerException == null ||
+        missing.RuntimeType.Name != "FileNotFoundException") return 10;
+    FileNotFoundException missingWithoutCause =
+        new FileNotFoundException("missing", "also-not-present.cx");
+    if (missingWithoutCause.FileName != "also-not-present.cx" ||
+        missingWithoutCause.InnerException != null) return 20;
+    IOException io = new IOException("io", "read", "data.cx", "errno", 5);
+    if (io.Operation != "read" || io.Path != "data.cx" ||
+        io.NativeErrorDomain != "errno" || io.NativeErrorCode != 5) return 19;
+    bool caughtMissing = false;
+    try {
+        throw missing;
+    } catch (FileNotFoundException error) {
+        caughtMissing = error == missing;
+    } catch (IOException error) {
+        return 11;
+    }
+    if (!caughtMissing) return 12;
+
+    return 0;
+}

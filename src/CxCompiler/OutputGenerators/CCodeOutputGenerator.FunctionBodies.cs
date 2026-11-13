@@ -2614,8 +2614,8 @@ public static partial class CCodeOutputGenerator
                     instance.ParameterTypes[valueParameterIndex],
                     declaration,
                     moduleName);
-                var target = $"(*({elementCType}*)cx_array_at({arrayExpression}, " +
-                    $"(cx_uint)({indexExpression}), (cx_uint)sizeof({elementCType})))";
+                var target = $"(*({elementCType}*)cx_array_at_checked({arrayExpression}, " +
+                    $"(cx_uint)({indexExpression}), (cx_uint)sizeof({elementCType}), __FILE__, __LINE__))";
                 writer.WriteLine(ToCCheckedReferenceAssignment(
                     target, elementType, valueExpression) + ";");
                 writer.WriteLine($"return {localName};");
@@ -3278,8 +3278,8 @@ public static partial class CCodeOutputGenerator
                 var arrayExpression = ToCExpression(member.Target, declaration, moduleName);
                 var indexExpression = ToCExpression(
                     invocation.Arguments[0], declaration, moduleName);
-                var elementAccess = $"(*({elementType}*)cx_array_at({arrayExpression}, " +
-                    $"(cx_uint)({indexExpression}), (cx_uint)sizeof({elementType})))";
+                var elementAccess = $"(*({elementType}*)cx_array_at_checked({arrayExpression}, " +
+                    $"(cx_uint)({indexExpression}), (cx_uint)sizeof({elementType}), __FILE__, __LINE__))";
                 writer.WriteLine(
                     $"return {elementAccess};");
             }
@@ -10846,9 +10846,9 @@ public static partial class CCodeOutputGenerator
                 : elementType.ToCIdentifier(false);
             var receiver = ToCExpression(arrayReceiver, functionDeclaration, moduleName);
             var index = ToCExpression(invocation.Arguments[0], functionDeclaration, moduleName);
-            var access = $"(*({elementCType}*)cx_array_at(" +
+            var access = $"(*({elementCType}*)cx_array_at_checked(" +
                 $"{ToCMutableArrayPointer(arrayReceiver.InferredType, receiver)}, " +
-                $"(cx_uint)({index}), (cx_uint)sizeof({elementCType})))";
+                $"(cx_uint)({index}), (cx_uint)sizeof({elementCType}), __FILE__, __LINE__))";
             if (arrayMethod.Name == "Get")
             {
                 return access;
@@ -11639,9 +11639,9 @@ public static partial class CCodeOutputGenerator
             var elementType = GenericTypeSubstitution.Substitute(
                 closedArrayGetterAccessor.ParentPropertyDeclaration.Type, substitutions);
             var elementCType = elementType.ToCIdentifier(false);
-            return $"(*({elementCType}*)cx_array_at(" +
+            return $"(*({elementCType}*)cx_array_at_checked(" +
                 $"{ToCMutableArrayPointer(arrayAccess.Target.InferredType, array)}, " +
-                $"(cx_uint)({index}), (cx_uint)sizeof({elementCType})))";
+                $"(cx_uint)({index}), (cx_uint)sizeof({elementCType}), __FILE__, __LINE__))";
         }
 
         if (value is null && receiver is not null && IsCStorageLocation(receiver) &&
@@ -12788,6 +12788,9 @@ public static partial class CCodeOutputGenerator
         {
             var cType = expression.RequestedType.ToCIdentifier(false);
             var storageType = cType.TrimEnd().TrimEnd('*').TrimEnd();
+            var allocationSize = constructor.ModuleName == "cxcore" && moduleName != "cxcore"
+                ? $"(cx_uint){GetTypeInfoIdentifier(expression.RequestedType).ToCIdentifier()}.Size"
+                : $"(cx_uint)sizeof({storageType})";
             var owner = functionDeclaration is
                 { Name: "AddFirst" or "AddLast", IsStatic: false,
                   ParentClassDeclaration: { Name: "LinkedList", GenericTypeNames.Length: 1,
@@ -12795,8 +12798,8 @@ public static partial class CCodeOutputGenerator
                   Parameters.Count: 1 }
                 || IsCollectionEnumeratorFactory(functionDeclaration)
                 ? $"cx_memory_alloc_for_owner((const void*)(__this), " +
-                  $"(cx_uint)sizeof({storageType}))"
-                : $"cxcore_System_Memory_Alloc((cx_uint)sizeof({storageType}))";
+                  allocationSize + ")"
+                : $"cxcore_System_Memory_Alloc({allocationSize})";
             receiver = $"{temporaryName} = ({cType}){owner}";
         }
         else
@@ -13184,10 +13187,10 @@ public static partial class CCodeOutputGenerator
         var target = ToCMutableArrayPointer(
             expression.Target.InferredType,
             ToCExpression(expression.Target, functionDeclaration, moduleName));
-        return $"(*({elementType.ToCIdentifier(false)}*)cx_array_at(" +
+        return $"(*({elementType.ToCIdentifier(false)}*)cx_array_at_checked(" +
             $"{target}, " +
             $"(cx_uint)({ToCExpression(expression.Indices[0], functionDeclaration, moduleName)}), " +
-            $"(cx_uint)sizeof({elementType.ToCIdentifier(false)})))";
+            $"(cx_uint)sizeof({elementType.ToCIdentifier(false)}), __FILE__, __LINE__))";
     }
 
     private static string ToCGenericArrayElementAccess(
@@ -13205,10 +13208,10 @@ public static partial class CCodeOutputGenerator
         var target = ToCMutableArrayPointer(
             expression.Target.InferredType,
             ToCExpression(expression.Target, functionDeclaration, moduleName));
-        return $"(*({elementCType}*)cx_array_at(" +
+        return $"(*({elementCType}*)cx_array_at_checked(" +
             $"{target}, " +
             $"(cx_uint)({ToCExpression(expression.Indices[0], functionDeclaration, moduleName)}), " +
-            $"(cx_uint)sizeof({elementCType})))";
+            $"(cx_uint)sizeof({elementCType}), __FILE__, __LINE__))";
     }
 
     private static string ToCGenericArrayReturnAccess(
@@ -13232,10 +13235,10 @@ public static partial class CCodeOutputGenerator
                 functionDeclaration,
                 moduleName)
             : ToCExpression(expression.Target, functionDeclaration, moduleName);
-        return $"(*({elementType}*)cx_array_at(" +
+        return $"(*({elementType}*)cx_array_at_checked(" +
             $"{ToCMutableArrayPointer(expression.Target.InferredType, target)}, " +
             $"(cx_uint)({ToCExpression(expression.Indices[0], functionDeclaration, moduleName)}), " +
-            $"(cx_uint)sizeof({elementType})))";
+            $"(cx_uint)sizeof({elementType}), __FILE__, __LINE__))";
     }
 
     private static string ToCMutableArrayPointer(TypeBase? arrayType, string expression) =>

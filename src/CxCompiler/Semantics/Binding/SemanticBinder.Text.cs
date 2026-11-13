@@ -12,10 +12,18 @@ public sealed partial class SemanticBinder
 {
     private void AddCoreTextDeclarations()
     {
-        // The core project owns these declarations. Adding the synthetic cxcore
-        // reference while compiling cxcore makes its own private members look
-        // like referenced-module internals and hides them from the binder.
-        if (_project?.Name == "cxcore") return;
+        // The complete core project owns these declarations. Its threading
+        // metadata generator compiles Task.cx in isolation, so allow that
+        // specific partial project to use the synthetic core surface.
+        var coreDeclarations = _project?.CompilationContexts
+            .SelectMany(context => EnumerateClasses(context.DeclarationScope.Declarations))
+            .ToArray() ?? [];
+        var includesCoreException = coreDeclarations
+            .Any(declaration => declaration.FullName.ToString() == "System.Exception");
+        var includesTaskHandle = coreDeclarations
+            .Any(declaration => declaration.FullName.ToString() ==
+                "System.Threading.Tasks.TaskHandle");
+        if (_project?.Name == "cxcore" && (includesCoreException || !includesTaskHandle)) return;
 
         // A consuming source project can provide its own sequence contracts.
         // Prefer those declarations instead of adding a second set to the
@@ -107,11 +115,16 @@ public sealed partial class SemanticBinder
             public class Exception {
                 private string _message;
                 private Exception? _innerException;
+                private string _stackTrace;
                 public string Message { extern const get; }
+                public Exception? InnerException { extern const get; }
+                public Reflection.TypeInfo RuntimeType { extern const get; }
+                public string StackTrace { extern const get; }
                 public extern constructor(string message);
                 public extern constructor(string message, Exception innerException);
                 public extern constructor();
                 public static extern void Throw(Exception exception);
+                public static extern bool Matches(Exception exception, Reflection.TypeInfo typeInfo);
             }
             public final class WideString : Object {
                 private uint _length; private ptr _data;
@@ -138,17 +151,154 @@ public sealed partial class SemanticBinder
             public class ArgumentException : Exception {
                 private string _paramName;
                 public string ParamName { extern const get; }
+                public extern constructor();
                 public extern constructor(string message);
                 public extern constructor(string message, string paramName);
+                public extern constructor(string message, string paramName, Exception innerException);
             }
             public class ArgumentNullException : ArgumentException {
-                public extern constructor(string paramName);
+                public extern constructor();
+                public extern constructor(const string paramName);
+                public extern constructor(string message, string paramName);
+                public extern constructor(string message, string paramName, Exception innerException);
             }
             public class ArgumentOutOfRangeException : ArgumentException {
+                private object _actualValue;
+                public object ActualValue { extern const get; }
+                public extern constructor();
                 public extern constructor(string paramName);
+                public extern constructor(string message, string paramName);
+                public extern constructor(string message, string paramName, object actualValue);
+                public extern constructor(string message, string paramName, object actualValue, Exception innerException);
             }
             public class InvalidOperationException : Exception {
+                public extern constructor();
                 public extern constructor(string message);
+                public extern constructor(string message, Exception innerException);
+            }
+            public class ObjectDisposedException : InvalidOperationException {
+                private string _objectName;
+                public string ObjectName { extern const get; }
+                public extern constructor();
+                public extern constructor(string objectName);
+                public extern constructor(string message, string objectName);
+                public extern constructor(string message, string objectName, Exception innerException);
+            }
+            public class NotSupportedException : Exception {
+                public extern constructor();
+                public extern constructor(string message);
+                public extern constructor(string message, Exception innerException);
+            }
+            public class NotImplementedException : Exception {
+                public extern constructor();
+                public extern constructor(string message);
+                public extern constructor(string message, Exception innerException);
+            }
+            public class FormatException : Exception {
+                public extern constructor();
+                public extern constructor(string message);
+                public extern constructor(string message, Exception innerException);
+            }
+            public class ArithmeticException : Exception {
+                public extern constructor();
+                public extern constructor(string message);
+                public extern constructor(string message, Exception innerException);
+            }
+            public class DivideByZeroException : ArithmeticException {
+                public extern constructor();
+                public extern constructor(string message);
+                public extern constructor(string message, Exception innerException);
+            }
+            public class OverflowException : ArithmeticException {
+                public extern constructor();
+                public extern constructor(string message);
+                public extern constructor(string message, Exception innerException);
+            }
+            public class InvalidCastException : Exception {
+                public extern constructor();
+                public extern constructor(string message);
+                public extern constructor(string message, Exception innerException);
+            }
+            public class IndexOutOfRangeException : Exception {
+                public extern constructor();
+                public extern constructor(string message);
+                public extern constructor(string message, Exception innerException);
+            }
+            public class NullReferenceException : Exception {
+                public extern constructor();
+                public extern constructor(string message);
+                public extern constructor(string message, Exception innerException);
+            }
+            public class TimeoutException : Exception {
+                public extern constructor();
+                public extern constructor(string message);
+                public extern constructor(string message, Exception innerException);
+            }
+            public class UnauthorizedAccessException : Exception {
+                public extern constructor();
+                public extern constructor(string message);
+                public extern constructor(string message, Exception innerException);
+            }
+            """);
+        Add("""
+            namespace System.Collections;
+            public class KeyNotFoundException : System.Exception {
+                public extern constructor();
+                public extern constructor(string message);
+                public extern constructor(string message, System.Exception innerException);
+            }
+            """);
+        Add("""
+            namespace System.IO;
+            public class IOException : System.Exception {
+                private string _operation; private string _path;
+                private string _nativeErrorDomain; private int _nativeErrorCode;
+                public string Operation { extern const get; }
+                public string Path { extern const get; }
+                public string NativeErrorDomain { extern const get; }
+                public int NativeErrorCode { extern const get; }
+                public extern constructor();
+                public extern constructor(string message);
+                public extern constructor(string message, System.Exception innerException);
+                public extern constructor(string message, string operation, string path, string nativeErrorDomain, int nativeErrorCode, System.Exception innerException);
+                public extern constructor(string message, string operation, string path, string nativeErrorDomain, int nativeErrorCode);
+            }
+            public class FileNotFoundException : IOException {
+                private string _fileName;
+                public string FileName { extern const get; }
+                public extern constructor();
+                public extern constructor(string message);
+                public extern constructor(string message, System.Exception innerException);
+                public extern constructor(string message, string fileName);
+                public extern constructor(string message, string fileName, System.Exception innerException);
+            }
+            public class DirectoryNotFoundException : IOException {
+                public extern constructor();
+                public extern constructor(string message);
+                public extern constructor(string message, System.Exception innerException);
+                public extern constructor(string message, string path);
+            }
+            public class DriveNotFoundException : IOException {
+                public extern constructor();
+                public extern constructor(string message);
+                public extern constructor(string message, System.Exception innerException);
+                public extern constructor(string message, string path);
+            }
+            public class PathTooLongException : IOException {
+                public extern constructor();
+                public extern constructor(string message);
+                public extern constructor(string message, System.Exception innerException);
+                public extern constructor(string message, string path);
+            }
+            public class EndOfStreamException : IOException {
+                public extern constructor();
+                public extern constructor(string message);
+                public extern constructor(string message, System.Exception innerException);
+            }
+            public class InvalidDataException : System.Exception {
+                public extern constructor();
+                public extern constructor(string message);
+                public extern constructor(string message, System.Exception innerException);
             }
             """);
         if (FindCoreClass("System.WideString", 0) is { } wideStringDeclaration)
@@ -263,6 +413,10 @@ public sealed partial class SemanticBinder
                 public CancellationToken CancellationToken { const get => _cancellationToken; }
                 public constructor() : this(CancellationToken.None) { }
                 public constructor(CancellationToken cancellationToken) : base() { _cancellationToken = cancellationToken; }
+                public extern constructor(string message);
+                public extern constructor(string message, System.Exception innerException);
+                public extern constructor(string message, CancellationToken cancellationToken);
+                public extern constructor(string message, System.Exception innerException, CancellationToken cancellationToken);
                 public static void ThrowIfCanceled(bool isCanceled, CancellationToken cancellationToken) {
                     if (isCanceled) throw new OperationCanceledException(cancellationToken);
                 }

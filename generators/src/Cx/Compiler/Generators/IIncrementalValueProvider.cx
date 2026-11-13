@@ -1,0 +1,6 @@
+namespace Cx.Compiler.Generators;
+public interface IIncrementalValueProvider<T> {
+    IIncrementalValueProvider<TResult> Select<TResult>(IGeneratorTransform<T, TResult> transform);
+    IIncrementalValueProvider<GeneratorPair<T, TOther>> Combine<TOther>(
+        IIncrementalValueProvider<TOther> other);
+}

@@ -1,0 +1,11 @@
+namespace Cx.Compiler.Generators;
+public struct GeneratorPair<T, TOther> {
+    private T _first;
+    private TOther _second;
+    public T First { const get => _first; }
+    public TOther Second { const get => _second; }
+    public constructor(T first, TOther second) {
+        _first = first;
+        _second = second;
+    }
+}

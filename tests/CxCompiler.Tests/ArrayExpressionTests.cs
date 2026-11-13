@@ -602,10 +602,10 @@ public sealed class ArrayExpressionTests
                 "cx_array_new((cx_uint)(3), (cx_uint)sizeof(cx_int))",
                 generatedSource);
             Assert.Contains(
-                "(*(cx_int*)cx_array_at(values, (cx_uint)(0), (cx_uint)sizeof(cx_int))) = 42;",
+                "(*(cx_int*)cx_array_at_checked(values, (cx_uint)(0), (cx_uint)sizeof(cx_int), __FILE__, __LINE__)) = 42;",
                 generatedSource);
             Assert.Contains(
-                "return (*(cx_int*)cx_array_at(values, (cx_uint)(0), (cx_uint)sizeof(cx_int)));",
+                "return (*(cx_int*)cx_array_at_checked(values, (cx_uint)(0), (cx_uint)sizeof(cx_int), __FILE__, __LINE__));",
                 generatedSource);
         }
         finally

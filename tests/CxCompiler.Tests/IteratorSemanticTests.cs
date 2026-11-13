@@ -42,6 +42,7 @@ public sealed class IteratorSemanticTests
                 .Select(File.ReadAllText));
             Assert.Contains("MoveNext", generatedC);
             Assert.Contains("__CxIterator_Values_", generatedC);
+            Assert.Contains("InvalidOperationException", generatedC);
             Assert.DoesNotContain("yield return", generatedC);
         }
         finally

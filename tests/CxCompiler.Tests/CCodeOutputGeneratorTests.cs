@@ -543,7 +543,7 @@ public sealed class CCodeOutputGeneratorTests
             """);
 
         Assert.Contains("cx_gc_store_reference(", generatedSource);
-        Assert.Contains("cx_array_at(", generatedSource);
+        Assert.Contains("cx_array_at_checked(", generatedSource);
     }
 
     [Fact]
@@ -586,7 +586,7 @@ public sealed class CCodeOutputGeneratorTests
 
         var checkedStore = generatedSource.Split('\n').Single(line =>
             line.Contains("cx_gc_store_reference(", StringComparison.Ordinal) &&
-            line.Contains("cx_array_at(", StringComparison.Ordinal));
+            line.Contains("cx_array_at_checked(", StringComparison.Ordinal));
         Assert.Contains("value", checkedStore);
     }
 
@@ -605,7 +605,7 @@ public sealed class CCodeOutputGeneratorTests
 
         var checkedStore = generatedSource.Split('\n').Single(line =>
             line.Contains("cx_gc_store_reference(", StringComparison.Ordinal) &&
-            line.Contains("cx_array_at(", StringComparison.Ordinal));
+            line.Contains("cx_array_at_checked(", StringComparison.Ordinal));
         Assert.Contains("value", checkedStore);
     }
 
@@ -620,7 +620,7 @@ public sealed class CCodeOutputGeneratorTests
 
         var checkedStore = generatedSource.Split('\n').Single(line =>
             line.Contains("cx_gc_store_reference(", StringComparison.Ordinal) &&
-            line.Contains("cx_array_at(", StringComparison.Ordinal));
+            line.Contains("cx_array_at_checked(", StringComparison.Ordinal));
         Assert.Contains("value", checkedStore);
     }
 
@@ -1547,7 +1547,7 @@ public sealed class CCodeOutputGeneratorTests
             if (Directory.Exists(outputDirectory)) Directory.Delete(outputDirectory, recursive: true);
         }
 
-        Assert.Contains("cx_long*)cx_array_at(values, (cx_uint)(0u), (cx_uint)sizeof(cx_long)", generatedSource);
+        Assert.Contains("cx_long*)cx_array_at_checked(values, (cx_uint)(0u), (cx_uint)sizeof(cx_long)", generatedSource);
     }
 
     [Fact]
@@ -1763,6 +1763,33 @@ public sealed class CCodeOutputGeneratorTests
             Assert.Contains("target_compile_definitions(api_split PRIVATE CX_API_SPLIT_BUILD)", cmake);
             Assert.True(cmake.IndexOf("add_executable(api_split", StringComparison.Ordinal) <
                 cmake.IndexOf("target_compile_definitions(api_split", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void EmitsStringLiteralsUsedByConstructorInitializers()
+    {
+        var project = CxProject.CreateDefaultApplicationProject("constructor_literals");
+        project.AddCompilationContext(CompilerTestHelper.Parse("""
+            public class Base {
+                public constructor(string message) { }
+            }
+            public class Derived : Base {
+                public constructor() : base("constructor initializer literal") { }
+            }
+            """));
+        new SemanticBinder().Bind(project);
+        var directory = Path.Combine(Path.GetTempPath(), $"cxc-constructor-literals-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            CCodeOutputGenerator.GenerateOutput(project, Path.Combine(directory, "input.cx"));
+            var source = File.ReadAllText(Path.Combine(directory, "constructor_literals.c"));
+            Assert.Contains("\"constructor initializer literal\"", source);
         }
         finally
         {

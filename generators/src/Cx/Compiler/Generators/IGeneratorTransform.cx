@@ -1,0 +1,4 @@
+namespace Cx.Compiler.Generators;
+public interface IGeneratorTransform<T, TResult> {
+    TResult Invoke(T value);
+}

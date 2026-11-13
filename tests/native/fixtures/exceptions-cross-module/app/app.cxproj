@@ -1,0 +1,4 @@
+name: app
+type: Executable
+project_references:
+- ../library/library.cxproj

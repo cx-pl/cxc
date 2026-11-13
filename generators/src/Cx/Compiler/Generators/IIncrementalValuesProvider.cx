@@ -1,0 +1,6 @@
+namespace Cx.Compiler.Generators;
+public interface IIncrementalValuesProvider<T> {
+    IIncrementalValuesProvider<T> Where(IGeneratorPredicate<T> predicate);
+    IIncrementalValuesProvider<TResult> Select<TResult>(IGeneratorTransform<T, TResult> transform);
+    IIncrementalValueProvider<T[]> Collect();
+}
